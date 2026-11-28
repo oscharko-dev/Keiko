@@ -259,6 +259,7 @@ function ImportTextInput({
   const t = useTranslate();
   const input = useRef<HTMLTextAreaElement>(null);
   useEffect(() => input.current?.focus(), []);
+  const invalidFile = issue?.kind === "file" || issue?.kind === "fileSize";
   return (
     <div className={styles.cmpInputStack}>
       <label htmlFor={id} title={t("settings.mcp.importHelp")}>
@@ -272,12 +273,14 @@ function ImportTextInput({
         spellCheck={false}
         autoComplete="off"
         aria-invalid={issue?.kind === "invalid"}
-        aria-describedby={issue === undefined ? `${id}-help` : `${id}-help ${id}-issue`}
+        aria-describedby={
+          issue === undefined || invalidFile ? `${id}-help` : `${id}-help ${id}-issue`
+        }
         value={text}
         onChange={(event) => putText(event.target.value)}
       />
       <div className={styles.cmpImportInputs}>
-        <ImportFile id={id} readFile={readFile} />
+        <ImportFile id={id} invalid={invalidFile} readFile={readFile} />
         {text === "" && (
           <button
             type="button"
@@ -296,9 +299,11 @@ function ImportTextInput({
 
 function ImportFile({
   id,
+  invalid,
   readFile,
 }: {
   readonly id: string;
+  readonly invalid: boolean;
   readonly readFile: (input: HTMLInputElement) => void;
 }): ReactNode {
   const t = useTranslate();
@@ -309,7 +314,8 @@ function ImportFile({
         <input
           type="file"
           accept=".json,.jsonc,application/json"
-          aria-describedby={`${id}-file-help`}
+          aria-describedby={invalid ? `${id}-file-help ${id}-issue` : `${id}-file-help`}
+          aria-invalid={invalid}
           onChange={(event) => readFile(event.currentTarget)}
         />
       </label>

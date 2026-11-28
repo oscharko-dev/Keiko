@@ -55,6 +55,26 @@ describe("central MCP JSON import", () => {
     });
   });
 
+  it("refuses a mixed map with definitions outside the nested map", () => {
+    const document = {
+      mcp: { servers: { example: remote }, second: { url: "https://second.example.test/mcp" } },
+    };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toEqual({
+      kind: "invalid",
+      issue: "shape",
+    });
+  });
+
+  it("keeps a server literally named servers alongside other direct entries", () => {
+    const document = {
+      mcp: { servers: remote, second: { url: "https://second.example.test/mcp" } },
+    };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toMatchObject({
+      kind: "ready",
+      update: { servers: [{ name: "servers" }, { name: "second" }] },
+    });
+  });
+
   it("routes imported header and environment values to write-only Settings secrets", () => {
     const result = prepareMcpSettingsImport(
       JSON.stringify({

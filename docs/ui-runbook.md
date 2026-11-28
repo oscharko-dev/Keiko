@@ -116,7 +116,8 @@ For an administrator preparing a file, this example contains one server of each 
 ```
 
 Keiko also accepts a single object with a `name`, a list of such objects, a name-to-server map,
-`mcp.servers`, or a `mcpServers` map. In the latter format a local entry can use `command` as a
+`mcp.servers`, or a `mcpServers` map. Keep all names inside `servers` when using a nested map.
+In the `mcpServers` format a local entry can use `command` as a
 string and `args` as a list. Remote `headers` and local `environment` or `env` accept string
 values. Credential values are sealed in Keiko's local store. Supply credentials there instead of in
 the URL or command line. Optional remote `oauth` takes the Keiko issuer, optional public client ID

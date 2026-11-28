@@ -82,11 +82,10 @@ function namedEntry(value: unknown): ImportEntry {
   return [name, entry];
 }
 
-function wrappedEntries(section: Fields): readonly ImportEntry[] {
+function wrappedEntries(section: Fields): readonly ImportEntry[] | undefined {
   const nested = fields(section.servers);
-  return Object.entries(
-    nested !== undefined && transportKind(nested) === undefined ? nested : section,
-  );
+  if (nested === undefined || transportKind(nested) !== undefined) return Object.entries(section);
+  return Object.keys(section).length === 1 ? Object.entries(nested) : undefined;
 }
 
 function importEntries(value: unknown): readonly ImportEntry[] | undefined {

@@ -123,12 +123,32 @@ it("keeps the draft but invalidates confirmation when a replacement file cannot 
   Object.defineProperty(file, "text", {
     value: () => Promise.reject(new Error("File unavailable")),
   });
-  fireEvent.change(screen.getByLabelText("Choose JSON file"), { target: { files: [file] } });
+  const chooser = screen.getByLabelText("Choose JSON file");
+  fireEvent.change(chooser, { target: { files: [file] } });
   expect(await screen.findByRole("alert")).toHaveTextContent("could not read the file");
+  expect(chooser).toHaveAttribute("aria-invalid", "true");
+  expect(chooser).toHaveAccessibleDescription(/could not read the file/u);
+  expect(editor).not.toHaveAccessibleDescription(/could not read the file/u);
   expect(editor).toHaveValue(text);
   expect(screen.queryByRole("button", { name: "Add servers" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Import JSON" })).toHaveFocus());
+});
+
+it("describes an oversized file on the file picker and clears the error on a new selection", async () => {
+  const json = await openImport();
+  const chooser = screen.getByLabelText("Choose JSON file");
+  const tooLarge = new File([" ".repeat(64 * 1024 + 1)], "large.json");
+  fireEvent.change(chooser, { target: { files: [tooLarge] } });
+  expect(await screen.findByRole("alert")).toHaveTextContent("configuration is too large");
+  expect(chooser).toHaveAttribute("aria-invalid", "true");
+  expect(chooser).toHaveAccessibleDescription(/configuration is too large/u);
+  const file = new File([text], "settings.json");
+  Object.defineProperty(file, "text", { value: () => Promise.resolve(text) });
+  fireEvent.change(chooser, { target: { files: [file] } });
+  await waitFor(() => expect(json).toHaveValue(text));
+  expect(chooser).toHaveAttribute("aria-invalid", "false");
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 it("checks the UTF-8 byte limit without truncating a paste", async () => {
