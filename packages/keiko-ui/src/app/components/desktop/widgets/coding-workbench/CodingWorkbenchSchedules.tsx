@@ -21,7 +21,7 @@ import styles from "./CodingHistory.module.css";
  */
 export const SCHEDULE_REREAD_GRACE_MS = 16_000;
 export const SCHEDULE_REREAD_MAX_ATTEMPTS = 20;
-export const SCHEDULE_REREAD_MAX_ARM_MS = 24 * 60 * 60 * 1_000;
+const SCHEDULE_REREAD_MAX_ARM_MS = 24 * 60 * 60 * 1_000;
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 /**
