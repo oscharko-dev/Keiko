@@ -1218,7 +1218,7 @@ describe("coding-sidecar gateway", () => {
       ["keiko_git_execute", "e4f2a410a7b4af87cc0f81faa436eab0e109dbcf33ae050c45cccb64e4dc127a"],
       ["keiko_git_push", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
       // #3902 AC2: staging carries the explicit `unstage` choice.
-      ["keiko_git_stage", "f8a74e3d1d15960a9252ea9471a03e55ab92f544e8d2c4286ff645e428f9328a"],
+      ["keiko_git_stage", "eaa36b867c5ea7c8721ccd17b973124195c6361182dd44ed935963341ee74f69"],
       ["keiko_git_status", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
       // #3902 AC2: the governed fetch / fast-forward pull, captured from the producer.
       ["keiko_git_sync", "fa0f6ff1b09f36182eceb06bd3b72e028f5d71accf1a597c24ab3549f060b228"],
