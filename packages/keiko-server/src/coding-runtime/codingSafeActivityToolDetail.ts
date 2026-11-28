@@ -119,62 +119,11 @@ interface ProgramScan {
   readonly end: number;
 }
 
-/**
- * The executable text of a program: string, template and comment text becomes a space, the code
- * inside a template's `${}` is kept. One forward scan; a nested scan stops at its closing brace.
- */
-function programCode(code: string, start: number, nested: boolean, depth: number): ProgramScan {
-  let out = "";
-  let i = start;
-  let braces = 0;
-  while (i < code.length) {
-    const span = programSpan(code, i, depth, out);
-    if (span !== undefined) {
-      out += span.out;
-      i = span.end;
-      continue;
-    }
-    const ch = code.charAt(i);
-    if (nested && ch === "}" && braces === 0) return { out, end: i + 1 };
-    if (nested && ch === "{") braces += 1;
-    if (nested && ch === "}") braces -= 1;
-    out += ch;
-    i += 1;
-  }
-  return { out, end: i };
-}
-
-// A literal or comment starting at `i`, as the text it leaves in the code; undefined for code.
-function programSpan(
-  code: string,
-  i: number,
-  depth: number,
-  before: string,
-): ProgramScan | undefined {
-  const ch = code.charAt(i);
-  if (ch === '"' || ch === "'") return { out: "0", end: quotedEnd(code, i, ch) };
-  if (ch === "`") return templateSpan(code, i, depth);
-  return ch === "/" ? slashStart(code, i, before) : undefined;
-}
-
-// What a `/` starts: a line or block comment, or a division or a regular-expression literal.
-function slashStart(code: string, i: number, before: string): ProgramScan {
-  const next = code.charAt(i + 1);
-  if (next === "/") {
-    const eol = code.indexOf("\n", i);
-    return { out: " ", end: eol === -1 ? code.length : eol };
-  }
-  if (next === "*") {
-    const close = code.indexOf("*/", i + 2);
-    return { out: " ", end: close === -1 ? code.length : close + 2 };
-  }
-  return slashSpan(code, i, before);
-}
-
 // A program whose `/` cannot be told apart as a division or a regular-expression literal is not
 // read at all: guessing wrong would label a pattern's text as a call.
 class AmbiguousProgramError extends Error {}
 
+// A word before a `/` that starts a pattern, not a division (`return /x/`).
 const REGEX_PRECEDING_KEYWORDS: ReadonlySet<string> = new Set([
   "return",
   "typeof",
@@ -192,17 +141,155 @@ const REGEX_PRECEDING_KEYWORDS: ReadonlySet<string> = new Set([
   "await",
 ]);
 
-// What a `/` that starts no comment is, from the code before it: a regular expression after an
-// operator, an opening bracket, a separator or a keyword; a division after an operand. After `)` or
-// `}` it depends on the statement around it (`if (x) /re/.test(y)`), so the program stays unread.
-function slashSpan(code: string, i: number, before: string): ProgramScan {
-  const prior = before.trimEnd();
-  const last = prior.charAt(prior.length - 1);
-  if (prior === "" || "(,=:[!&|?{;+-*%<>~^".includes(last)) return regexSpan(code, i);
-  if (last === ")" || last === "}") throw new AmbiguousProgramError();
-  const word = /[\w$]+$/u.exec(prior)?.[0] ?? "";
-  if (REGEX_PRECEDING_KEYWORDS.has(word)) return regexSpan(code, i);
-  return { out: "/", end: i + 1 };
+// The head of a parenthesis after which a statement, and so a pattern, may start: `if (x) /re/.test(y)`.
+const CONTROL_PAREN_KEYWORDS: ReadonlySet<string> = new Set(["if", "while", "for", "with"]);
+
+const PROGRAM_WORD_CHAR = /[\w$\u0080-￿]/u;
+
+type LastToken = "start" | "operand" | "regex-ahead" | "brace";
+
+/**
+ * The last significant token of the program's code, kept during the one forward scan so that a `/`
+ * is decided in constant time: after an operand (an identifier, number, literal, `)` that closes an
+ * expression, `]`, `++`, `--`) it divides; at the start, after an operator, an opening bracket, a
+ * separator, a keyword or the parenthesis of an `if`/`while`/`for`/`with` it starts a pattern. After
+ * `}` (a block or an object literal) it cannot be told, and the program stays unread.
+ */
+class ProgramTokens {
+  private last: LastToken = "start";
+  private word = "";
+  private lastIsWord = false;
+  private adjacent = false;
+  private afterDot = false;
+  // A word after a `.` is a property name, never a keyword.
+  private wordAfterDot = false;
+  private readonly parens: boolean[] = [];
+
+  public operand(): void {
+    this.last = "operand";
+    this.lastIsWord = false;
+    this.adjacent = false;
+    this.afterDot = false;
+  }
+
+  /** Whitespace or a comment: the last token stays, but the next word starts a new one. */
+  public gap(): void {
+    this.adjacent = false;
+  }
+
+  public slashStartsPattern(): boolean {
+    if (this.lastIsWord) return !this.wordAfterDot && REGEX_PRECEDING_KEYWORDS.has(this.word);
+    if (this.last === "brace") throw new AmbiguousProgramError();
+    return this.last !== "operand";
+  }
+
+  /** Feeds the character (or `++` / `--`) at `i`; returns how many characters it took. */
+  public feed(code: string, i: number): number {
+    const ch = code.charAt(i);
+    if (PROGRAM_WORD_CHAR.test(ch)) return this.feedWord(ch);
+    if (ch.trim() === "") {
+      this.gap();
+      return 1;
+    }
+    if ((ch === "+" || ch === "-") && code.charAt(i + 1) === ch) {
+      this.operand();
+      return 2;
+    }
+    this.feedPunctuation(ch);
+    return 1;
+  }
+
+  private feedWord(ch: string): number {
+    if (this.lastIsWord && this.adjacent) {
+      this.word += ch;
+    } else {
+      this.wordAfterDot = this.afterDot;
+      this.word = ch;
+    }
+    this.lastIsWord = true;
+    this.adjacent = true;
+    this.afterDot = false;
+    this.last = "operand";
+    return 1;
+  }
+
+  private feedPunctuation(ch: string): void {
+    const headIsControl =
+      this.lastIsWord && !this.wordAfterDot && CONTROL_PAREN_KEYWORDS.has(this.word);
+    this.lastIsWord = false;
+    this.adjacent = false;
+    this.afterDot = ch === ".";
+    if (ch === "(") this.parens.push(headIsControl);
+    if (ch === ")") this.last = this.parens.pop() === true ? "regex-ahead" : "operand";
+    else if (ch === "]") this.last = "operand";
+    else this.last = ch === "}" ? "brace" : "regex-ahead";
+  }
+}
+
+/**
+ * The executable text of a program: string, template, pattern and comment text becomes a placeholder,
+ * the code inside a template's `${}` is kept. One forward scan, constant work per character; a nested
+ * scan stops at its closing brace.
+ */
+function programCode(code: string, start: number, nested: boolean, depth: number): ProgramScan {
+  const tokens = new ProgramTokens();
+  let out = "";
+  let i = start;
+  let braces = 0;
+  while (i < code.length) {
+    const span = programSpan(code, i, depth, tokens);
+    if (span !== undefined) {
+      out += span.out;
+      i = span.end;
+      continue;
+    }
+    const ch = code.charAt(i);
+    if (nested && ch === "}" && braces === 0) return { out, end: i + 1 };
+    if (nested && ch === "{") braces += 1;
+    if (nested && ch === "}") braces -= 1;
+    const taken = tokens.feed(code, i);
+    out += code.slice(i, i + taken);
+    i += taken;
+  }
+  return { out, end: i };
+}
+
+// A literal or comment starting at `i`, as the text it leaves in the code; undefined for code.
+function programSpan(
+  code: string,
+  i: number,
+  depth: number,
+  tokens: ProgramTokens,
+): ProgramScan | undefined {
+  const ch = code.charAt(i);
+  if (ch === '"' || ch === "'") {
+    tokens.operand();
+    return { out: "0", end: quotedEnd(code, i, ch) };
+  }
+  if (ch === "`") {
+    tokens.operand();
+    return templateSpan(code, i, depth);
+  }
+  return ch === "/" ? slashSpan(code, i, tokens) : undefined;
+}
+
+// What a `/` starts: a line or block comment, a regular-expression literal, or (undefined) a division.
+function slashSpan(code: string, i: number, tokens: ProgramTokens): ProgramScan | undefined {
+  const next = code.charAt(i + 1);
+  if (next === "/") {
+    tokens.gap();
+    const eol = code.indexOf("\n", i);
+    return { out: " ", end: eol === -1 ? code.length : eol };
+  }
+  if (next === "*") {
+    tokens.gap();
+    const close = code.indexOf("*/", i + 2);
+    return { out: " ", end: close === -1 ? code.length : close + 2 };
+  }
+  if (!tokens.slashStartsPattern()) return undefined;
+  const span = regexSpan(code, i);
+  tokens.operand();
+  return span;
 }
 
 // The literal from its opening slash to the end of its flags, as an operand; an unterminated one is

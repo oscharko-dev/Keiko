@@ -515,6 +515,11 @@ describe("what a Code Mode program does (U-56)", () => {
     "return a.replace(/x/g, '') && /tools.fixture.echo(/.test(s);",
     "if (ok) /tools.shell(/.test(s);",
     "return /tools.shell(",
+    "return a / /tools.shell(/.source;",
+    "return x.in / 2 + /tools.bash(/.test(s);",
+    "return (a + b) / 2 + /tools.shell(/.test(s);",
+    "return arr[0] / 2 + /tools.shell(/.test(s);",
+    "if (ok) { run(); } /tools.shell(/.test(s);",
   ])("names no kind where the program only mentions a tool: %s", (code) => {
     expect(program(code).programKind).toBeUndefined();
   });
@@ -524,6 +529,12 @@ describe("what a Code Mode program does (U-56)", () => {
     ["schedule", "return `${await tools.automation.create({})}`;"],
     ["tool", 'return `a${`b${await tools.fixture.echo({ text: "c" })}`}`;'],
     ["command", 'return "it\\"s"; await tools.bash({});'],
+    ["command", 'return a++ / tools.shell("x") / 2;'],
+    ["command", "return x.in / tools.shell({}) / 2;"],
+    ["command", "return x.return / tools.bash({}) / 2;"],
+    ["command", "return (a + b) / tools.shell({}) / 2;"],
+    ["command", "return arr[0] / tools.shell({}) / 2;"],
+    ["command", "if (ok) /x/.test(s); await tools.shell({});"],
     ["command", "const half = total / 2; await tools.shell({}); return half / 3;"],
     ["command", "const re = /a\\/b[/]/g; await tools.shell({}); return re;"],
   ] as const)("still reads %s from a call beside literals", (kind, code) => {
