@@ -116,6 +116,9 @@ before you change that area.
   the same; a bound stays only to protect memory, security, the model's context window or against a
   runaway loop, and context trimming is shown, never silent. Never lower a raised default to ration
   ordinary work.
+- **No check run is not a failed run (2026-11-28):** a Coding run whose only gap is that no check ran
+  after its last change settles with its reported outcome; no "Änderungen nicht geprüft" card, no
+  "Prüfung nachholen" button; failed or unstartable checks and spent budgets still fail (ADR-0137).
 - **Knowledge Pods (2026-11-04):** local storage, no sharing roadmap or placeholders; the create
   dialog asks only for a name.
 - **Linux is a community tier (2026-11-12):** feature parity is promised for macOS and Windows

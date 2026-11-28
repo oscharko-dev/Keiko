@@ -194,7 +194,9 @@ executed result. Actual passing checks remain usable alongside skipped checks. T
 for the task, not a global quality run. A model turn ending normally does not establish that proof. Up to two
 continuations use the existing task dispatcher and unchanged authority to inspect results, repair
 the diagnosed cause, and retest. A refused continuation or exhausted continuation budget settles
-`verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
+`verification-not-evidenced`, except for a run that ran no check at all, which keeps the outcome its
+turn reported and records the gap on the Activity Log (owner decision 2026-11-28, ADR-0137);
+ordinary read-only tasks need no invented verification work.
 A follow-up of a task whose last change still has no passing check inherits that verification debt
 (#4492): a check it runs must pass, or it settles `verification-not-evidenced` too, while a
 follow-up that runs no check (a question, a summary) settles normally and hands the debt on to the

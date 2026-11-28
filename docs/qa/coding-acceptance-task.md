@@ -69,24 +69,29 @@ Before the run, the project's own check must fail, because its tests ran and fai
 ## What never counts as passed
 
 These cases must end `failed` with the closed failure code `verification-not-evidenced`, which
-means "no passing check after the final edit":
+means "a check after the final edit failed, could not start or ran out of budget":
 
 - **Failed:** the edit is wrong and the run's check stays red.
-- **Skipped:** the run never reruns the check after its edit.
-- **Stale:** the check passed, then the run edited again and did not rerun it.
 - **Denied:** the person denies the check in Ask for approval. The run also records the blocked
   reason `verification-command-denied`.
 
-In the skipped, stale and denied cases the fix is right, so the tester's own check passes.
-Keiko must still not report success: the outcome follows what the run verified, not the file's
-true state.
+Two cases ran no check after the final edit. Since the 2026-11-28 owner decision they keep the
+outcome their turn reported (`succeeded`, no failure code) and name the gap `no-check-run` body-free
+in the log (continuation state `skipped:no-failed-check`, then `not-evidenced`):
+
+- **Skipped:** the run never reruns the check after its edit.
+- **Stale:** the check passed, then the run edited again and did not rerun it.
+
+In the skipped, stale and denied cases the fix is right, so the tester's own check passes. In the
+denied case Keiko must still not report success: the outcome follows what the run verified.
 
 Before a run ends this way, Keiko sends the model back once, and only when a check ran after the
 last code change and failed (`coding-runtime.run.verification-continuation`, state `continued`,
 naming the check and how many steps failed). A check that never ran, one that could not start, a
 check the person denied and an exhausted budget each send no continuation (state `skipped`, with its
-closed `skipReason`), and the run settles `verification-not-evidenced` with the concrete
-`verificationGap` on `coding-runtime.run.settled`. Either way the last continuation line has state
+closed `skipReason`). The run settles `verification-not-evidenced` with the concrete
+`verificationGap` on `coding-runtime.run.settled`, except a check that never ran, which keeps the run's
+reported outcome. Either way the last continuation line has state
 `not-evidenced`. In every case, whatever the outcome, the entries outside the source (`src/`, or `src/main`)
 stay unchanged, the project's count matches the reported checks and the runtime started inside the boundary.
 
@@ -392,7 +397,7 @@ The evidence therefore says `certifiesPromise: false`, with unmet preconditions 
 | `with-dependency` | Supervised       | own folder       | right | rerun (installed)    | `succeeded`                                                   |
 | `with-dependency` | Supervised       | managed worktree | right | rerun (missing)      | `failed`; checks `failed`, `failed`; tester's test red        |
 
-Every `failed` row carries `verification-not-evidenced`. Keiko sent the model back to verify twice
+Every `failed` row carries `verification-not-evidenced`. (This table records the run of that day; since the 2026-11-28 owner decision the skipped and stale rows end `succeeded` and name the gap `no-check-run` in the log.) Keiko sent the model back to verify twice
 before giving up in each of them, except the denied row, where the denial blocked the continuation.
 In every case:
 

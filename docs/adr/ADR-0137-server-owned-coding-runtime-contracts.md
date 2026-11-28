@@ -386,20 +386,25 @@ generic "verification is not complete" request at the end of a run. Three facts 
   finish and report, so a request to verify would contradict it) or when the run already continued
   once (`already-continued`). Each of these decisions is logged as `state: skipped` with its closed
   `skipReason`, so a support analysis sees why no continuation ran.
-- A run that changed code and ends without a passing check after its last change settles as before
-  (`failed` with `verification-not-evidenced`, the change kept), and the settlement carries the
-  concrete gap as the closed `verificationGap`: `no-check-run`, `check-failed`, `check-not-started`
-  or `budget-exhausted`, decided with the most concrete fact first: `check-failed`, then
+- A run that changed code and ends without a passing check after its last change settles `failed`
+  with `verification-not-evidenced` (the change kept) unless its only gap is that no check ran at
+  all (owner decision 2026-11-28): that run, the gap `no-check-run`, keeps the outcome its turn
+  reported (`succeeded` stays `succeeded`), carries no failure code, and records the gap body-free as
+  the `not-evidenced` continuation line; its task still hands the verification debt to the next
+  follow-up. The other gaps settle `failed` as above, and the settlement carries the concrete gap as
+  the closed `verificationGap`: `check-failed`, `check-not-started` or `budget-exhausted` (a stored
+  row of an older Keiko may still carry `no-check-run`, so the value and its column constraint
+  stay), decided with the most concrete fact first: `check-failed`, then
   `check-not-started`, then `budget-exhausted`, then `no-check-run`. A failed check stays the gap when the
   budget ran out afterwards; the continuation is still skipped for the budget. The gap rides the snapshot
   (persisted by the snapshot store's `verification_gap` column, schema version 83), the `status`
   frame, `coding-runtime.run.settled` and the `not-evidenced` continuation line. Without a blocker,
   `coding-runtime.run.settled` classifies such a run `errorKind=validation-failed`, not `internal`:
-  the gap is the run's verdict, not a Keiko fault. A blocked check keeps its classification. The Workbench names
-  it in one plain sentence that ends with what the person can do, and offers "Run the check now"
-  (de: "Prüfung nachholen") in place of the error report: the button starts the existing composer
-  request with a short localized sentence in the person's own name, because it is the person's own
-  click.
+  the gap is the run's verdict, not a Keiko fault. A blocked check keeps its classification. The Workbench shows
+  such a run as the ordinary failed run ("Coding run failed") with one plain sentence that ends with
+  what the person can do, in place of the error report. The "Changes not checked" title and the
+  "Run the check now" button (de: "Prüfung nachholen") no longer exist (owner decision 2026-11-28);
+  an older stored `no-check-run` row renders the same ordinary failed run with its sentence.
 
 A turn Keiko dispatches itself (the one verification continuation above and the delivery
 continuation) is never shown as the person's own message. Its runtime message carries the closed
