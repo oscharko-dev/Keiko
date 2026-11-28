@@ -563,10 +563,26 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
       startPointRefHash: gitZeroObjectId(40),
       fromUnbornBranch: "fresh",
     });
-    expect(result.outcome).toBe("failed");
+    expect(result).toMatchObject({ outcome: "failed", errorCode: "conflict" });
     expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
     // The foreign lock is not ours to remove.
     expect(existsSync(lock)).toBe(true);
+  });
+  it("reports a state read that fails as a failed precondition, distinct from a held lock", async () => {
+    const broken = createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      spawn: () => {
+        throw new Error("simulated read failure");
+      },
+    });
+    const result = await broken.createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result).toMatchObject({ outcome: "failed", errorCode: "precondition-failed" });
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
   });
   it("reads the orphan branch as an explicit unborn state", async () => {
     const head: GitHeadState = await readGitHeadState({ workspace });

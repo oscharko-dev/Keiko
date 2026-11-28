@@ -92,7 +92,10 @@ import {
 } from "./git-stage-node.js";
 import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
-import { withGitBranchRefLocks } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import {
+  GIT_REF_LOCK_UNAVAILABLE,
+  withGitBranchRefLocks,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
 
 /** A failed `commit.gpgsign` read, reported once with its closed class and the cause. */
 export interface GitCommitSigningReadFailureReport {
@@ -910,9 +913,19 @@ async function execUnbornBranch(
       workspaceFsOf(ctx.runDeps),
     );
   } catch (error) {
-    // A failed read or an unavailable lock is a thrown failure: nothing was written.
-    return failureFromThrow(error, 0, 0);
+    return failureFromUnbornBranchThrow(error);
   }
+}
+
+// Nothing was written when the lock or a state read throws. A branch ref lock that cannot be taken
+// (another process holds it) is a `conflict`; any other failure to read or prove the unborn state is
+// `precondition-failed`; a timeout or cancellation keeps its own closed result.
+function failureFromUnbornBranchThrow(error: unknown): GitDeliveryExecutionResult {
+  if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
+    return failureFromThrow(error, 0, 0);
+  if (error instanceof Error && error.message === GIT_REF_LOCK_UNAVAILABLE)
+    return failureFromExit(0, 0, "conflict");
+  return failureFromExit(0, 0, "precondition-failed");
 }
 
 function execBranchCreate(

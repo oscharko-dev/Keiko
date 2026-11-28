@@ -139,7 +139,8 @@ function promoteIndex(gitdir: string, temporaryIndexPath: string, indexExisted: 
   renameSync(temporaryIndexPath, index);
 }
 
-const GIT_REF_LOCK_UNAVAILABLE = "git-ref-lock-unavailable";
+/** The message of the failure thrown when a branch ref lock cannot be taken. */
+export const GIT_REF_LOCK_UNAVAILABLE = "git-ref-lock-unavailable";
 
 // The directory that holds `refs/heads`: the repository's own gitdir, or the common directory a
 // linked worktree's gitdir (`<repo>/.git/worktrees/<name>`) shares.
