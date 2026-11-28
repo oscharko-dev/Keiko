@@ -1294,6 +1294,56 @@ describe("undo and the Git index (U-34b)", () => {
     await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "restored" });
   });
 
+  async function undoneIndexOnlyTurn(): Promise<
+    ReturnType<typeof subject> & { readonly root: string }
+  > {
+    const { root, begun } = await stagedTurn({ editBeforeTurn: true });
+    const made = subject({ root, files: [] });
+    made.run.turnIndex = begun;
+    await noteGoverned(root, ["a.txt"]);
+    recordOpenCodeTurnImage(made.run, made.log);
+    await made.run.turnImage;
+    await made.port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
+    return { ...made, root };
+  }
+
+  it("makes Restore changes stage again what an index-only Undo unstaged, and says how many", async () => {
+    const { port, root, log } = await undoneIndexOnlyTurn();
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({
+      staged: true,
+      index: "restored",
+      indexPathCount: 1,
+    });
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("turn result\n");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: false });
+    expect(log.events.at(-1)).toMatchObject({
+      op: "coding-runtime.revert.applied",
+      extra: { action: "restore", indexOutcome: "restored", indexPathCount: 1 },
+    });
+  });
+
+  it("refuses Restore changes and keeps the person's staging when they staged the path after the Undo", async () => {
+    const { port, root } = await undoneIndexOnlyTurn();
+    writeFileSync(join(root, "a.txt"), "staged by the person\n");
+    gitIn(root, "add", "a.txt");
+    const personsEntry = gitIn(root, "ls-files", "-s", "a.txt");
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "workspace-changed",
+    });
+
+    expect(gitIn(root, "ls-files", "-s", "a.txt")).toBe(personsEntry);
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: true });
+  });
+
   it("restores nothing in the index that governed staging did not stage, and says staged changes may remain", async () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });

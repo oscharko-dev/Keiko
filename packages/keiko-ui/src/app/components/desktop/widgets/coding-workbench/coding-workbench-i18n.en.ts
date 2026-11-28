@@ -1788,6 +1788,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The last turn changed what is staged for 1 file; no file content changed.",
   "codingWorkbench.revert.staged.index":
     "The last turn is undone: what it staged is back to the earlier state and no file content changed. Stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.staged.index.partial":
+    "The last turn is undone for {count} files: what it staged for them is back to the earlier state. Restore the changes, or stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.staged.index.partial.one":
+    "The last turn is undone for 1 file: what it staged for it is back to the earlier state. Restore the changes, or stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.staged.index.none":
+    "The last turn is undone, but no staged change was taken back and no file content changed. Stop the run to keep the undo. No new task starts in this run while the undo is in place.",
   "codingWorkbench.revert.undo": "Undo last turn",
   "codingWorkbench.revert.undo.confirm":
     "Undo the last turn? This stops the turn if it is still running and puts the files it changed back to their earlier content. While the run stays open you can restore the changes.",

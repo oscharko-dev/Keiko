@@ -31,8 +31,10 @@ import {
   TURN_INDEX_START_BOUNDS,
   TurnIndexStartBoundError,
   countRestorableTurnIndexPaths,
+  reapplyTurnIndexMoves,
   restoreTurnIndex,
   settleTurnIndex,
+  type TurnIndexMoves,
   type TurnIndexRecord,
 } from "./opencodeTurnIndex.js";
 import { keikoContinuationOrigin } from "./opencodeTurnOrigin.js";
@@ -173,6 +175,8 @@ export interface OpenCodeStagedRevert extends CodingRuntimeRevertCounts {
   witness: OpenCodeRevertWitness | undefined;
   /** What the undo did to the Git index of the paths the turn staged (U-34b). */
   readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
+  /** The index transitions the undo made; a restore makes them again, or refuses when drifted. */
+  indexMoves?: TurnIndexMoves | undefined;
 }
 
 /**
@@ -290,7 +294,8 @@ async function revertTurn(
   if (run === undefined)
     return recordRevertRefusal(ports, runId, action, "run-unavailable", correlationId);
   try {
-    const outcome = action === "undo" ? await undoLastTurn(ports, run) : await restoreUndo(run);
+    const outcome =
+      action === "undo" ? await undoLastTurn(ports, run) : await restoreUndo(ports, run);
     if (!outcome.ok)
       return recordRevertRefusal(ports, runId, action, outcome.reason, correlationId);
     recordRevertApplied(ports.activityLog, runId, action, outcome, correlationId);
@@ -352,12 +357,16 @@ async function stageTurnRevert(
   const staged = await run.client.stageRevert(run.sessionId, boundary);
   const files = staged.files.map((diff) => diff.file);
   // The worktree is back at the turn start; the paths the turn staged leave the index with it.
-  const index = await restoreIndexOrReport(ports, run);
+  let indexMoves: TurnIndexMoves | undefined;
+  const index = await restoreIndexOrReport(ports, run, (moves) => {
+    indexMoves = moves;
+  });
   const record: OpenCodeStagedRevert = {
     ...diffCounts(staged.files),
     files,
     witness: undefined,
     ...(index.outcome === undefined ? {} : { index: index.outcome }),
+    ...(indexMoves === undefined ? {} : { indexMoves }),
   };
   // Recorded before the witness: the revert is in place from here on, even if proving it fails.
   run.revert = record;
@@ -380,12 +389,14 @@ async function stageTurnRevert(
 async function restoreIndexOrReport(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
+  onRestored: (moves: TurnIndexMoves) => void,
 ): Promise<Awaited<ReturnType<typeof restoreTurnIndex>>> {
   try {
     const restored = await restoreTurnIndex(
       run.workspaceRoot,
       run.turnIndex,
       governedIndexRecord(run.runId),
+      onRestored,
     );
     const failure: unknown = run.turnIndex?.failure;
     if (failure !== undefined) reportIndexFailure(ports, run, failure);
@@ -424,7 +435,16 @@ function reportIndexFailure(
   });
 }
 
-async function restoreUndo(run: OpenCodeRevertRun): Promise<RevertOutcome> {
+/** How many index paths an undo put back and a restore can make again; absent when none. */
+function stagedIndexPaths(staged: OpenCodeStagedRevert): { indexPathCount?: number } {
+  const count = staged.indexMoves?.entries.length ?? 0;
+  return count > 0 ? { indexPathCount: count } : {};
+}
+
+async function restoreUndo(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+): Promise<RevertOutcome> {
   const staged = run.revert;
   if (staged === undefined) return { ok: false, reason: "nothing-staged" };
   // `clear` writes the turn's files back over whatever is there now, so it only runs while the
@@ -432,9 +452,62 @@ async function restoreUndo(run: OpenCodeRevertRun): Promise<RevertOutcome> {
   if (!(await witnessHolds(run.workspaceRoot, staged.files, staged.witness))) {
     return { ok: false, reason: "workspace-changed" };
   }
-  await run.client.clearRevert(run.sessionId);
+  const moved = await reapplyIndexMoves(ports, run, staged);
+  if (moved === "refused") return { ok: false, reason: "workspace-changed" };
+  try {
+    await run.client.clearRevert(run.sessionId);
+  } catch (error) {
+    // The files stay undone, so the index goes back to the undone state with them.
+    if (staged.indexMoves !== undefined && moved === "restored")
+      await undoIndexMoves(ports, run, staged.indexMoves);
+    throw error;
+  }
   run.revert = undefined;
-  return { ok: true, interrupted: false, ...countsOf(staged) };
+  return {
+    ok: true,
+    interrupted: false,
+    ...countsOf(staged),
+    ...(moved === "restored" && staged.indexMoves !== undefined
+      ? { index: "restored" as const, indexPathCount: staged.indexMoves.entries.length }
+      : {}),
+  };
+}
+
+/**
+ * Makes the undo's index transitions again, under the same drift checks. `refused` when a person's
+ * staging changed one of the paths since the undo (nothing is overwritten), `none` when the undo
+ * moved no index path. An index that cannot be changed is logged and refuses like a drifted one.
+ */
+async function reapplyIndexMoves(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+  staged: OpenCodeStagedRevert,
+): Promise<"restored" | "none" | "refused"> {
+  const moves = staged.indexMoves;
+  if (moves === undefined || moves.entries.length === 0) return "none";
+  try {
+    return (await reapplyTurnIndexMoves(run.workspaceRoot, moves)) === "restored"
+      ? "restored"
+      : "refused";
+  } catch (error) {
+    reportIndexFailure(ports, run, error);
+    return "refused";
+  }
+}
+
+async function undoIndexMoves(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+  moves: TurnIndexMoves,
+): Promise<void> {
+  try {
+    await reapplyTurnIndexMoves(run.workspaceRoot, {
+      headSha: moves.headSha,
+      entries: moves.entries.map(({ path, from, to }) => ({ path, from: to, to: from })),
+    });
+  } catch (error) {
+    reportIndexFailure(ports, run, error);
+  }
 }
 
 async function revertState(
@@ -448,6 +521,7 @@ async function revertState(
       staged: true,
       ...countsOf(run.revert),
       ...(run.revert.index === undefined ? {} : { index: run.revert.index }),
+      ...stagedIndexPaths(run.revert),
     };
   const interrupts = run.interruptSeq ?? 0;
   try {

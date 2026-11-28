@@ -30,13 +30,34 @@ export interface CodingWorkbenchRevertBarProps {
   readonly onRevert: (action: CodingWorkbenchRuntimeRevertAction) => void;
 }
 
+// What an undo of an index-only turn did, said as it happened: the paths it put back, and the
+// outcome for the rest, so a partial or refused index undo never reads like a complete one.
+function stagedIndexSummary(
+  revert: CodingWorkbenchRuntimeRevertState,
+  t: CodingWorkbenchTranslate,
+): string {
+  const outcome = revert.index;
+  if (outcome === undefined || outcome === "restored")
+    return t("codingWorkbench.revert.staged.index");
+  const count = revert.indexPathCount ?? 0;
+  const outcomeText = t(`codingWorkbench.revert.index.${outcome}` as const);
+  if (count === 0) return `${t("codingWorkbench.revert.staged.index.none")} ${outcomeText}`;
+  const undone = t(
+    count === 1
+      ? "codingWorkbench.revert.staged.index.partial.one"
+      : "codingWorkbench.revert.staged.index.partial",
+    { count },
+  );
+  return `${undone} ${outcomeText}`;
+}
+
 // A turn that only changed the Git index has no file to count; the index paths stand for it.
 function indexOnlySummary(
   revert: CodingWorkbenchRuntimeRevertState,
   t: CodingWorkbenchTranslate,
 ): string | undefined {
   if (revert.fileCount !== 0) return undefined;
-  if (revert.staged) return t("codingWorkbench.revert.staged.index");
+  if (revert.staged) return stagedIndexSummary(revert, t);
   const count = revert.indexPathCount ?? 0;
   if (count === 0) return undefined;
   return t(

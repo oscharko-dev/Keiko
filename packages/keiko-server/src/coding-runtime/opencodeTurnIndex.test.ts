@@ -587,6 +587,96 @@ describe("transitions read inside the governed index transaction", () => {
   });
 });
 
+describe("owned paths come from the proven transitions, not from the turn images", () => {
+  const RUN = "run-index-owned";
+  afterEach(() => {
+    resetGovernedIndexPaths(RUN);
+  });
+
+  async function personStagesThenKeikoUnstages(root: string): Promise<{
+    record: TurnIndexRecord;
+    personsEntry: string;
+  }> {
+    const record = beginTurnIndex(root);
+    await record.start;
+    writeFileSync(join(root, "a.txt"), "staged by the person\n");
+    git(root, "add", "a.txt");
+    const personsEntry = git(root, "ls-files", "-s", "a.txt");
+    const { transitions } = await readGovernedTransitions(
+      root,
+      ["a.txt"],
+      () =>
+        withGitIndexTransaction(
+          root,
+          (transaction) => unstages(root, transaction.temporaryIndexPath),
+          (ok) => ok,
+        ),
+      (ok) => ok,
+    );
+    if (transitions === undefined) throw new Error("transitions unproven");
+    noteGovernedIndexTransitions(RUN, transitions);
+    settleTurnIndex(root, record);
+    await record.settled;
+    return { record, personsEntry };
+  }
+
+  function unstages(root: string, indexFile: string): Promise<boolean> {
+    const run = spawnSync("git", ["restore", "--staged", "--", "a.txt"], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: root,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_INDEX_FILE: indexFile,
+      },
+    });
+    return Promise.resolve(run.status === 0);
+  }
+
+  it("takes back a governed unstage of the person's staging although the start and settled images are equal", async () => {
+    const root = repository();
+    const { record, personsEntry } = await personStagesThenKeikoUnstages(root);
+    expect(staged(root)).toEqual([]);
+    expect(governedIndexRecord(RUN).written.get("a.txt")).toBe(AT_HEAD);
+
+    await expect(
+      countRestorableTurnIndexPaths(root, record, governedIndexRecord(RUN)),
+    ).resolves.toBe(1);
+    await expect(restoreTurnIndex(root, record, governedIndexRecord(RUN))).resolves.toEqual({
+      outcome: "restored",
+      restoredCount: 1,
+    });
+
+    expect(git(root, "ls-files", "-s", "a.txt")).toBe(personsEntry);
+  });
+
+  it("offers exactly the bounded set of paths the restore will put back", async () => {
+    const root = repository();
+    const names = Array.from({ length: 70 }, (_unused, index) => `person-${String(index)}.txt`);
+    for (const name of names) writeFileSync(join(root, name), "committed\n");
+    git(root, "add", "-A");
+    git(root, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "more files");
+    for (const name of names) writeFileSync(join(root, name), "person staged\n");
+    git(root, "add", ...names);
+    const record = await turn(
+      root,
+      () => {
+        for (const name of names) writeFileSync(join(root, name), "turn staged\n");
+        git(root, "add", ...names);
+      },
+      names,
+    );
+    const governed = governedOf(record);
+
+    const offered = await countRestorableTurnIndexPaths(root, record, governed);
+    const result = await restoreTurnIndex(root, record, governed);
+
+    expect(offered).toBe(64);
+    expect(result).toEqual({ outcome: "partial", restoredCount: offered });
+  });
+});
+
 describe("the wait for a turn's index start", () => {
   function hungRecord(): TurnIndexRecord {
     // A capture that never answers: a huge index or a hung filesystem monitor.

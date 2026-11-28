@@ -65,6 +65,37 @@ describe("CodingWorkbenchRevertBar", () => {
     expect(screen.getByRole("status")).not.toHaveTextContent("0 files");
   });
 
+  it("says how many staged paths a partial index-only undo took back, and that the rest stay", () => {
+    const { unmount } = render(
+      <CodingWorkbenchRevertBar
+        revert={{
+          staged: true,
+          fileCount: 0,
+          additions: 0,
+          deletions: 0,
+          index: "partial",
+          indexPathCount: 64,
+        }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("undone for 64 files");
+    expect(status).toHaveTextContent("Some staged changes were left in place");
+    expect(status).not.toHaveTextContent("back to the earlier state and no file content changed");
+    unmount();
+    render(
+      <CodingWorkbenchRevertBar
+        revert={{ staged: true, fileCount: 0, additions: 0, deletions: 0, index: "unavailable" }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("no staged change was taken back");
+    expect(screen.getByRole("status")).toHaveTextContent("files may still be staged");
+  });
+
   it("names a single file in the singular", () => {
     renderBar({ ...NEWEST, fileCount: 1 });
 

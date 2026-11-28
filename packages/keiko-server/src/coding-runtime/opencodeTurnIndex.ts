@@ -400,6 +400,7 @@ export async function restoreTurnIndex(
   root: string,
   record: TurnIndexRecord | undefined,
   governed: GovernedIndexRecord,
+  onRestored?: (moves: TurnIndexMoves) => void,
 ): Promise<TurnIndexRestoreResult> {
   const start = await record?.start;
   if (record === undefined || start === undefined) return NO_RESTORE;
@@ -411,7 +412,7 @@ export async function restoreTurnIndex(
   if (images === undefined) return UNAVAILABLE;
   if (images.live.headSha !== images.start.headSha || images.left.headSha !== images.start.headSha)
     return { outcome: "head-moved", restoredCount: 0 };
-  return await restoreTouched(root, images, governed);
+  return await restoreTouched(root, images, governed, onRestored);
 }
 
 /**
@@ -438,8 +439,7 @@ export async function countRestorableTurnIndexPaths(
     return 0;
   const verdict = restoreVerdict(images, governed);
   return verdict.kind === "restore"
-    ? verdict.touched.filter((path) => stateOf(images.live, path) !== stateOf(images.start, path))
-        .length
+    ? boundedTouched(verdict.touched, images.start, governed.previous).length
     : 0;
 }
 
@@ -474,15 +474,53 @@ type RestoreVerdict =
       readonly unrecorded: TurnIndexRestoreResult["outcome"];
     };
 
+/** The state an undo puts a path back to: the entry before governed staging first changed it. */
+function targetState(
+  start: TurnIndexImage,
+  previous: ReadonlyMap<string, string>,
+  path: string,
+): string {
+  return previous.get(path) ?? stateOf(start, path);
+}
+
+/**
+ * The paths an undo owns, chosen from the proven transitions governed staging recorded (the entry
+ * each path held before Keiko's first mutation and the entry the mutation wrote), never from the
+ * start and settled images: a turn that began on a person's staging and unstaged it back to the
+ * start image still changed that path. The images only prove drift and the unrecorded changes.
+ */
+function ownedPaths(start: TurnIndexImage, governed: GovernedIndexRecord): readonly string[] {
+  return [...governed.written]
+    .filter(([path, written]) => targetState(start, governed.previous, path) !== written)
+    .map(([path]) => path)
+    .sort(compareCodeUnits);
+}
+
+/** The paths one restore puts back; paths staged for a person are put back one process at a time. */
+function boundedTouched(
+  touched: readonly string[],
+  start: TurnIndexImage,
+  previous: ReadonlyMap<string, string>,
+): readonly string[] {
+  let explicitSeen = 0;
+  return touched.filter(
+    (path) =>
+      targetState(start, previous, path) === AT_HEAD || ++explicitSeen <= EXPLICIT_RESTORE_MAX,
+  );
+}
+
 function restoreVerdict(images: ProvenImages, governed: GovernedIndexRecord): RestoreVerdict {
   const { start, live, left } = images;
-  const changed = touchedPaths(start, left);
-  const touched = changed.filter((path) => governed.written.has(path));
+  const touched = ownedPaths(start, governed);
   // A changed path the record does not name is the person's own staging, or the turn's when the
   // record was forgotten, cut or lost with a restart. It stays, and the outcome says so.
-  const unrecorded = unrecordedOutcome(changed.length > touched.length, governed);
+  const changed = touchedPaths(start, left);
+  const unrecorded = unrecordedOutcome(
+    changed.some((path) => !governed.written.has(path)),
+    governed,
+  );
   // An undo asked again after a restore finds the index already at the turn start: nothing to do.
-  if (touched.every((path) => stateOf(live, path) === stateOf(start, path)))
+  if (touched.every((path) => stateOf(live, path) === targetState(start, governed.previous, path)))
     return { kind: "nothing", unrecorded };
   // A path the person staged after Keiko wrote it is theirs: the recorded entry is gone from it.
   if (touched.some((path) => stateOf(live, path) !== governed.written.get(path)))
@@ -494,20 +532,33 @@ async function restoreTouched(
   root: string,
   images: ProvenImages,
   governed: GovernedIndexRecord,
+  onRestored: ((moves: TurnIndexMoves) => void) | undefined,
 ): Promise<TurnIndexRestoreResult> {
   const verdict = restoreVerdict(images, governed);
   if (verdict.kind === "nothing") return { outcome: verdict.unrecorded, restoredCount: 0 };
   if (verdict.kind === "changed") return { outcome: "changed-after-turn", restoredCount: 0 };
-  const result = await restoreInTransaction(root, {
-    start: images.start,
-    left: images.left,
-    touched: verdict.touched,
-    written: governed.written,
-    previous: governed.previous,
-  });
-  return result.outcome === "restored" && verdict.unrecorded !== undefined
-    ? { outcome: verdict.unrecorded, restoredCount: result.restoredCount }
-    : result;
+  const restorable = boundedTouched(verdict.touched, images.start, governed.previous);
+  const entries = restorable.map((path) => ({
+    path,
+    from: governed.written.get(path) ?? AT_HEAD,
+    to: targetState(images.start, governed.previous, path),
+  }));
+  const moves: TurnIndexMoves = { headSha: images.start.headSha, entries };
+  // An index that cannot be locked or copied throws: the caller logs it and reports `unavailable`.
+  const applied = await moveInTransaction(root, moves, "undo");
+  if (applied !== "applied") {
+    return {
+      outcome: applied === "changed" ? "changed-after-turn" : "unavailable",
+      restoredCount: 0,
+    };
+  }
+  onRestored?.(moves);
+  const outcome = restorable.length < verdict.touched.length ? "partial" : "restored";
+  return {
+    outcome:
+      outcome === "restored" && verdict.unrecorded !== undefined ? verdict.unrecorded : outcome,
+    restoredCount: restorable.length,
+  };
 }
 
 function unrecordedOutcome(
@@ -518,85 +569,93 @@ function unrecordedOutcome(
   return governed.truncated ? "unavailable" : "partial";
 }
 
-interface RestorePlan {
-  readonly start: TurnIndexImage;
-  readonly left: TurnIndexImage;
-  readonly touched: readonly string[];
-  /** The entry governed staging wrote for each path: the only state an undo may take back. */
-  readonly written: ReadonlyMap<string, string>;
-  /** The entry each path held before governed staging first changed it: what an undo puts back. */
-  readonly previous: ReadonlyMap<string, string>;
+/** One path an undo moved: the entry governed staging wrote (`from`) and the entry put back (`to`). */
+export interface TurnIndexMove {
+  readonly path: string;
+  readonly from: string;
+  readonly to: string;
+}
+
+/** The exact index transitions an undo made, so a restore can make them again under the lock. */
+export interface TurnIndexMoves {
+  readonly headSha: string;
+  readonly entries: readonly TurnIndexMove[];
 }
 
 type TransactionResult = "applied" | "changed" | "failed";
 
-async function restoreInTransaction(
+/**
+ * Moves every path of `moves` between its two recorded entries in a private copy of the index, under
+ * Git's lock: an `undo` takes each path from the entry Keiko wrote to the entry before it, a
+ * `restore` takes it back. The copy replaces the live index only when every path still holds exactly
+ * the entry the move starts from (a person's staging is never overwritten) and then verifiably
+ * holds the entry it was moved to.
+ */
+async function moveInTransaction(
   root: string,
-  plan: RestorePlan,
-): Promise<TurnIndexRestoreResult> {
-  // A path the person had staged is put back one process at a time; beyond the bound the rest stay.
-  let explicitSeen = 0;
-  const restorable = plan.touched.filter(
-    (path) => targetOf(plan, path) === AT_HEAD || ++explicitSeen <= EXPLICIT_RESTORE_MAX,
-  );
-  const bounded: RestorePlan = { ...plan, touched: restorable };
-  // An index that cannot be locked or copied throws: the caller logs it and reports `unavailable`.
-  const result = await withGitIndexTransaction(
+  moves: TurnIndexMoves,
+  direction: "undo" | "restore",
+): Promise<TransactionResult> {
+  const expected = new Map<string, string>();
+  const target = new Map<string, string>();
+  for (const { path, from, to } of moves.entries) {
+    expected.set(path, direction === "undo" ? from : to);
+    target.set(path, direction === "undo" ? to : from);
+  }
+  return await withGitIndexTransaction(
     root,
-    (transaction) => restoreCopy(root, transaction.temporaryIndexPath, bounded),
+    (transaction) =>
+      moveCopy(root, transaction.temporaryIndexPath, { headSha: moves.headSha, expected, target }),
     (applied) => applied === "applied",
   );
-  if (result === "changed") return { outcome: "changed-after-turn", restoredCount: 0 };
-  if (result === "failed") return { outcome: "unavailable", restoredCount: 0 };
-  return {
-    outcome: restorable.length < plan.touched.length ? "partial" : "restored",
-    restoredCount: restorable.length,
-  };
 }
 
-async function restoreCopy(
+/** Puts the paths an undo took back to the entries Keiko wrote, as long as the index is as the undo left it. */
+export async function reapplyTurnIndexMoves(
+  root: string,
+  moves: TurnIndexMoves,
+): Promise<"restored" | "changed-after-turn" | "unavailable"> {
+  const result = await moveInTransaction(root, moves, "restore");
+  if (result === "applied") return "restored";
+  return result === "changed" ? "changed-after-turn" : "unavailable";
+}
+
+interface MovePlan {
+  readonly headSha: string;
+  readonly expected: ReadonlyMap<string, string>;
+  readonly target: ReadonlyMap<string, string>;
+}
+
+async function moveCopy(
   root: string,
   indexFile: string,
-  plan: RestorePlan,
+  plan: MovePlan,
 ): Promise<TransactionResult> {
   const run = gitRunner(root, indexFile);
   const inside = await readIndexImage(run);
   if (inside === undefined || inside === "unreadable") return "failed";
-  // Under the lock, on the copy that will replace the index: every touched path still holds
-  // exactly the entry governed staging wrote, so a person's staging of the same path is never
-  // overwritten (the end-of-turn index is no proof of what Keiko wrote).
-  if (inside.headSha !== plan.left.headSha) return "changed";
-  if (plan.touched.some((path) => stateOf(inside, path) !== plan.written.get(path)))
-    return "changed";
-  if (!(await applyStartState(run, plan))) return "failed";
+  // Under the lock, on the copy that will replace the index: every path still holds exactly the
+  // entry the move starts from, so a person's staging of the same path is never overwritten (the
+  // end-of-turn index is no proof of what Keiko wrote).
+  if (inside.headSha !== plan.headSha) return "changed";
+  for (const [path, state] of plan.expected) if (stateOf(inside, path) !== state) return "changed";
+  if (!(await applyTargetState(run, plan))) return "failed";
   const after = await readIndexImage(run);
   const held =
     typeof after === "object" &&
-    after.headSha === plan.start.headSha &&
-    plan.touched.every((path) => stateOf(after, path) === targetOf(plan, path));
+    after.headSha === plan.headSha &&
+    [...plan.target].every(([path, state]) => stateOf(after, path) === state);
   return held ? "applied" : "failed";
 }
 
-/** The state an undo puts a path back to: the entry before governed staging first changed it. */
-function targetOf(plan: RestorePlan, path: string): string {
-  return plan.previous.get(path) ?? stateOf(plan.start, path);
-}
-
-async function applyStartState(run: GitRun, plan: RestorePlan): Promise<boolean> {
-  const atHead = plan.touched.filter((path) => targetOf(plan, path) === AT_HEAD);
+async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
+  const atHead = [...plan.target].filter(([, state]) => state === AT_HEAD).map(([path]) => path);
   for (let offset = 0; offset < atHead.length; offset += RESTORE_BATCH) {
     const batch = atHead.slice(offset, offset + RESTORE_BATCH);
-    const restored = await run([
-      "restore",
-      "--staged",
-      `--source=${plan.start.headSha}`,
-      "--",
-      ...batch,
-    ]);
+    const restored = await run(["restore", "--staged", `--source=${plan.headSha}`, "--", ...batch]);
     if (!succeeded(restored)) return false;
   }
-  for (const path of plan.touched) {
-    const state = targetOf(plan, path);
+  for (const [path, state] of plan.target) {
     if (state === AT_HEAD) continue;
     if (!(await restoreExplicit(run, path, state))) return false;
   }
