@@ -227,6 +227,33 @@ describe("usage-calibrated prompt admission", () => {
     expect(lastAdmission(next)).not.toHaveProperty("calibratedPromptTokens");
   });
 
+  it.each(["image_url", "file"] as const)(
+    "does not learn from a prompt with a %s part whose raw text estimate omits it",
+    async (kind) => {
+      const ledger = new PromptCalibrationLedger();
+      const media: GatewayCallRequest["messages"] = [
+        {
+          role: "user",
+          content: "describe",
+          contentParts: [
+            { type: "text", text: repetitiveText(20_000) },
+            kind === "image_url"
+              ? { type: "image_url", image_url: { url: "https://fixture.example/a.png" } }
+              : {
+                  type: "file",
+                  file: { filename: "a.pdf", file_data: "data:application/pdf;base64,AA==" },
+                },
+          ],
+        },
+      ];
+      // An in-band figure that would otherwise be recorded as this prefix's real size.
+      await turn(ledger, media, Math.round(localTokens(media) * 0.7));
+      const next: ModelGatewayLogEvent[] = [];
+      await turn(ledger, [...media, { role: "assistant", content: "ok" }], undefined, next);
+      expect(lastAdmission(next)).not.toHaveProperty("calibratedPromptTokens");
+    },
+  );
+
   it("logs an inflated report as implausibly-high and admits the next prompt locally", async () => {
     const ledger = new PromptCalibrationLedger();
     const first = conversation(20_000);

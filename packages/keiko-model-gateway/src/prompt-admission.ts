@@ -225,7 +225,10 @@ function promptTokenEvidence(
   };
 }
 
-function contentPartCount(request: GatewayPromptTokenInput, type: "image_url" | "file"): number {
+export function contentPartCount(
+  request: Pick<GatewayPromptTokenInput, "messages">,
+  type: "image_url" | "file",
+): number {
   return request.messages.reduce(
     (count, message) =>
       count + (message.contentParts?.filter((part) => part.type === type).length ?? 0),

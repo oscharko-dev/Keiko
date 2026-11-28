@@ -20,7 +20,7 @@ import {
   countGatewayPromptTokens,
   type GatewayPromptTokenInput,
 } from "./prompt-token-accounting.js";
-import { admitGatewayPrompt } from "./prompt-admission.js";
+import { admitGatewayPrompt, contentPartCount } from "./prompt-admission.js";
 import {
   promptCalibrationKey,
   promptCalibrationMark,
@@ -345,7 +345,10 @@ export class GatewayPromptAdmission {
     const ledger = this.options.calibration;
     if (ledger === undefined) return undefined;
     const key = promptCalibrationKey(this.options.provider);
-    this.pending = promptCalibrationMark(key, request, estimated);
+    // The raw text estimate leaves out what an image or document costs, so a provider figure that
+    // includes them cannot be compared with it: such a prompt is never learned from.
+    const hasMedia = contentPartCount(request, "image_url") + contentPartCount(request, "file") > 0;
+    this.pending = hasMedia ? undefined : promptCalibrationMark(key, request, estimated);
     return ledger.calibrate(key, request, estimated);
   }
 
