@@ -160,7 +160,7 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     activate(memory(), provider());
     events.length = 0;
     expect(restoredIds(memory({ installationId: "installation-2" }), provider())).toEqual([]);
-    const reasons = changeLines().map((line) => line["reason"]);
+    const reasons = changeLines().map((line) => line.reason);
     expect(reasons).toContain("foreign-installation");
     expect(reasons).not.toContain("first-start");
   });
@@ -168,7 +168,7 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
   it("names a malformed record unreadable, not a first start", () => {
     writeFileSync(join(dir, MODEL_ACTIVATION_FILE), "{not json", { mode: 0o600 });
     expect(restoredIds(memory(), provider())).toEqual([]);
-    const reasons = changeLines().map((line) => line["reason"]);
+    const reasons = changeLines().map((line) => line.reason);
     expect(reasons).toContain("unreadable");
     expect(reasons).not.toContain("first-start");
   });
@@ -178,7 +178,7 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       mode: 0o600,
     });
     expect(restoredIds(memory(), provider())).toEqual([]);
-    expect(changeLines().map((line) => line["reason"])).toContain("unreadable");
+    expect(changeLines().map((line) => line.reason)).toContain("unreadable");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -188,7 +188,7 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       chmodSync(join(dir, MODEL_ACTIVATION_FILE), 0o666);
       events.length = 0;
       expect(restoredIds(memory(), provider())).toEqual([]);
-      expect(changeLines().map((line) => line["reason"])).toContain("unreadable");
+      expect(changeLines().map((line) => line.reason)).toContain("unreadable");
     },
   );
 

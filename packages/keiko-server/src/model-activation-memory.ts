@@ -282,19 +282,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
     correlationId: string,
   ): readonly RestoredActivation[] {
     const outcome = this.read(correlationId);
-    const counts = new Map<ActivationDiscardReason, number>();
-    const restored: { readonly entry: StoredActivation; readonly modelId: string }[] = [];
-    if (outcome.kind === "none") counts.set("first-start", 0);
-    else if (outcome.kind !== "file") counts.set(outcome.kind, 0);
-    else if (outcome.file.productVersion !== this.options.productVersion)
-      counts.set("product-changed", outcome.file.entries.length);
-    else
-      for (const entry of outcome.file.entries) {
-        const { reason, provider } = this.verdict(entry, providers);
-        if (reason === undefined && provider !== undefined)
-          restored.push({ entry, modelId: provider.modelId });
-        else if (reason !== undefined) counts.set(reason, (counts.get(reason) ?? 0) + 1);
-      }
+    const { counts, restored } = this.classify(outcome, providers);
     this.current = new Map(restored.map(({ entry }) => [entry.modelDigest, entry]));
     this.logChange("restored", undefined, restored.length, correlationId);
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
@@ -326,6 +314,29 @@ class FileModelActivationMemory implements ModelActivationMemory {
       if (removed > 0) this.logChange("discarded", reason, removed, correlationId);
       if (saved > 0) this.logChange("saved", undefined, saved, correlationId);
     }
+  }
+
+  private classify(
+    outcome: ReadOutcome,
+    providers: readonly ModelProviderConfig[],
+  ): {
+    readonly counts: Map<ActivationDiscardReason, number>;
+    readonly restored: { readonly entry: StoredActivation; readonly modelId: string }[];
+  } {
+    const counts = new Map<ActivationDiscardReason, number>();
+    const restored: { readonly entry: StoredActivation; readonly modelId: string }[] = [];
+    if (outcome.kind === "none") counts.set("first-start", 0);
+    else if (outcome.kind !== "file") counts.set(outcome.kind, 0);
+    else if (outcome.file.productVersion !== this.options.productVersion)
+      counts.set("product-changed", outcome.file.entries.length);
+    else
+      for (const entry of outcome.file.entries) {
+        const { reason, provider } = this.verdict(entry, providers);
+        if (reason === undefined && provider !== undefined)
+          restored.push({ entry, modelId: provider.modelId });
+        else if (reason !== undefined) counts.set(reason, (counts.get(reason) ?? 0) + 1);
+      }
+    return { counts, restored };
   }
 
   private verdict(
