@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import type {
@@ -202,27 +203,61 @@ describe("failure before the tools/call frame is effect-free (finding 1)", () =>
     expect(failed).toMatchObject([{ dispatched: true, effect: "possible" }]);
   });
 
-  it("aborting a call that waits behind another declaration check is prompt and effect-free", async () => {
+  it("cancels a waiting call without letting its successor overtake the active declaration check", async () => {
     let lists = 0;
+    const checking = Promise.withResolvers<void>();
     const f = fixture({
-      intercept: (rpc, request) =>
-        rpc.method === "tools/list" && ++lists === 2 ? stalled(request) : undefined,
+      intercept: (rpc, request) => {
+        if (rpc.method !== "tools/list" || ++lists !== 2) return undefined;
+        checking.resolve();
+        return stalled(request);
+      },
     });
     const connection = await f.connect();
     const first = new AbortController();
-    const blocked = connection.call("work", {}, context({ signal: first.signal }));
-    const second = new AbortController();
-    const waiting = rejection(connection.call("work", {}, context({ signal: second.signal })));
-    second.abort();
-    const error = await waiting;
-    expect(error.reason).toBe("aborted");
-    expect(error.effect).toBe("none");
-    first.abort();
-    expect((await rejection(blocked)).effect).toBe("none");
+    const blocked = rejection(connection.call("work", {}, context({ signal: first.signal })));
+    try {
+      await checking.promise;
+      const second = new AbortController();
+      const waiting = rejection(connection.call("work", {}, context({ signal: second.signal })));
+      // Let the invocation enter the declaration queue before cancelling its slot.
+      await setImmediate();
+      second.abort();
+      expect(await waiting).toMatchObject({ reason: "aborted", effect: "none" });
+      const successor = connection.call("work", {}, context());
+      await setImmediate();
+      try {
+        expect(lists).toBe(2);
+      } finally {
+        first.abort();
+        await expect(successor).resolves.toMatchObject({ content: [{ type: "text" }] });
+      }
+    } finally {
+      first.abort();
+      expect((await blocked).effect).toBe("none");
+    }
   });
 });
 
 describe("catalog drift does not cancel dispatched calls (finding 2)", () => {
+  it("keeps an equivalent catalog live when the provider reorders tools", async () => {
+    let lists = 0;
+    const f = fixture({
+      tools: [{ name: "alpha" }, { name: "work" }],
+      intercept: async (rpc, _request, forward) => {
+        if (rpc.method !== "tools/list" || ++lists === 1) return undefined;
+        const frame = (await (await forward()).json()) as { result: { tools: unknown[] } };
+        frame.result.tools.reverse();
+        return Response.json(frame);
+      },
+    });
+    const connection = await f.connect();
+    await expect(connection.call("work", {}, context())).resolves.toMatchObject({
+      content: [{ text: "ok" }],
+    });
+    expect(connection.signal.aborted).toBe(false);
+  });
+
   it("lets three parallel in-flight calls finish, and refuses a fourth without sending its frame", async () => {
     const releases: (() => void)[] = [];
     const notify: (() => void)[] = [];

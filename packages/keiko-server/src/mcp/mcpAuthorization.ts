@@ -234,7 +234,16 @@ class AuthorizationOwner implements McpAuthorization {
       this.#clients.get(server.name)?.client === client &&
       !this.options.settings.generation(server, correlationId).aborted;
     const client = this.restoredClient(server, signal, current);
-    this.#clients.set(server.name, { signal: generation, client });
+    if (!signal.aborted) {
+      this.#clients.set(server.name, { signal: generation, client });
+      signal.addEventListener(
+        "abort",
+        () => {
+          if (this.#clients.get(server.name)?.client === client) this.#clients.delete(server.name);
+        },
+        { once: true },
+      );
+    }
     return client;
   }
   private restoredClient(
