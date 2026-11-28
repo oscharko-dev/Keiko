@@ -15883,6 +15883,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 128,
         maxItems: 5,
       },
+      indexCaptureCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["capture-timed-out", "capture-aborted"],
+      },
     },
     causal: "correlation",
     lifecycle: "failure",

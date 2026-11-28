@@ -17410,6 +17410,12 @@
               "required": false
             },
             {
+              "name": "indexCaptureCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "operation",
               "type": "string",
               "dataClass": "closed-enum",
