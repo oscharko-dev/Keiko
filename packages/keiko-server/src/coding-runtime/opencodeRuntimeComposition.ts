@@ -200,7 +200,11 @@ import {
   type OpenCodeRevertRunPort,
   type OpenCodeStagedRevert,
 } from "./opencodeRevert.js";
-import { awaitTurnIndexStart, reopenTurnIndex } from "./opencodeTurnIndex.js";
+import {
+  awaitTurnIndexStart,
+  reopenTurnIndex,
+  type TurnIndexStartBound,
+} from "./opencodeTurnIndex.js";
 import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
@@ -1453,7 +1457,16 @@ async function armAndPostTurn(
   if (origin === undefined) {
     beginOpenCodeTurnImages(run);
     // The index start is read before the model can stage anything, within a bound Stop can cut.
-    if (run.turnIndex !== undefined) await awaitIndexStart(run, run.turnIndex);
+    if (run.turnIndex !== undefined) {
+      const cut = await awaitIndexStart(run, run.turnIndex);
+      // Stop (the operator's or the lifecycle's) ended the wait, or the run went away meanwhile: no
+      // prompt or slash command may reach the runtime. Only an index read that merely ran out of
+      // time continues, with the start reported unavailable.
+      if (cut === "capture-aborted" || !run.ready) {
+        run.runtimeAdapter.cancelTurn();
+        return false;
+      }
+    }
   }
   return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
 }
@@ -1461,11 +1474,11 @@ async function armAndPostTurn(
 async function awaitIndexStart(
   run: ReadyRun,
   record: NonNullable<ReadyRun["turnIndex"]>,
-): Promise<void> {
+): Promise<TurnIndexStartBound | undefined> {
   const stop = new AbortController();
   run.turnStartStop = stop;
   try {
-    await awaitTurnIndexStart(record, stop.signal);
+    return await awaitTurnIndexStart(record, stop.signal);
   } finally {
     if (run.turnStartStop === stop) run.turnStartStop = undefined;
   }
@@ -1997,6 +2010,7 @@ function lifecycleAdapter(
       const dispose = run.runtimeAdapter?.monitor(() => {
         run.ready = false;
         run.revertReady = false;
+        run.turnStartStop?.abort();
         onFailure();
       });
       return dispose === undefined
@@ -2005,6 +2019,7 @@ function lifecycleAdapter(
             // Holding a completed run quiesces productive work, retaining only its qualified
             // operator revert client. Failure and disposal invalidate that client separately.
             run.ready = false;
+            run.turnStartStop?.abort();
             dispose();
           };
     },
@@ -2013,7 +2028,10 @@ function lifecycleAdapter(
     // runtime (#3907). Disposal closes it again.
     beginStop: (runId): void => {
       const run = runs.get(runId);
-      if (run !== undefined) run.revertReady = false;
+      if (run === undefined) return;
+      run.revertReady = false;
+      // A turn still waiting for its index start must not post its prompt into a stopping run.
+      run.turnStartStop?.abort();
     },
     dispose: (runId, signal, settlement): Promise<boolean> =>
       disposeRun(input, bridge, runs, runId, signal, settlement),
@@ -2041,6 +2059,7 @@ async function disposeRun(
   if (run !== undefined) {
     run.ready = false;
     run.revertReady = false;
+    run.turnStartStop?.abort();
   }
   try {
     const drained = bridge.close(signal);

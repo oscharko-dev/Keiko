@@ -203,6 +203,22 @@ const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 // #4359: a test can take the nested-effects fact off the pin the run is verified against.
 const pinFlag = vi.hoisted(() => ({ stripNestedEffects: false }));
 
+// #4491 review: a turn's index start that never answers, so a Stop can be proven to end the wait.
+const indexStartFlag = vi.hoisted(() => ({ hang: false, began: 0 }));
+
+vi.mock("./opencodeTurnIndex.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeTurnIndex.js")>();
+  return {
+    ...actual,
+    beginTurnIndex: (root: string): ReturnType<typeof actual.beginTurnIndex> => {
+      indexStartFlag.began += 1;
+      return indexStartFlag.hang
+        ? { start: new Promise<never>(() => undefined) }
+        : actual.beginTurnIndex(root);
+    },
+  };
+});
+
 vi.mock("./opencodeRuntimeVersions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./opencodeRuntimeVersions.js")>();
   return {
@@ -3286,6 +3302,45 @@ describe("private OpenCode run control", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  describe.each([
+    [
+      "the operator's stop",
+      (fixture: Awaited<ReturnType<typeof startBridgeFixture>>): Promise<unknown> =>
+        fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID),
+    ],
+    [
+      "the run lifecycle's stop",
+      (fixture: Awaited<ReturnType<typeof startBridgeFixture>>): Promise<unknown> => fixture.stop(),
+    ],
+  ])("a prompt waiting for the Git index start under %s", (_label, stopRun) => {
+    it("is never posted to the runtime", async () => {
+      const runControl = {
+        promptBodies: [] as string[],
+        abortSessions: [] as string[],
+        statusResponses: [{}, {}, {}, {}] as unknown[],
+      };
+      const fixture = await startBridgeFixture(facade, undefined, { runControl });
+      indexStartFlag.hang = true;
+      indexStartFlag.began = 0;
+      try {
+        const submitted = fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "must not be sent");
+        await vi.waitFor(() => {
+          expect(indexStartFlag.began).toBeGreaterThan(0);
+        });
+        expect(runControl.promptBodies).toEqual([]);
+
+        const stopping = stopRun(fixture);
+
+        await expect(submitted).resolves.toBe(false);
+        expect(runControl.promptBodies).toEqual([]);
+        await Promise.allSettled([stopping]);
+      } finally {
+        indexStartFlag.hang = false;
+        await fixture.stop();
+      }
+    });
   });
 
   it("records a body-free diagnostic when the interrupt of a stopping task throws", async () => {
