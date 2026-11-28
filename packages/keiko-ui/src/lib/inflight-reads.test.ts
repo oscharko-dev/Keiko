@@ -223,6 +223,26 @@ describe("coalescedFetch bounded lifetime", () => {
     cloneSpy.mockRestore();
   });
 
+  it("settles a joiner waiting on a hung read once the join windows end", async () => {
+    vi.useFakeTimers();
+    const hung = deferredResponse();
+    const replacement = deferredResponse();
+    const fetchMock = mockFetchWith(hung, replacement);
+    const options = { joinable: true };
+    void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    const joiners = [1, 2].map(() => coalescedFetch("/api/x", { cache: "no-store" }, options));
+    endInflightReads();
+    await vi.advanceTimersByTimeAsync(0);
+    // One replacement read between the joiners, and no timer is left to wait for.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    replacement.respond({ ok: true });
+    for (const joiner of joiners) {
+      await expect((await joiner).json()).resolves.toEqual({ ok: true });
+    }
+    endInflightReads();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("leaves no lifetime timer running once the join windows end", () => {
     vi.useFakeTimers();
     mockFetchWith(deferredResponse());

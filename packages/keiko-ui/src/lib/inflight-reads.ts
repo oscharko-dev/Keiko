@@ -53,13 +53,19 @@ function copyOf(response: Response): Response {
 }
 
 /**
- * Ends every join window; a request that may change server state calls it before and after. A
- * read already in flight keeps serving the joiners that joined it, but its lifetime timer is
- * released with the window: nothing is left running once the windows are gone.
+ * Ends every join window; a request that may change server state calls it before and after. Each
+ * lifetime timer is released with its window, and the expiry it would have fired is resolved at
+ * once: a joiner still waiting on a read that never settles must not be left without the timer that
+ * would have freed it. It starts one replacement read between them, which also begins after the
+ * write that ended the window, so it can never receive a response that predates it.
  */
 export function endInflightReads(): void {
-  for (const entry of sharedReads.values()) clearTimeout(entry.timer);
+  const ended = [...sharedReads.values()];
   sharedReads.clear();
+  for (const entry of ended) {
+    clearTimeout(entry.timer);
+    entry.evict();
+  }
 }
 
 /**
@@ -78,6 +84,8 @@ interface SharedRead {
   readonly response: Promise<Response>;
   readonly expired: Promise<void>;
   readonly timer: ReturnType<typeof setTimeout>;
+  /** Resolves `expired` now, ahead of the timer. */
+  readonly evict: () => void;
 }
 
 const sharedReads = new Map<string, SharedRead>();
@@ -88,7 +96,7 @@ function share(key: string, read: Promise<Response>): void {
     evict = resolve;
   });
   const timer = setTimeout(evict, INFLIGHT_READ_MAX_MS);
-  const entry: SharedRead = { response: read, expired, timer };
+  const entry: SharedRead = { response: read, expired, timer, evict };
   sharedReads.set(key, entry);
   const release = (): void => {
     clearTimeout(timer);
