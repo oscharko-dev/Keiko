@@ -20231,6 +20231,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "approval-expired",
           "approval-cancelled",
           "approval-unavailable",
+          "branch-name-refused",
         ],
       },
       runId: {

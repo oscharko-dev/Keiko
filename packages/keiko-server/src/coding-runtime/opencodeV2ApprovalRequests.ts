@@ -20,7 +20,9 @@ export type OpenCodeV2ApprovalOutcome =
 
 /** A refused governed ask as the bridge reports it to the tool facade route. */
 export type ToolBridgeApprovalRejection =
-  `approval-${Exclude<OpenCodeV2ApprovalOutcome, "approved">}`;
+  | `approval-${Exclude<OpenCodeV2ApprovalOutcome, "approved">}`
+  /** A task-branch ask Keiko answers itself because it would refuse the name at execution (U-27). */
+  | "branch-name-refused";
 
 /**
  * The decision with the tool call it belongs to (#3612). `actionId` is the tool call's own

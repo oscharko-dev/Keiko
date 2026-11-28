@@ -5213,7 +5213,11 @@ function unsafeBranchRefusal(
   value: Readonly<Record<string, unknown>>,
 ): OpenCodeToolBridgeResponse | undefined {
   return run !== undefined && branchAskNamesUnsafeBranch(value)
-    ? { status: 409, body: JSON.stringify(invalidBranchNameToolResult()) }
+    ? {
+        status: 409,
+        body: JSON.stringify(invalidBranchNameToolResult()),
+        rejection: "branch-name-refused",
+      }
     : undefined;
 }
 
