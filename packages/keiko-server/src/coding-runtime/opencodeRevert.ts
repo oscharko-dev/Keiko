@@ -175,7 +175,7 @@ export interface OpenCodeStagedRevert extends CodingRuntimeRevertCounts {
   /** `undefined` until the undo recorded its witness: such a revert cannot be proven unchanged. */
   witness: OpenCodeRevertWitness | undefined;
   /** What the undo did to the Git index of the paths the turn staged (U-34b). */
-  readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
+  index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
   /** The index transitions the undo made; a restore makes them again, or refuses when drifted. */
   indexMoves?: TurnIndexMoves | undefined;
 }
@@ -471,14 +471,17 @@ async function restoreUndo(
   const moved = await reapplyIndexMoves(run, staged, correlationId);
   if (moved === "changed") return { ok: false, reason: "index-changed" };
   if (moved === "failed") return { ok: false, reason: "revert-failed" };
-  try {
-    await run.client.clearRevert(run.sessionId);
-  } catch (error) {
-    // The files stay undone, so the index goes back to the undone state with them.
-    if (staged.indexMoves !== undefined && moved === "restored")
-      await undoIndexMoves(ports, run, staged.indexMoves, correlationId);
-    throw error;
+  // The index work above took time the first check did not cover: a human edit made meanwhile must
+  // still be there when the runtime writes the turn's files, so the witness is proven again right
+  // before that write, and the index goes back to the undone state if it no longer holds.
+  if (
+    moved === "restored" &&
+    !(await witnessHolds(run.workspaceRoot, staged.files, staged.witness))
+  ) {
+    await rollBackIndex(ports, run, staged, correlationId);
+    return { ok: false, reason: "workspace-changed" };
   }
+  await clearOrRollBack(ports, run, staged, moved, correlationId);
   run.revert = undefined;
   return {
     ok: true,
@@ -488,6 +491,22 @@ async function restoreUndo(
       ? { index: "restored" as const, indexPathCount: staged.indexMoves.entries.length }
       : {}),
   };
+}
+
+async function clearOrRollBack(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+  staged: OpenCodeStagedRevert,
+  moved: "restored" | "none",
+  correlationId: string,
+): Promise<void> {
+  try {
+    await run.client.clearRevert(run.sessionId);
+  } catch (error) {
+    // The files stay undone, so the index goes back to the undone state with them.
+    if (moved === "restored") await rollBackIndex(ports, run, staged, correlationId);
+    throw error;
+  }
 }
 
 /**
@@ -508,12 +527,20 @@ async function reapplyIndexMoves(
   return result === "changed-after-turn" ? "changed" : "failed";
 }
 
-async function undoIndexMoves(
+/**
+ * Puts the index back to the undone state after a restore that cannot finish. A rollback that is
+ * refused (a person restaged a path since) or fails leaves staged effects of the turn behind, so the
+ * retained undo no longer claims `restored`: the outcome it keeps says the index changed or could not
+ * be proven, and the refusal is on the log. The person's own staging is never overwritten.
+ */
+async function rollBackIndex(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
-  moves: TurnIndexMoves,
+  staged: OpenCodeStagedRevert,
   correlationId: string,
 ): Promise<void> {
+  const moves = staged.indexMoves;
+  if (moves === undefined) return;
   try {
     const result = await reapplyTurnIndexMoves(
       run.workspaceRoot,
@@ -523,16 +550,17 @@ async function undoIndexMoves(
       },
       correlationId,
     );
-    // A person's restaging in this window is correctly left alone, but never silently.
-    if (result !== "restored")
-      recordRevertRefused(ports.activityLog, {
-        runId: run.runId,
-        operation: "restore",
-        reason: result === "changed-after-turn" ? "index-changed" : "revert-failed",
-        correlationId,
-        error: undefined,
-      });
+    if (result === "restored") return;
+    staged.index = result === "changed-after-turn" ? "changed-after-turn" : "unavailable";
+    recordRevertRefused(ports.activityLog, {
+      runId: run.runId,
+      operation: "restore",
+      reason: result === "changed-after-turn" ? "index-changed" : "revert-failed",
+      correlationId,
+      error: undefined,
+    });
   } catch (error) {
+    staged.index = "unavailable";
     reportIndexFailure(ports, run, error);
   }
 }

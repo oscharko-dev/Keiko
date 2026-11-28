@@ -13,6 +13,23 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// What happens right after Restore changes reapplied the index, before the files are written: a
+// person's edit lands in the window the index transaction opened.
+const afterReapply = vi.hoisted(() => ({ run: undefined as (() => void) | undefined }));
+vi.mock("./opencodeTurnIndex.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeTurnIndex.js")>();
+  return {
+    ...actual,
+    reapplyTurnIndexMoves: async (
+      ...args: Parameters<typeof actual.reapplyTurnIndexMoves>
+    ): ReturnType<typeof actual.reapplyTurnIndexMoves> => {
+      const result = await actual.reapplyTurnIndexMoves(...args);
+      afterReapply.run?.();
+      return result;
+    },
+  };
+});
+
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -57,6 +74,7 @@ const SECRET = "the-model-wrote-this-secret";
 const roots: string[] = [];
 
 afterEach(() => {
+  afterReapply.run = undefined;
   resetGovernedIndexPaths(RUN_ID);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -1436,6 +1454,40 @@ describe("undo and the Git index (U-34b)", () => {
       },
       { extra: { operation: "restore", reason: "revert-failed" } },
     ]);
+    // The rollback was refused, so the retained undo no longer claims the index is restored.
+    await expect(made.port.revertState(RUN_ID)).resolves.toMatchObject({
+      staged: true,
+      index: "changed-after-turn",
+    });
+  });
+
+  it("refuses to write the turn's files over an edit made while the index was reapplied, and undoes the index again", async () => {
+    const { root, begun } = await stagedTurn();
+    const made = subject({ root });
+    made.run.turnIndex = begun;
+    await noteGoverned(root, ["a.txt"]);
+    recordOpenCodeTurnImage(made.run, made.log);
+    await made.run.turnImage;
+    await agentWrote(made.run, ["a.txt"]);
+    await expect(made.port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    afterReapply.run = (): void => {
+      writeFileSync(join(root, "a.txt"), "typed by the person during the index work\n");
+    };
+
+    await expect(made.port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "workspace-changed",
+    });
+
+    expect(made.client.clearRevert).not.toHaveBeenCalled();
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(
+      "typed by the person during the index work\n",
+    );
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    await expect(made.port.revertState(RUN_ID)).resolves.toMatchObject({ staged: true });
   });
 
   it("restores nothing in the index that governed staging did not stage, and says staged changes may remain", async () => {
