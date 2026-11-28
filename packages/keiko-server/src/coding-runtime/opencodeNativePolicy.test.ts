@@ -466,6 +466,7 @@ describe("native policy evidence", () => {
     ).toMatchObject({
       mode: "supervised-coding",
       permission: "shell",
+      toolKind: "bash",
       effect: "deny",
       outcome: "delivery-reserved",
       resourceCount: 1,
@@ -476,22 +477,78 @@ describe("native policy evidence", () => {
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(second),
       ),
-    ).toMatchObject({ permission: "edit", effect: "ask", outcome: "approved" });
+    ).toMatchObject({
+      permission: "edit",
+      toolKind: "edit",
+      effect: "ask",
+      outcome: "approved",
+    });
     expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(third),
       ),
-    ).toMatchObject({ permission: "other", effect: "deny", outcome: "unsupported-action" });
+    ).toMatchObject({
+      permission: "other",
+      toolKind: "other",
+      effect: "deny",
+      outcome: "unsupported-action",
+    });
     expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(fourth),
       ),
-    ).toMatchObject({ permission: "todowrite", effect: "allow", outcome: "allowed" });
+    ).toMatchObject({
+      permission: "todowrite",
+      toolKind: "todo",
+      effect: "allow",
+      outcome: "allowed",
+    });
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain("git push");
     expect(serialized).not.toContain("example.com");
+  });
+});
+
+// O-13: the line names the native tool in one closed vocabulary, never a path or command.
+describe("the native tool a decision was about (O-13)", () => {
+  it.each([
+    ["read", "read"],
+    ["glob", "glob"],
+    ["grep", "grep"],
+    ["list", "list"],
+    ["edit", "edit"],
+    ["shell", "bash"],
+    ["webfetch", "webfetch"],
+    ["websearch", "websearch"],
+    ["skill", "skill"],
+    ["subagent", "task"],
+    ["question", "question"],
+    ["todowrite", "todo"],
+    ["execute", "program"],
+    ["opencode_schedule", "schedule"],
+    ["opencode_session_move", "session"],
+    ["opencode_worktree_create", "worktree"],
+    ["constructor", "other"],
+    ["teleport", "other"],
+  ] as const)("logs permission %s as toolKind %s", (permission, toolKind) => {
+    const records: ServerLogEvent[] = [];
+    recordOpenCodeNativePolicyDecision({ write: (event) => void records.push(event) }, "run-kind", {
+      mode: "supervised-coding",
+      request: request(permission, ["PRIVATE_RESOURCE"]),
+      decision: decide("supervised-coding", permission, ["PRIVATE_RESOURCE"]),
+      outcome: "allowed",
+    });
+    const [record] = records;
+    if (record === undefined) throw new Error("log");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.native-policy.decided.emitted-line",
+        formatActivityLogProofLine(record),
+      ),
+    ).toMatchObject({ toolKind });
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_RESOURCE");
   });
 });
 

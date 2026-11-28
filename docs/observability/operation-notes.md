@@ -783,6 +783,14 @@ told apart by a digest held in memory only. A verification or Git step keeps its
 operations and has no failure origin. `keiko support analyze` therefore shows a run's pattern, for
 example twelve command failures and no Keiko refusal.
 
+`coding-runtime.native-policy.decided` records each native policy decision under the run's id. Besides
+the `permission` class the runtime asked about (an `edit` permission covers edit, write and patch;
+`shell` is the command tool), the line carries the closed `toolKind` (O-13): `read`, `glob`, `grep`,
+`list`, `edit`, `bash`, `webfetch`, `websearch`, `skill`, `task`, `question`, `todo`, `program` (a
+Code Mode program), `schedule`, `session`, `worktree`, `mcp` or `other`. It is derived from the
+evaluated permission (an MCP tool by its classification), never from a path, command or argument, so
+a log tells a command from a file edit or a scheduled-task change without any body.
+
 `coding-runtime.tool-output.shortened` records one line per tool call whose result the runtime kept
 only the start of for the model (its `tool_output` cap, 51,200 bytes and 2,000 lines, protects the
 context window), under the run's id. The line carries the tool's closed class, the bytes the model

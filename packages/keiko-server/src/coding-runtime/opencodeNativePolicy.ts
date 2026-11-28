@@ -196,6 +196,65 @@ function permissionLogValue(permission: string): PermissionLogValue {
   const known = PERMISSION_LOG_VALUES.find((value) => value === permission);
   return known ?? "other";
 }
+/**
+ * The native tool a decision was about, in one closed vocabulary (O-13): `permission` names the
+ * class the runtime asked about, so an `edit` is one of edit, write or patch and a `shell` is the
+ * command tool, while `toolKind` is what a support reader needs to tell the calls apart. Derived
+ * here from the permission the policy already evaluated (an MCP tool by its classification), never
+ * from a path, command or tool argument.
+ */
+export const NATIVE_POLICY_TOOL_KINDS = [
+  "read",
+  "glob",
+  "grep",
+  "list",
+  "edit",
+  "bash",
+  "webfetch",
+  "websearch",
+  "skill",
+  "task",
+  "question",
+  "todo",
+  "program",
+  "schedule",
+  "session",
+  "worktree",
+  "mcp",
+  "other",
+] as const;
+type NativePolicyToolKind = (typeof NATIVE_POLICY_TOOL_KINDS)[number];
+
+const TOOL_KIND_BY_PERMISSION: Readonly<Record<string, NativePolicyToolKind>> = Object.freeze({
+  read: "read",
+  glob: "glob",
+  grep: "grep",
+  list: "list",
+  edit: "edit",
+  shell: "bash",
+  webfetch: "webfetch",
+  websearch: "websearch",
+  skill: "skill",
+  subagent: "task",
+  question: "question",
+  todowrite: "todo",
+  execute: "program",
+  opencode_schedule: "schedule",
+  opencode_session_move: "session",
+  opencode_session_rename: "session",
+  opencode_worktree_create: "worktree",
+});
+
+function nativePolicyToolKind(
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+): NativePolicyToolKind {
+  if (decision.classification?.label === "native-mcp") return "mcp";
+  return Object.hasOwn(TOOL_KIND_BY_PERMISSION, request.permission)
+    ? (TOOL_KIND_BY_PERMISSION[request.permission] ?? "other")
+    : "other";
+}
+
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
@@ -1938,6 +1997,13 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "template-refused",
       ],
     },
+    // O-13: which native tool the decision was about, so a log tells a bash call from an edit.
+    toolKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...NATIVE_POLICY_TOOL_KINDS],
+    },
     sessionRelation: {
       type: "string",
       dataClass: "closed-enum",
@@ -2103,6 +2169,7 @@ export function recordOpenCodeNativePolicyDecision(
       {
         mode: isCodingWorkbenchMode(input.mode) ? input.mode : "unknown",
         permission: loggedPermission(request, decision),
+        toolKind: nativePolicyToolKind(request, decision),
         effect: decision.effect,
         outcome: input.outcome,
         ...(input.sessionRelation === undefined ? {} : { sessionRelation: input.sessionRelation }),
