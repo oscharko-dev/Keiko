@@ -9,11 +9,12 @@ import {
   readdirSync,
   readlinkSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
@@ -282,11 +283,10 @@ function branchLockPath(heads: string, branch: string): string | undefined {
  * Holds Git's own `<ref>.lock` for each named local branch while `run` executes. Git refuses every
  * update of a branch whose lock exists, so a state read inside `run` stays true until the write that
  * follows it: a commit or branch created by another process meanwhile fails on the lock instead of
- * being overwritten. A branch whose parent directory does not exist yet (a nested new name) is NOT
- * locked: there is no directory to hold a lock in, and another process can create that directory
- * and the ref between the caller's proof and its write. That window is a known residual gap, not a
- * guarantee. The caller narrows it by proving the state again right before its write, but cannot
- * close it. A lock that cannot be created fails closed.
+ * being overwritten. A branch whose parent directory does not exist yet (a nested new name such as
+ * `feature/first`) gets its parent directories created first, so the lock is real for it too; the
+ * directories this call created are removed again when they are still empty, and a directory that
+ * cannot be created, or an existing parent that is not a plain directory, fails closed.
  */
 export async function withGitBranchRefLocks<T>(
   workspaceRoot: string,
@@ -298,19 +298,55 @@ export async function withGitBranchRefLocks<T>(
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
   const heads = join(branchRefsBase(base.path), "refs", "heads");
   const held: { path: string; descriptor: number }[] = [];
+  const created: string[] = [];
   try {
     for (const branch of branches) {
       const path = branchLockPath(heads, branch);
       if (path === undefined) throw new Error(GIT_REF_LOCK_UNAVAILABLE);
-      const parent = lstatSync(dirname(path), { throwIfNoEntry: false });
-      if (parent === undefined) continue;
-      if (!parent.isDirectory() || parent.isSymbolicLink())
-        throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+      createMissingParents(heads, dirname(path), created);
       held.push({ path, descriptor: openRefLock(path) });
     }
     return await run();
   } finally {
     for (const lock of held.reverse()) releaseRefLock(lock);
+    for (const directory of created.reverse()) removeEmptyDirectory(directory);
+  }
+}
+
+// Walks from `refs/heads` down to the lock's directory: every existing component must be a plain
+// directory, and a missing one is created (and remembered) so the lock has a directory to live in.
+function createMissingParents(heads: string, parent: string, created: string[]): void {
+  let current = heads;
+  for (const part of relative(heads, parent)
+    .split(sep)
+    .filter((name) => name !== "")) {
+    current = join(current, part);
+    if (lstatSync(current, { throwIfNoEntry: false }) === undefined)
+      makeDirectory(current, created);
+    const checked = lstatSync(current, { throwIfNoEntry: false });
+    if (checked === undefined || !checked.isDirectory() || checked.isSymbolicLink())
+      throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+  }
+}
+
+function makeDirectory(path: string, created: string[]): void {
+  try {
+    mkdirSync(path, { mode: 0o755 });
+    created.push(path);
+  } catch (error) {
+    // Another writer made it first: it is re-checked like any existing component.
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      throw new Error(GIT_REF_LOCK_UNAVAILABLE, { cause: error });
+  }
+}
+
+// A directory another writer filled (or removed) meanwhile is theirs and stays as it is.
+function removeEmptyDirectory(directory: string): void {
+  try {
+    rmdirSync(directory);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOTEMPTY" && code !== "ENOENT" && code !== "EEXIST") throw error;
   }
 }
 

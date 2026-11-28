@@ -557,6 +557,40 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     expect(existsSync(join(root, ".git", "refs", "heads", "fresh.lock"))).toBe(false);
     expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/feature/first");
   });
+  // The normal first use of a nested name: its parent directory does not exist yet. The target
+  // must be held by Git's own lock all the same, so a ref created there meanwhile is refused rather
+  // than attached to HEAD.
+  it("holds the lock on a nested target whose parent directory is absent", async () => {
+    const tree = git(["hash-object", "-t", "tree", "-w", "--stdin"]);
+    const other = git(["commit-tree", tree, "-m", "other"]);
+    let attempt: { readonly threw: boolean } | undefined;
+    const racing = createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      spawn: (command, args, options) => {
+        if (args.includes("symbolic-ref") && attempt === undefined) {
+          let threw = false;
+          try {
+            git(["update-ref", "refs/heads/task/work", other]);
+          } catch {
+            threw = true;
+          }
+          attempt = { threw };
+        }
+        return nodeSpawnFn(command, args, options);
+      },
+    });
+    const result = await racing.createBranch({
+      branchName: "task/work",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result.outcome).toBe("succeeded");
+    expect(attempt?.threw).toBe(true);
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/task/work");
+    expect(existsSync(join(root, ".git", "refs", "heads", "task", "work"))).toBe(false);
+    expect(existsSync(join(root, ".git", "refs", "heads", "task", "work.lock"))).toBe(false);
+  });
   it("writes nothing when another writer already holds a lock on the old branch", async () => {
     const lock = join(root, ".git", "refs", "heads", "fresh.lock");
     writeFileSync(lock, "");
