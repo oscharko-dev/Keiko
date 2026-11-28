@@ -438,6 +438,10 @@
   gap: 10px;
 }
 
+.cmpSetupActions[hidden] {
+  display: none;
+}
+
 .cmpPanel .cmpSetupActions > button {
   justify-content: flex-start;
   align-items: flex-start;

@@ -248,7 +248,7 @@ function SetupActions({ model, t }: ViewProps): ReactNode {
     });
   }
   return (
-    <div className={styles.cmpSetupActions}>
+    <div className={styles.cmpSetupActions} hidden={formOpen}>
       <button
         type="button"
         className={styles.cmpPrimary}

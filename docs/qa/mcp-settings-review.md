@@ -28,3 +28,14 @@ provides historical evidence. Current conclusions require checks against the cur
   paths continue to recheck current authority. OAuth client cache entries leave with their generation.
 - The protocol client treats equivalent reordered declarations as the same catalog and keeps
   declaration reads serialized when a queued invocation is cancelled.
+
+## Verification record
+
+The independent review exercised protocol, Settings, credential and browser component tests. The
+Chromium journeys use the production static export and the paired Settings route. The manual
+journey starts a real fixture program and retains its tool policy across reconnection. The German
+import journey rejects an invalid entry, opens a JSONC file, checks the separate preview, confirms
+by keyboard and verifies that imported connections remain disabled.
+
+The editor bundle evidence was regenerated and checked in the pinned Linux arm64 gate image
+with Node 26.13.1 and npm 11.20.0. The local Chromium check used macOS arm64.
