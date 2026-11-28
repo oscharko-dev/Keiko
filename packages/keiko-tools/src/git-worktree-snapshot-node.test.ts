@@ -29,6 +29,7 @@ import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitLazyFetchGuardUnsupportedError,
   GitWorktreeReadError,
+  createGitReadSession,
   ensureGitLazyFetchGuardSupported,
   gitConfigIndicatesPromisorRemote,
   readGitRemoteAliases,
@@ -338,6 +339,49 @@ describe("lazy-fetch guard: promisor detection matches git's effective configura
     );
     // A second, healthy call on the SAME spawn function must re-probe and succeed: the first
     // probe's spawn failure is indeterminate, not a durable "guard unsupported" fact.
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
+  });
+});
+
+// Real git for everything, except `git version` answers as the given release: the installed git
+// decides whether GIT_NO_LAZY_FETCH is enforced, and CI's own git (2.43) does not enforce it.
+function realSpawnReportingGitVersion(banner: string): SpawnFn {
+  return (command, args, options) =>
+    args[0] === "version"
+      ? nodeSpawnFn(
+          process.execPath,
+          ["-e", `process.stdout.write(${JSON.stringify(banner)})`],
+          options,
+        )
+      : nodeSpawnFn(command, args, options);
+}
+
+describe("lazy-fetch guard: a session never carries a negative verdict past a git that does not enforce the guard", () => {
+  it("re-checks the effective configuration at the next effect when git ignores GIT_NO_LAZY_FETCH", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const readerDeps = {
+      ...deps(),
+      spawn: realSpawnReportingGitVersion("git version 2.43.0\n"),
+      readSession: createGitReadSession(),
+    };
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
+    // The promisor remote appears between two effects of the SAME operation.
+    git(["config", "remote.origin.promisor", "true"]);
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).rejects.toBeInstanceOf(
+      GitLazyFetchGuardUnsupportedError,
+    );
+  });
+
+  it("keeps one verdict per operation when git itself enforces the guard", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const readerDeps = {
+      ...deps(),
+      spawn: realSpawnReportingGitVersion("git version 2.45.0\n"),
+      readSession: createGitReadSession(),
+    };
+    await ensureGitLazyFetchGuardSupported(readerDeps);
+    git(["config", "remote.origin.promisor", "true"]);
+    // Git enforces GIT_NO_LAZY_FETCH itself, so the first verdict still stands for the operation.
     await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
   });
 });

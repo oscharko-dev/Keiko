@@ -416,7 +416,9 @@ describe("node git mutation adapter — one promisor verdict per operation", () 
     let probes = 0;
     let processes = 0;
     const spawn: SpawnFn = (command, args, spawnOptions) => {
-      processes += 1;
+      // The installed git's version is read once per spawn function, never per step or operation:
+      // it is what makes a negative promisor verdict safe to hold for the whole operation.
+      if (args[0] !== "version") processes += 1;
       if (args.includes(PROMISOR_PROBE)) probes += 1;
       return nodeSpawnFn(command, args, spawnOptions);
     };
