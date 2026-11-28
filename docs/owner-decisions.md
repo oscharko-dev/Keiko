@@ -104,7 +104,7 @@ The owner ordered that notice and button removed. A run whose only verification 
 `no-check-run` now settles with the outcome its turn reported (`succeeded` stays `succeeded`),
 without a failure code; the gap is recorded body-free on the Activity Log (the `not-evidenced`
 continuation line with `gap: no-check-run`) and the task still hands the verification debt on to its
-next follow-up. Keiko still asks the model once to repair a failed check. The gaps that are real
+next follow-up; that hand-off lives in memory only and does not survive a restart. Keiko still asks the model once to repair a failed check. The gaps that are real
 failures keep failing exactly as before: `check-failed`, `check-not-started` and `budget-exhausted`
 settle `failed` with `verification-not-evidenced`, shown as the ordinary "Coding run failed" with
 their gap sentence. A run stored by an older version with `no-check-run` still loads and renders as

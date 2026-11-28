@@ -9774,18 +9774,58 @@ describe("verification truth at task settlement", () => {
       await verification(f, "failed", undefined, unidentified === "both" ? null : "a".repeat(64));
       await verification(f, "passed", undefined, null);
       finish();
-      // Follows the 2026-11-28 owner decision. An identified failed target stays check-failed and
-      // fails the run; a summary with no target digest never reaches the ledger, so "both" leaves
-      // no check evidenced at all (no-check-run) and the run keeps its reported outcome.
+      // A digest-less FAILURE is still a failed check and fails the run; a digest-less pass names
+      // no target and never clears one (2026-11-28 owner decision: only an absent check settles).
       await vi.waitFor(() => {
-        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject(
-          unidentified === "both"
-            ? { state: "succeeded" }
-            : { state: "failed", failureCode: "verification-not-evidenced" },
-        );
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+        });
       });
+      expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBe("check-failed");
     },
   );
+
+  // The supervised/sidecar producer never stamps verificationEditRevision on its summary.
+  async function sidecarSummary(
+    f: ReturnType<typeof fixture>,
+    status: "passed" | "failed",
+  ): Promise<void> {
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: `sidecar-${String(f.orchestrator.status().revision)}`,
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "verification-summarized",
+      verificationKind: "verification-command",
+      verificationStatus: status,
+      passedCount: status === "passed" ? 1 : 0,
+      failedCount: status === "failed" ? 1 : 0,
+      skippedCount: 0,
+    });
+  }
+
+  it("fails a run whose revision-less sidecar check failed after an edit", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.js"] });
+    await sidecarSummary(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBe("check-failed");
+  });
+
+  it("does not turn a revision-less sidecar pass after an edit into check-failed", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.js"] });
+    await sidecarSummary(f, "passed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBeUndefined();
+  });
 
   it("does not let a different passing target clear a failed test", async () => {
     const { f, finish } = await runningTask();

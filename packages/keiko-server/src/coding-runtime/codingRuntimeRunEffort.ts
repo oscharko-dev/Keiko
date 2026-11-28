@@ -348,9 +348,7 @@ export class CodingRuntimeRunEffortLedger {
     run.verificationCount += 1;
     if (passed === null || run.verificationTargets.get(target)?.notRun === true) return;
     if (!verificationAtCurrentRevision(run, editRevision)) {
-      // A late old summary must not erase an already observed fresh pass for this same target.
-      if (!run.verificationTargets.has(target))
-        run.verificationTargets.set(target, { passed: false, selected: true });
+      recordStaleVerification(run, target, editRevision, failure);
       return;
     }
     run.verificationTargets.set(target, { passed, selected: true, ...failedWith(passed, failure) });
@@ -481,6 +479,25 @@ function failedWith(
   failure: CodingVerificationFailureEvidence | undefined,
 ): { readonly failure?: CodingVerificationFailureEvidence } {
   return passed || failure === undefined ? {} : { failure };
+}
+
+// A late old summary must not erase an already observed fresh pass for this same target. A summary
+// that arrives without any revision (the supervised/sidecar producer) cannot be placed, so a
+// failure in it stays a failure: it keeps its evidence and never reads as "no check ran". Only a
+// fresh pass at the current revision replaces it.
+function recordStaleVerification(
+  run: OrchestratorEffortRecord,
+  target: string,
+  editRevision: number | undefined,
+  failure: CodingVerificationFailureEvidence | undefined,
+): void {
+  const known = run.verificationTargets.get(target);
+  if (known !== undefined && (known.passed || known.failure !== undefined)) return;
+  run.verificationTargets.set(target, {
+    passed: false,
+    selected: true,
+    ...failedWith(false, editRevision === undefined ? failure : undefined),
+  });
 }
 
 function verificationAtCurrentRevision(

@@ -3368,7 +3368,13 @@ export class CodingRuntimeOrchestrator {
   ): void {
     if (!EFFORT_COUNTED_STATES.has(current.state)) return;
     if (!recordRuntimeVerificationSummary(this.deps.activityLog, event)) return;
-    if (event.verificationKind === "targeted-test" && event.verificationTargetDigest === undefined)
+    // A digest-less targeted PASS names no target, so it clears nothing; a digest-less FAILURE is
+    // still a failed check and is recorded (2026-11-28: no check run settles, a failed one never).
+    if (
+      event.verificationKind === "targeted-test" &&
+      event.verificationTargetDigest === undefined &&
+      verificationSummaryPassed(event) !== false
+    )
       return;
     this.effort.verification(
       current.runId,
