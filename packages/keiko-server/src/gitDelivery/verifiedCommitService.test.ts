@@ -2295,10 +2295,18 @@ describe("productive runtime status/diff/stage lane", () => {
   // own code, no path is admitted, and the failure line says why.
   it("does not admit anything through a change list the raw scan could not complete", async () => {
     writeFileSync(join(root, "other.js"), "export const other = 3;\n");
-    // Eight untracked mebibyte files sort ahead of both requested paths and exhaust the raw scan's
-    // 8 MiB content budget exactly, so the scan stops before it reaches them.
+    // Eight tracked mebibyte files, each changed, sort ahead of both requested paths: their bytes are
+    // compared, so they exhaust the raw scan's 8 MiB content budget exactly and the scan stops before
+    // it reaches the requested paths. (An untracked file is judged by its existence and spends no
+    // budget, so only changed tracked files can cut the change list.)
     for (let index = 0; index < 8; index += 1) {
       writeFileSync(join(root, `aaa-${String(index)}.bin`), Buffer.alloc(1_048_576, 0x61));
+    }
+    git(["add", "aaa-0.bin", "aaa-1.bin", "aaa-2.bin", "aaa-3.bin"]);
+    git(["add", "aaa-4.bin", "aaa-5.bin", "aaa-6.bin", "aaa-7.bin"]);
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "blobs"]);
+    for (let index = 0; index < 8; index += 1) {
+      writeFileSync(join(root, `aaa-${String(index)}.bin`), Buffer.alloc(1_048_576, 0x62));
     }
     const index = git(["write-tree"]);
     const gitService = new RuntimeGitService({
