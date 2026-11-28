@@ -35,7 +35,10 @@ export function CodingWorkbenchModelActivation({
   if (readiness === null) return null;
   if (readiness.kind === "not-activated") {
     return (
-      <div className={windowStyles.cmpModelActivation} data-testid="coding-workbench-model-activation">
+      <div
+        className={windowStyles.cmpModelActivation}
+        data-testid="coding-workbench-model-activation"
+      >
         <button
           className={`${windowStyles.button} ${windowStyles.buttonPrimary}`}
           type="button"

@@ -984,19 +984,30 @@ async function admitSelection(
   const changes = new Map(raw.changes.map((change) => [change.path, change]));
   const admitted = new Map<string, StageSelectionChange>();
   for (const path of paths) {
-    const exact = changes.get(path);
-    if (exact === undefined) {
-      const below = raw.truncated ? [] : directoryChanges(path, raw.changes, rules);
-      if (below.length === 0) return undefined;
-      for (const change of below) admitted.set(change.path, { path: change.path, pending: true });
-    } else {
-      const admittedAs = exact.conflicted ? undefined : rules.pending(exact);
-      if (admittedAs === undefined) return undefined;
-      admitted.set(path, { path, pending: admittedAs });
-    }
+    const entries = admitPath(path, changes.get(path), raw, rules);
+    if (entries === undefined) return undefined;
+    for (const entry of entries) admitted.set(entry.path, entry);
     if (admitted.size > CODING_RUNTIME_GIT_MAX_STAGE_PATHS) return undefined;
   }
   return [...admitted.values()];
+}
+
+// One requested path: an exactly named change `rules.pending` admits, or the changes below a
+// directory; `undefined` refuses the whole selection.
+function admitPath(
+  path: string,
+  exact: GitChangedFile | undefined,
+  raw: RawChangesRead,
+  rules: SelectionRules,
+): readonly StageSelectionChange[] | undefined {
+  if (exact !== undefined) {
+    const admittedAs = exact.conflicted ? undefined : rules.pending(exact);
+    return admittedAs === undefined ? undefined : [{ path, pending: admittedAs }];
+  }
+  const below = raw.truncated ? [] : directoryChanges(path, raw.changes, rules);
+  return below.length === 0
+    ? undefined
+    : below.map((change) => ({ path: change.path, pending: true }));
 }
 
 // The changed lines of one path's two sides; `undefined` when there is nothing to count (binary or
