@@ -2244,7 +2244,11 @@ function WorkbenchColumns(
               expectedRoot={repositoryRoot}
               onNewTask={() => void history.newTask()}
               newTaskPending={history.pending}
-              anyToolStarted={anyToolStarted(activity.feed, state.run.value?.runId)}
+              anyToolStarted={anyToolStarted(
+                activity.status,
+                activity.feed,
+                state.run.value?.runId,
+              )}
             />
             <ResearchGrantChip
               grant={research.grant ?? undefined}

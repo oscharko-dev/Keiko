@@ -1266,7 +1266,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.summary":
     "Keiko does not know whether the last action went through, for example a change in Jira or an edit to files. Check the result there first. Keiko never sends it again by itself.",
   "codingWorkbench.recovery.summaryNoAction":
-    "No action had started when the connection ended, so there is nothing to check. Retry as a fresh run when you are ready.",
+    "Keiko's activity record shows no action had started. Check your workspace if you are unsure, then retry as a fresh run.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.recovery.newTask": "Start a new task",

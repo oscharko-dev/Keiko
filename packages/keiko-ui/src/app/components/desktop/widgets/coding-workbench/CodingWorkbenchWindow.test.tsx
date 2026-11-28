@@ -4369,43 +4369,68 @@ describe("CodingWorkbenchWindow", () => {
 
     // U-22a: the card claimed the last action may have gone through even when the run never started
     // a tool. The activity feed says so; when it cannot, the fail-safe wording stays.
-    function recoveryFeed(toolCount: number, over?: object): AvailableCodingSafeActivityFeed {
+    function recoveryFeed(
+      toolCount: number,
+      over: { readonly feed?: object; readonly turn?: object; readonly toolState?: "denied" } = {},
+    ): AvailableCodingSafeActivityFeed {
       const feed = activityFeed();
       const [turn] = feed.turns;
       if (turn === undefined) throw new Error("expected a turn");
       const tools = Array.from({ length: toolCount }, (_, index) => ({
         callId: `call-${String(index)}`,
         tool: "workspace.read",
-        state: "succeeded" as const,
+        state: over.toolState ?? ("succeeded" as const),
         occurredAt: AT,
       }));
       return {
         ...feed,
         truncated: false,
         droppedEventCount: 0,
-        turns: [{ ...turn, tools }],
-        ...over,
+        turns: [{ ...turn, truncated: false, tools, ...over.turn }],
+        ...over.feed,
       };
     }
 
+    const FAIL_SAFE = /does not know whether the last action went through/;
+    const RECORD_SHOWS_NONE = /activity record shows no action had started/;
+
+    it.each(["live", "recovery"] as const)(
+      "says the record shows no action when a complete feed is %s and holds no tool",
+      (status) => {
+        activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status, feed: recoveryFeed(0) });
+        renderWorkbench(recoveryState(false));
+        expect(screen.getByText(RECORD_SHOWS_NONE)).toBeVisible();
+      },
+    );
+
+    // A held pre-drop feed is not the run's record: only a live or recovering channel speaks.
     it.each([
-      ["no tool started", recoveryFeed(0), /No action had started/],
-      ["a tool started", recoveryFeed(1), /does not know whether the last action went through/],
-      ["no feed at all", null, /does not know whether the last action went through/],
-      [
-        "a shortened feed with no tool in it",
-        recoveryFeed(0, { truncated: true }),
-        /does not know whether the last action went through/,
-      ],
-      [
-        "another run's feed",
-        recoveryFeed(0, { runId: "run-2" }),
-        /does not know whether the last action went through/,
-      ],
-    ] as const)("words the recovery card for %s", (_name, feed, text) => {
+      "idle",
+      "loading",
+      "paused",
+      "ended",
+      "unavailable",
+      "disconnected",
+      "offline",
+      "error",
+    ] as const)("keeps the fail-safe wording while the activity channel is %s", (status) => {
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status, feed: recoveryFeed(0) });
+      renderWorkbench(recoveryState(false));
+      expect(screen.getByText(FAIL_SAFE)).toBeVisible();
+    });
+
+    it.each([
+      ["a started tool", recoveryFeed(1)],
+      ["a denied call, which may have done partial work", recoveryFeed(1, { toolState: "denied" })],
+      ["no feed at all", null],
+      ["a shortened feed", recoveryFeed(0, { feed: { truncated: true } })],
+      ["dropped events", recoveryFeed(0, { feed: { droppedEventCount: 2 } })],
+      ["a shortened turn, which evicts calls", recoveryFeed(0, { turn: { truncated: true } })],
+      ["another run's feed", recoveryFeed(0, { feed: { runId: "run-2" } })],
+    ] as const)("keeps the fail-safe wording for %s", (_name, feed) => {
       activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
       renderWorkbench(recoveryState(false));
-      expect(screen.getByText(text)).toBeVisible();
+      expect(screen.getByText(FAIL_SAFE)).toBeVisible();
     });
 
     it("offers the error report for the run that needs recovery", async () => {

@@ -1311,7 +1311,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.summary":
     "Keiko weiß nicht, ob die letzte Aktion durchgegangen ist, zum Beispiel eine Änderung in Jira oder eine Dateiänderung. Prüfe zuerst dort das Ergebnis. Keiko sendet sie nie von selbst erneut.",
   "codingWorkbench.recovery.summaryNoAction":
-    "Beim Ende der Verbindung hatte keine Aktion begonnen, es gibt also nichts zu prüfen. Wiederhole den Lauf, wenn du bereit bist.",
+    "Laut dem Aktivitätsprotokoll von Keiko hatte keine Aktion begonnen. Prüfe deinen Arbeitsbereich, wenn du unsicher bist, und wiederhole dann den Lauf.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
   "codingWorkbench.recovery.newTask": "Neue Aufgabe starten",
