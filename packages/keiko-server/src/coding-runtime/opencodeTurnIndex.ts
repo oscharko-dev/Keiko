@@ -191,11 +191,19 @@ export const TURN_INDEX_START_WAIT_MS = 5_000;
 /** Why the wait for a turn's index start ended without an image (a closed vocabulary). */
 export type TurnIndexStartBound = "capture-timed-out" | "capture-aborted";
 
-/** The error the undo logs when the index start was cut short; its message is the closed value. */
-class TurnIndexStartBoundError extends Error {
+/** The closed causes an index start can be cut short by. */
+export const TURN_INDEX_START_BOUNDS = [
+  "capture-timed-out",
+  "capture-aborted",
+] as const satisfies readonly TurnIndexStartBound[];
+
+/** The error the undo logs when the index start was cut short; `bound` is the closed cause. */
+export class TurnIndexStartBoundError extends Error {
+  readonly bound: TurnIndexStartBound;
   constructor(bound: TurnIndexStartBound) {
     super(bound);
     this.name = "TurnIndexStartBoundError";
+    this.bound = bound;
   }
 }
 

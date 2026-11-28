@@ -28,6 +28,8 @@ import type {
 import { governedIndexRecord, resetGovernedIndexPaths } from "./governedIndexPaths.js";
 import {
   beginTurnIndex,
+  TURN_INDEX_START_BOUNDS,
+  TurnIndexStartBoundError,
   restoreTurnIndex,
   settleTurnIndex,
   type TurnIndexRecord,
@@ -143,6 +145,13 @@ const CODING_RUNTIME_REVERT_REFUSED_OPERATION = defineActivityLogOperation({
       required: false,
       maxLength: 128,
       maxItems: 5,
+    },
+    // Why the turn's index start was cut short, when that is what the undo's index read ended on.
+    indexCaptureCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: TURN_INDEX_START_BOUNDS,
     },
   },
   causal: "correlation",
@@ -823,6 +832,9 @@ function recordRevertRefused(
         reason: input.reason,
         ...(failed
           ? { frames: keikoStackFrames(input.error), causeChain: causeChain(input.error) }
+          : {}),
+        ...(input.error instanceof TurnIndexStartBoundError
+          ? { indexCaptureCause: input.error.bound }
           : {}),
       },
     ),

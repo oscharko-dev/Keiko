@@ -28,7 +28,12 @@ import {
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
 import { noteGovernedIndexPaths, resetGovernedIndexPaths } from "./governedIndexPaths.js";
-import { beginTurnIndex, reopenTurnIndex } from "./opencodeTurnIndex.js";
+import {
+  awaitTurnIndexStart,
+  beginTurnIndex,
+  reopenTurnIndex,
+  type IndexRead,
+} from "./opencodeTurnIndex.js";
 import type { OpenCodeV2FileDiff } from "./opencodeV2HttpClient.js";
 
 const RUN_ID = "run-340282366920938463463374607431768211455";
@@ -1186,6 +1191,39 @@ describe("undo and the Git index (U-34b)", () => {
       { op: "coding-runtime.revert.applied", extra: { indexOutcome: "unavailable" } },
     ]);
   });
+
+  it.each([
+    ["capture-timed-out", false],
+    ["capture-aborted", true],
+  ] as const)(
+    "logs %s as the closed cause when the turn's index start was cut short",
+    async (cause, aborted) => {
+      const { root } = await stagedTurn();
+      const { port, run, log } = subject({ root });
+      // A capture that never answers, cut by the bound or by Stop.
+      const hung = { start: new Promise<IndexRead>(() => undefined) };
+      const stop = new AbortController();
+      if (aborted) stop.abort();
+      await awaitTurnIndexStart(hung, stop.signal, aborted ? 600_000 : 0);
+      run.turnIndex = hung;
+      noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
+      recordOpenCodeTurnImage(run, log);
+      await run.turnImage;
+      await agentWrote(run, ["a.txt"]);
+
+      await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
+
+      await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "unavailable" });
+      expect(log.events).toMatchObject([
+        {
+          op: "coding-runtime.revert.refused",
+          correlationId: RUN_ID,
+          extra: { operation: "undo", reason: "revert-failed", indexCaptureCause: cause },
+        },
+        { op: "coding-runtime.revert.applied", extra: { indexOutcome: "unavailable" } },
+      ]);
+    },
+  );
 
   it("unstages what a continuation step staged after the turn last settled, on a busy undo", async () => {
     const { root, begun } = await stagedTurn();
