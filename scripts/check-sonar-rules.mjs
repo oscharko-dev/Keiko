@@ -11,7 +11,7 @@
 // untouched code is not this diff's to answer for, exactly as Sonar's new-code period decides.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
@@ -161,8 +161,77 @@ export function createEngine() {
   });
 }
 
-function lintChangedFiles(files) {
-  return createEngine().lintFiles(files);
+/** The analysis group of a changed file: its workspace package, else its top-level folder. */
+export function lintGroupOf(path) {
+  const parts = path.split("/");
+  return parts[0] === "packages" && parts.length > 2 ? `packages/${parts[1]}` : parts[0];
+}
+
+/** The changed files split into analysis groups, in first-seen order. */
+export function groupLintFiles(files) {
+  const groups = new Map();
+  for (const file of files) {
+    const key = lintGroupOf(file);
+    groups.set(key, [...(groups.get(key) ?? []), file]);
+  }
+  return [...groups.values()];
+}
+
+export const SONAR_RULES_GROUP_ENV = "KEIKO_SONAR_RULES_GROUP";
+
+// The child hands its results back on file descriptor 3, so a plugin that writes a warning to
+// stdout or stderr cannot corrupt them.
+const RESULT_FD = 3;
+
+/** The fields `summarise` reads from an ESLint result, as plain JSON. */
+export function serialiseResults(results) {
+  return results.map((result) => ({
+    filePath: result.filePath,
+    messages: result.messages.map((message) => ({
+      fatal: message.fatal === true,
+      line: message.line,
+      message: message.message,
+      ruleId: message.ruleId ?? null,
+    })),
+  }));
+}
+
+// Every type-aware program the diff reaches stays resident in one ESLint engine, so a diff across
+// the server, the UI and the smaller packages exhausted the hosted runner's 8 GB heap (#4573). Each
+// group is analysed in its own process, which frees its programs when it exits.
+export function lintGroupInChild(
+  files,
+  { spawn = spawnSync, script = fileURLToPath(import.meta.url), env = process.env } = {},
+) {
+  const child = spawn(
+    process.execPath,
+    [`--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`, script],
+    {
+      env: { ...env, [SONAR_RULES_HEAP_RERUN_ENV]: "1", [SONAR_RULES_GROUP_ENV]: "1" },
+      input: JSON.stringify(files),
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ["pipe", "inherit", "inherit", "pipe"],
+    },
+  );
+  if (child.error !== undefined) throw child.error;
+  if (child.status !== 0) {
+    const ended =
+      child.status === null ? `signal ${String(child.signal)}` : `status ${String(child.status)}`;
+    throw new Error(`the analysis of ${String(files.length)} file(s) ended by ${ended}`);
+  }
+  return JSON.parse(String(child.output[RESULT_FD]));
+}
+
+export async function lintChangedFiles(files, lintGroup = lintGroupInChild) {
+  const results = [];
+  for (const group of groupLintFiles(files)) results.push(...(await lintGroup(group)));
+  return results;
+}
+
+async function lintGroupMain() {
+  const files = JSON.parse(readFileSync(0, "utf8"));
+  const results = await createEngine().lintFiles(files);
+  writeFileSync(RESULT_FD, JSON.stringify(serialiseResults(results)));
 }
 
 /**
@@ -234,8 +303,8 @@ export function existsInTree(path) {
   }
 }
 
-// One ESLint engine over the root and the `keiko-ui` type-aware programs needs about 4.7 GB for a
-// diff that touches both, more than Node's default heap on a hosted runner (#4562). The script
+// One analysis group's type-aware programs can need more than Node's default heap on a hosted
+// runner (#4562), so the parent and every group process run with this heap. The script
 // raises its own heap instead of its npm script line, which design evidence pins byte for byte.
 export const SONAR_RULES_HEAP_MB = 8192;
 
@@ -280,6 +349,7 @@ export function rerunWithLargerHeap(
 
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  if (shouldRerunWithLargerHeap()) rerunWithLargerHeap(invokedPath, process.argv.slice(2));
+  if (process.env[SONAR_RULES_GROUP_ENV] === "1") await lintGroupMain();
+  else if (shouldRerunWithLargerHeap()) rerunWithLargerHeap(invokedPath, process.argv.slice(2));
   else await main();
 }
