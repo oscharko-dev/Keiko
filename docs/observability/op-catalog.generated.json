@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2606f58874460a4f5f10e07fed2aea1d9c5f1b5842a8a46f5f307b80260e9b70",
+    "catalogDigest": "ddfbb74168ade56353b32888c39a0169f47cff3cdfbe6871ff218b4e443eb695",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -26026,8 +26026,8 @@
         "failureClasses": ["gateway-readiness"],
         "proofIds": ["gateway.activation.persistence.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/model-activation-memory.ts:75",
-        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:742"]
+        "registrationSite": "packages/keiko-server/src/model-activation-memory.ts:91",
+        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:755"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -127613,7 +127613,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/model-activation-memory.ts:330",
+      "site": "packages/keiko-server/src/model-activation-memory.ts:346",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -130288,7 +130288,7 @@
     {
       "op": "gateway.activation.persistence",
       "category": "gateway",
-      "site": "packages/keiko-server/src/model-activation-memory.ts:78",
+      "site": "packages/keiko-server/src/model-activation-memory.ts:94",
       "package": "keiko-server"
     },
     {
