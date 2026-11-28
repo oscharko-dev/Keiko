@@ -608,12 +608,12 @@ async function reapplyInverse(
   };
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const result = await reapplyTurnIndexMoves(root, inverse, correlationId);
+      const result = await reapplyTurnIndexMoves(root, inverse, correlationId); // NOSONAR typescript:S9382 -- a retry runs only after the previous attempt failed
       if (result !== "unavailable" || attempt >= ROLLBACK_ATTEMPTS) return result;
     } catch (error) {
       if (attempt >= ROLLBACK_ATTEMPTS) throw error;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, ROLLBACK_RETRY_MS));
+    await new Promise<void>((resolve) => setTimeout(resolve, ROLLBACK_RETRY_MS)); // NOSONAR typescript:S9382 -- the pause separates two attempts
   }
 }
 
