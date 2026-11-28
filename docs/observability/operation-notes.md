@@ -1435,3 +1435,15 @@ whether a session cookie was presented (`with-session`) or not (`without-session
 was valid: a stale tab reads `with-session` together with `outcome: unavailable`.
 
 `git.delivery.commit-refused` is written once for every interactive commit on a prepared branch that was refused or failed (the bound lane, ADR-0006). It carries the closed `refusal`: `not-on-prepared-branch`, `authority-lapsed`, `sequencer-in-progress`, `sequencer-unreadable` (the read failed; `frames`, `causeChain` and `failureKind` name the error, never its text), `empty-message`, `message-invalid`, `message-too-large` (the cleaned message exceeds the 64 KiB bounded input), `nothing-to-commit`, `ref-moved` (the compare-and-swap on the HEAD the commit was built on failed; the result code is `conflict` and nothing was written), `checkout-unreadable`, `revision-unreadable`, `git-command-failed`, `interrupted` and `unexpected-error`. Every refusal other than `ref-moved` answers `precondition-failed`. The bound commit also writes the reflog entry `git commit` writes (`commit: <first line>` or `commit (initial): <first line>`, on the branch and on HEAD) and removes the merge state a successful `git commit` removes. The message is cleaned by Git itself according to the effective `commit.cleanup` (`cleanup-unavailable` when the mode cannot be read or is invalid), so both commit lanes record the same bytes (ADR-0084, #4491). A late failure of `update-ref` after the branch already names the new commit is a success and records `landed-after-failure`. A non-zero `update-ref` is `ref-moved` (result `conflict`) only when the branch tip differs from the value the commit was built on; with the tip unchanged (a held ref lock, for example) it is `git-command-failed` and the plain `precondition-failed`. A throwing log port never replaces the refusal; its lost line surfaces as the process warning `KEIKO_GIT_COMMIT_REFUSAL_UNREPORTED`. When the merge-state cleanup itself throws, `git.index-transaction.cleanup-incomplete` (`caller` `commit-state`) carries `failureKind`, `frames` and `causeChain`.
+
+## Browser stream capacity
+
+The browser's own diagnostics (`reportClientDiagnostic`, no registered operation) record, with
+closed text and counts only: `waiting for origin capacity (priority=essential)` once per wait
+episode after ten seconds with `errorKind: timeout`; `admitted after waiting for origin capacity
+(waitSeconds, attempts)` once when that episode ends; `yielded origin capacity (priority=...)` when
+a stream gave its slot up; `origin capacity acquisition unavailable` at most once per wait episode
+for a background stream; `contention query unavailable` once per lease; `<stream> could not be
+created` when the browser refuses an event source (editor verification, relationship activity,
+Workbench runtime); and `run events stream frame unreadable` once per stream with `errorKind:
+validation-failed`, never the frame. None carries a path, an endpoint or content.

@@ -810,6 +810,21 @@ metadata baseline for a bounded 30-second idle period, and an interrupted baseli
 again when a subscriber resumes. Finite file reads and diagnostic delivery can therefore use the
 remaining HTTP/1.1 connections instead of waiting indefinitely behind editor metadata streams.
 
+Every long-lived browser stream is admitted against one origin-wide ceiling of four persistent
+connections (the other two of the browser's six HTTP/1.1 connections stay free for finite reads),
+enforced with Web Locks shared by every tab of the origin; chat turns stream over their own fetch
+outside this pool. Streams are `essential` (the Workbench run and activity streams, the run events,
+the editor verification stream, the editor agent bridge) or `background` (relationship activity,
+Browser). A waiting essential stream keeps its queue position and never times out; after ten
+seconds it tells its surface, which shows a plain waiting status, and clears it on admission. A
+background holder gives its slot up only to a waiter a person can see (a visible document's
+essential stream or shared-pool consumer, or a waiter of its own document), never to another
+background stream and never to a hidden document's waiter. An essential stream of a hidden document
+that opted in (the Workbench run and activity streams) yields to a visible document's essential
+waiter and asks again when its document becomes visible; the verification stream and the editor
+agent bridge never yield, because their servers keep no replay. The shared pool always keeps one
+connection. Without Web Locks the ceiling holds for the current document only.
+
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
 every process, including segments sealed later in that window. For the automatic trigger, that pin is
 published synchronously in the same turn as the failure that caused it, before any later maintenance

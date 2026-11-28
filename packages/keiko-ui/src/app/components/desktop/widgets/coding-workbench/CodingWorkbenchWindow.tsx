@@ -33,7 +33,9 @@ import {
   isDeliveryPermission,
 } from "./CodingWorkbenchDeliveryReview";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -1435,45 +1437,52 @@ export function CodingWorkbenchWindow({
     focusRef.current?.focus();
   }, [pendingPermission]);
 
+  const [activityWaiting, setActivityWaiting] = useState(false);
+  const activityWaitingValue = useMemo(
+    () => ({ waiting: activityWaiting, setWaiting: setActivityWaiting }),
+    [activityWaiting],
+  );
   const decideApproval = (decision: "approved" | "denied"): void => {
     approvalAction.current = true;
     void actions.decideApproval(decision);
   };
   return (
-    <WorkbenchContent
-      history={history}
-      onOpenHistory={onOpenHistory}
-      state={state}
-      actions={actions}
-      activeWorkspace={activeWorkspace}
-      selectedRoot={selectedRoot}
-      selectedBranch={selectedBranch}
-      taskIntent={taskIntent}
-      onTaskIntentChange={activeRunConflict.onTaskIntentChange}
-      activeRunElsewhere={activeRunConflict.visible}
-      focusRef={focusRef}
-      alert={alert}
-      modelReadiness={modelReadiness}
-      modelActivation={modelActivation}
-      onOpenSettings={onOpenSettings}
-      workbenchLabel={workbenchLabel}
-      onDecision={decideApproval}
-      research={research}
-      skills={skills}
-      codingModels={codingModels}
-      onSelectedModelChange={modelSelection.onChange}
-      authority={authority}
-      onOpenGit={onOpenGit}
-      onSelectRepository={onSelectRepository}
-      onSelectBranch={onSelectBranch}
-      location={location}
-      locationState={locationState}
-      onSelectLocation={onSelectLocation}
-      runWorkspace={runWorkspace}
-      repositoryRoot={repositoryRoot}
-      runIsActive={runIsActive}
-      taskBranchMove={taskBranchMove}
-    />
+    <ActivityWaitingContext.Provider value={activityWaitingValue}>
+      <WorkbenchContent
+        history={history}
+        onOpenHistory={onOpenHistory}
+        state={state}
+        actions={actions}
+        activeWorkspace={activeWorkspace}
+        selectedRoot={selectedRoot}
+        selectedBranch={selectedBranch}
+        taskIntent={taskIntent}
+        onTaskIntentChange={activeRunConflict.onTaskIntentChange}
+        activeRunElsewhere={activeRunConflict.visible}
+        focusRef={focusRef}
+        alert={alert}
+        modelReadiness={modelReadiness}
+        modelActivation={modelActivation}
+        onOpenSettings={onOpenSettings}
+        workbenchLabel={workbenchLabel}
+        onDecision={decideApproval}
+        research={research}
+        skills={skills}
+        codingModels={codingModels}
+        onSelectedModelChange={modelSelection.onChange}
+        authority={authority}
+        onOpenGit={onOpenGit}
+        onSelectRepository={onSelectRepository}
+        onSelectBranch={onSelectBranch}
+        location={location}
+        locationState={locationState}
+        onSelectLocation={onSelectLocation}
+        runWorkspace={runWorkspace}
+        repositoryRoot={repositoryRoot}
+        runIsActive={runIsActive}
+        taskBranchMove={taskBranchMove}
+      />
+    </ActivityWaitingContext.Provider>
   );
 }
 
@@ -1793,13 +1802,20 @@ function WorkbenchAlert({
 }
 
 /** A polite status (never an alert) for a live stream the browser is reconnecting by itself. */
+// The activity stream is read two levels below the status notice; its wait is reported up here.
+const ActivityWaitingContext = createContext<{
+  readonly waiting: boolean;
+  readonly setWaiting: (waiting: boolean) => void;
+}>({ waiting: false, setWaiting: () => undefined });
+
 function WorkbenchStatusNotice({
   state,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
 }): ReactNode {
+  const { waiting: activityWaiting } = useContext(ActivityWaitingContext);
   const t = useCodingWorkbenchTranslate();
-  const message = visibleStatusNotice(state, t);
+  const message = visibleStatusNotice(state, t, activityWaiting);
   if (message === null) return null;
   return <output className={styles.cmpStreamNotice}>{message}</output>;
 }
@@ -2113,6 +2129,12 @@ function WorkbenchColumns(
     runtimeEventSignal,
     conversationId: state.run.value?.conversationId,
   });
+  const { setWaiting: reportActivityWaiting } = useContext(ActivityWaitingContext);
+  const activityConnectionWaiting = activity.connectionWaiting === true;
+  useEffect(() => {
+    reportActivityWaiting(activityConnectionWaiting);
+    return (): void => reportActivityWaiting(false);
+  }, [activityConnectionWaiting, reportActivityWaiting]);
   // The active workspace's live root, and whether that binding is still resolving — shared by the
   // headless editor bridge and the Changes hook below so a workspace switch mid-run is
   // handled identically by both (workbench audit, 2026-09-03). Each also receives the run's

@@ -8807,7 +8807,7 @@ describe("CodingWorkbenchWindow live-region and stream-status semantics", () => 
     const status = screen.getByText(/Waiting for a free connection/u);
     expect(status.tagName).toBe("OUTPUT");
     expect(status.closest("[role='alert']")).toBeNull();
-    expect(screen.getByText(/Another Keiko tab is using it/u)).toBe(status);
+    expect(status).toHaveTextContent("Waiting for a free connection.");
   });
 
   it("escalates to an assertive alert once the stream is reported failed", () => {

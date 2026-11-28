@@ -201,13 +201,40 @@ describe("persistent stream connection ceiling", () => {
     const admissions = admitAll(6, admitted);
     await vi.advanceTimersByTimeAsync(0);
     expect(admitted.size).toBe(PERSISTENT_STREAM_CONNECTION_CEILING);
-    expect(sharedStreamConnectionBudget()).toBe(0);
+    // Six direct streams are declared, yet the shared pool keeps one connection: it is never
+    // starved of its last slot (the original pin of "keeps one shared connection").
+    expect(sharedStreamConnectionBudget()).toBe(1);
     admissions[0]?.release();
     admissions[0]?.release();
     await vi.advanceTimersByTimeAsync(0);
     expect(admitted.size).toBe(PERSISTENT_STREAM_CONNECTION_CEILING + 1);
     admissions.forEach((admission) => admission.release());
     expect(sharedStreamConnectionBudget()).toBe(3);
+  });
+
+  it("leaves the shared pool one connection beside three direct streams and two once one ends", () => {
+    const admissions = admitAll(3, new Set<number>());
+    expect(sharedStreamConnectionBudget()).toBe(1);
+    admissions[0]?.release();
+    admissions[0]?.release();
+    expect(sharedStreamConnectionBudget()).toBe(2);
+    admissions.forEach((admission) => admission.release());
+    expect(sharedStreamConnectionBudget()).toBe(3);
+  });
+
+  it("serves a shared-pool consumer by making a visible document's background streams yield", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    const yielded = vi.fn();
+    const background = admitAll(4, new Set<number>(), { priority: "background", onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const granted = vi.fn();
+    const pool = acquirePersistentBrowserStreamCapacity(granted, vi.fn());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(granted).toHaveBeenCalledOnce();
+    expect(yielded).toHaveBeenCalledTimes(1);
+    pool();
+    background.forEach((admission) => admission.release());
   });
 
   it("shares the ceiling across documents and with the shared pool", async () => {
@@ -510,5 +537,137 @@ describe("stream fairness between documents and priorities", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect((await base.query()).pending).toEqual([]);
     held.forEach((stop) => stop());
+  });
+});
+
+describe("stream fairness: who a waiter may displace", () => {
+  // `notify` is false where the flip stands for ANOTHER document's visibility, which this
+  // document never hears about; a flip of this document itself dispatches the event.
+  function setVisibility(state: "visible" | "hidden", notify = true): void {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    if (notify) document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  function admitMany(
+    count: number,
+    options: DirectStreamOptions = {},
+    admitted: Set<number> = new Set<number>(),
+  ): DirectStreamAdmission[] {
+    return Array.from({ length: count }, (_, index) =>
+      admitDirectBrowserStream(() => admitted.add(index), options),
+    );
+  }
+
+  it("does not let a hidden document's waiter displace another document's background streams", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    setVisibility("visible");
+    const yielded = vi.fn();
+    const background = admitMany(4, { priority: "background", onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("hidden", false);
+    const hiddenAdmitted = new Set<number>();
+    const hidden = admitMany(1, {}, hiddenAdmitted);
+    await vi.advanceTimersByTimeAsync(0);
+    // The background streams belong to another document: this document's waiter is not theirs.
+    resetBrowserStreamCapacityForTests();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(yielded).not.toHaveBeenCalled();
+    expect(hiddenAdmitted.size).toBe(0);
+    setVisibility("visible", false);
+    const visibleAdmitted = new Set<number>();
+    const visible = admitMany(1, {}, visibleAdmitted);
+    await vi.advanceTimersByTimeAsync(0);
+    // This document is the hidden one again; the visible waiter's marker is already placed.
+    setVisibility("hidden", false);
+    // Judged within the first check after the visible waiter queued, before the hidden waiter's
+    // retry: that retry would count as a waiter of this (the holders') document.
+    await vi.advanceTimersByTimeAsync(900);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    expect(visibleAdmitted.size).toBe(1);
+    expect(hiddenAdmitted.size).toBe(0);
+    [...background, ...hidden, ...visible].forEach((admission) => admission.release());
+  });
+
+  it("lets a hidden document's own waiter displace its own background streams", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    setVisibility("hidden");
+    const yielded = vi.fn();
+    const background = admitMany(4, { priority: "background", onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const waiterAdmitted = new Set<number>();
+    const waiter = admitMany(1, {}, waiterAdmitted);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    expect(waiterAdmitted.size).toBe(1);
+    [...background, ...waiter].forEach((admission) => admission.release());
+  });
+
+  it("withdraws a waiter's visible marker when its document turns hidden and restores it when visible", async () => {
+    vi.useFakeTimers();
+    const base = createOriginLocksFixture();
+    vi.stubGlobal("navigator", { locks: base });
+    setVisibility("visible");
+    const holders = admitMany(4);
+    await vi.advanceTimersByTimeAsync(0);
+    const waiter = admitMany(1);
+    await vi.advanceTimersByTimeAsync(0);
+    const markers = async (): Promise<number> =>
+      [...((await base.query()).held ?? []), ...((await base.query()).pending ?? [])].filter(
+        (lock) => lock.name?.endsWith(":waiting:visible") === true,
+      ).length;
+    expect(await markers()).toBeGreaterThan(0);
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await markers()).toBe(0);
+    setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await markers()).toBeGreaterThan(0);
+    [...holders, ...waiter].forEach((admission) => admission.release());
+  });
+
+  it("hands a slot freed for a visible waiter past two hidden waiters queued ahead of it", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    setVisibility("hidden", false);
+    const holders = admitMany(4, { yieldWhenHidden: true, onYield: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    const first = new Set<number>();
+    const second = new Set<number>();
+    const hidden = [...admitMany(1, {}, first), ...admitMany(1, {}, second)];
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("visible", false);
+    const visibleAdmitted = new Set<number>();
+    const visible = admitMany(1, {}, visibleAdmitted);
+    await vi.advanceTimersByTimeAsync(0);
+    // The holders' document stays hidden; the visible waiter's marker is already placed.
+    setVisibility("hidden", false);
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(visibleAdmitted.size).toBe(1);
+    expect(first.size).toBe(0);
+    expect(second.size).toBe(0);
+    [...holders, ...hidden, ...visible].forEach((admission) => admission.release());
+  });
+});
+
+describe("a synchronous admission and its abort signal", () => {
+  it("does not release an admitted slot when the signal aborts afterwards", async () => {
+    vi.useFakeTimers();
+    // Without Web Locks the admission is granted before the promise form returns.
+    vi.stubGlobal("navigator", {});
+    const held = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
+    const controller = new AbortController();
+    const release = await admitDirectBrowserStreamAsync(controller.signal);
+    expect(release).not.toBeNull();
+    const queuedAdmitted = vi.fn();
+    const queued = admitDirectBrowserStream(queuedAdmitted);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(queuedAdmitted).not.toHaveBeenCalled();
+    release?.();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(queuedAdmitted).toHaveBeenCalledOnce();
+    [...held, queued].forEach((admission) => admission.release());
   });
 });

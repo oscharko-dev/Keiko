@@ -84,6 +84,8 @@ export interface UseCodingWorkbenchSafeActivityInput {
 
 export interface UseCodingWorkbenchSafeActivityResult extends CodingWorkbenchSafeActivityState {
   readonly retry: () => void;
+  /** The activity stream waits for a free browser connection (a status, never a failure). */
+  readonly connectionWaiting?: boolean;
   /**
    * The last feed of each earlier run of the same task, oldest first (U-11): its tool rows and
    * messages stay in the timeline when a continuation starts, as in standalone OpenCode. Empty for
@@ -113,6 +115,7 @@ export function useCodingWorkbenchSafeActivity(
   const { runId, runState, runtimeEventSignal, conversationId } = input;
   const [state, setState] = useState<CodingWorkbenchSafeActivityState>(IDLE_STATE);
   const [epoch, setEpoch] = useState(0);
+  const [connectionWaiting, setConnectionWaiting] = useState(false);
   const runStateRef = useRef(runState);
   const batch = useSnapshotBatch(runId, runStateRef, setState);
   const retry = useCallback(() => setEpoch((value) => value + 1), []);
@@ -130,7 +133,15 @@ export function useCodingWorkbenchSafeActivity(
   });
   const texts = useCodingWorkbenchModelTexts(runId, state.feed);
   const { ingestDeltas } = texts;
-  useActivityConnection({ runId, epoch, batch, runStateRef, setState, ingestDeltas });
+  useActivityConnection({
+    runId,
+    epoch,
+    batch,
+    runStateRef,
+    setState,
+    ingestDeltas,
+    setConnectionWaiting,
+  });
   useActivityResync({ runId, runtimeEventSignal, status: state.status, retry });
   useActivityAutoReconnect({ runId, status: state.status, retry });
   return {
@@ -141,6 +152,7 @@ export function useCodingWorkbenchSafeActivity(
     readReasoning: texts.readReasoning,
     retryText: texts.retryText,
     retry,
+    connectionWaiting,
   };
 }
 
@@ -194,10 +206,11 @@ interface ActivityConnectionInput {
   readonly runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>;
   readonly ingestDeltas: UseCodingWorkbenchModelTextsResult["ingestDeltas"];
+  readonly setConnectionWaiting: (waiting: boolean) => void;
 }
 
 function useActivityConnection(input: ActivityConnectionInput): void {
-  const { batch, epoch, runId, runStateRef, setState, ingestDeltas } = input;
+  const { batch, epoch, runId, runStateRef, setState, ingestDeltas, setConnectionWaiting } = input;
   const { cancel, enqueue, flush } = batch;
   // A re-pair without a page load reopens the channel (F65).
   const redemptions = useCodingAppSessionRedemptions();
@@ -222,7 +235,7 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
       enqueue(snapshot, final);
     };
-    void connectActivity(controller, publish, runStateRef)
+    void connectActivity(controller, publish, runStateRef, setConnectionWaiting)
       .then(() => {
         if (controller.signal.aborted) return;
         flush();
@@ -237,13 +250,25 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       controller.abort();
       cancel();
     };
-  }, [cancel, enqueue, epoch, flush, ingestDeltas, redemptions, runId, runStateRef, setState]);
+  }, [
+    cancel,
+    enqueue,
+    epoch,
+    flush,
+    ingestDeltas,
+    redemptions,
+    runId,
+    runStateRef,
+    setConnectionWaiting,
+    setState,
+  ]);
 }
 
 async function connectActivity(
   controller: AbortController,
   enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void,
   runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>,
+  onWaiting: (waiting: boolean) => void,
 ): Promise<void> {
   await codingAppSessionPairingSettled();
   if (controller.signal.aborted) return;
@@ -256,7 +281,7 @@ async function connectActivity(
   // While this document is hidden the stream gives its connection to a visible tab's essential
   // stream; it is then reopened from a fresh snapshot once a slot is granted again.
   let resumed = false;
-  while (await streamUntilYielded(controller, enqueue, resumed)) resumed = true;
+  while (await streamUntilYielded(controller, enqueue, resumed, onWaiting)) resumed = true;
 }
 
 // Resolves true when the stream gave its slot up and has to be opened again.
@@ -264,11 +289,13 @@ async function streamUntilYielded(
   controller: AbortController,
   enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void,
   resumed: boolean,
+  onWaiting: (waiting: boolean) => void,
 ): Promise<boolean> {
   const yielded = new AbortController();
   const release = await admitDirectBrowserStreamAsync(controller.signal, {
     yieldWhenHidden: true,
     onYield: () => yielded.abort(),
+    onWaiting,
   });
   if (release === null) {
     if (controller.signal.aborted) return false;

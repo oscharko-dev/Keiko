@@ -732,8 +732,9 @@ export function visibleAlertFailure(
 export function visibleStatusNotice(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
+  activityWaiting = false,
 ): string | null {
-  if (state.streamCapacityWaiting)
+  if (state.streamCapacityWaiting || activityWaiting)
     return t("codingWorkbench.status.eventStreamWaitingForConnection");
   return state.stream.status === "loading"
     ? t("codingWorkbench.status.eventStreamReconnecting")

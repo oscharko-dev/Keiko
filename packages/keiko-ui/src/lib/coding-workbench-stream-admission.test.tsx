@@ -56,6 +56,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(document, "visibilityState");
+  Reflect.deleteProperty(navigator, "locks");
   resetBrowserStreamCapacityForTests();
   vi.unstubAllGlobals();
   vi.useRealTimers();

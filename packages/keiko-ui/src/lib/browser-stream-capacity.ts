@@ -54,8 +54,9 @@ let admittedDirectStreams = 0;
 
 /**
  * `essential` streams (the Workbench run streams, the viewed run's events, editor verification)
- * keep their slot while their document is visible. `background` streams (relationship activity, the
- * editor agent, Browser) give theirs up when an essential stream is known to wait for it, and an
+ * keep their slot while their document is visible. `background` streams (relationship activity,
+ * Browser) give theirs up to a waiter a person can see (never to another background stream or to a
+ * hidden document's waiter), and an
  * essential stream that opted in (`yieldWhenHidden`) gives its slot up to an essential stream of a
  * visible document while its own document is hidden, so a forgotten tab never starves the tab a
  * person is looking at.
@@ -350,11 +351,11 @@ export function admitDirectBrowserStreamAsync(
       admission?.release();
       resolve(null);
     };
+    signal.addEventListener("abort", cancel, { once: true });
     admission = admitDirectBrowserStream(() => {
       signal.removeEventListener("abort", cancel);
       resolve(() => admission?.release());
     }, options);
-    signal.addEventListener("abort", cancel, { once: true });
   });
 }
 
@@ -364,7 +365,7 @@ export function admitDirectBrowserStreamAsync(
  */
 export function sharedStreamConnectionBudget(): number {
   return Math.max(
-    0,
+    1,
     Math.min(SHARED_STREAM_CONNECTIONS, PERSISTENT_STREAM_CONNECTION_CEILING - directStreams),
   );
 }
@@ -381,6 +382,7 @@ export function resetBrowserStreamCapacityForTests(): void {
   directStreams = 0;
   admittedDirectStreams = 0;
   listeners.clear();
+  localWaiters.clear();
   nextPersistentSlot = 0;
   unsupportedCapacityReported = false;
 }
@@ -413,6 +415,8 @@ interface PersistentLease {
   ended: boolean;
   granted: boolean;
   waiterQueryFailed: boolean;
+  /** The waiter's document was visible when it last announced itself. */
+  documentVisible: boolean;
   acquisitionTimer: number;
   leaseTimer: number | undefined;
   staggerTimer: number | undefined;
@@ -447,14 +451,25 @@ function staggerLeaseCheck(name: string, lease: PersistentLease): Promise<void> 
   });
 }
 
-// An essential waiter holds one marker lock per slot while it queues, and one more per slot while
-// its document is visible. A holder reads the markers of its own slot, so it gives the slot up only
-// to a waiter known to be essential, never to another background stream that merely queues.
-const ESSENTIAL_MARKER_SUFFIX = ":essential-waiting";
-const VISIBLE_MARKER_SUFFIX = ":visible";
+// A waiter that someone can see (an essential stream, or a shared-pool consumer, of a visible
+// document) holds one marker lock per slot it queues on. A holder reads the marker of its own slot,
+// so it gives the slot up only to a waiter a person is waiting for: a hidden document's waiter never
+// displaces a visible document's streams. The marker is origin-wide; the waiters of this document
+// are also counted locally, so a hidden document's own background streams still give way to its
+// own waiter.
+const WAITING_MARKER_SUFFIX = ":waiting:visible";
+const localWaiters = new Map<string, number>();
 
-function essentialMarker(slot: string, visible: boolean): string {
-  return `${slot}${ESSENTIAL_MARKER_SUFFIX}${visible ? VISIBLE_MARKER_SUFFIX : ""}`;
+function waitingMarker(slot: string): string {
+  return `${slot}${WAITING_MARKER_SUFFIX}`;
+}
+
+function countLocalWaiter(names: readonly string[], delta: 1 | -1): void {
+  for (const name of names) {
+    const next = (localWaiters.get(name) ?? 0) + delta;
+    if (next > 0) localWaiters.set(name, next);
+    else localWaiters.delete(name);
+  }
 }
 
 function lockPresent(snapshot: LockManagerSnapshot, name: string): boolean {
@@ -478,8 +493,10 @@ function holderShouldYield(
   if (options.slots === undefined) {
     return snapshot.pending?.some((pending) => pending.name === name) ?? false;
   }
-  if (options.essential !== true) return lockPresent(snapshot, essentialMarker(name, false));
-  return documentHidden() && lockPresent(snapshot, essentialMarker(name, true));
+  if (options.essential !== true) {
+    return lockPresent(snapshot, waitingMarker(name)) || (localWaiters.get(name) ?? 0) > 0;
+  }
+  return documentHidden() && lockPresent(snapshot, waitingMarker(name));
 }
 
 // An essential holder looks for waiters only while its document is hidden.
@@ -525,21 +542,28 @@ async function checkLeaseWaiters(
   }
 }
 
-// A background stream that reaches the head of a slot's queue while an essential stream waits for
-// that slot hands it straight on instead of opening a connection it would have to close again.
-async function deferToEssentialWaiter(
+// A stream that reaches the head of a slot's queue while a waiter a person can see needs that slot
+// hands it straight on instead of opening a connection it would have to close again: a background
+// stream gives way to any visible waiter, an essential stream of a hidden document to the visible
+// waiter of another one. The shared pool and a visible document's essential stream keep what they
+// were granted.
+function handsOnToVisibleWaiter(lease: PersistentLease): boolean {
+  const { options } = lease;
+  if (options.slots === undefined) return false;
+  if (options.essential === true) return !lease.documentVisible;
+  return options.yieldable !== false;
+}
+
+async function deferToVisibleWaiter(
   locks: LockManager,
   name: string,
   lease: PersistentLease,
 ): Promise<boolean> {
-  const { options } = lease;
-  if (options.slots === undefined || options.essential === true || options.yieldable === false) {
-    return false;
-  }
+  if (!handsOnToVisibleWaiter(lease)) return false;
   try {
     const snapshot = await locks.query();
     if (lease.ended) return true;
-    if (!lockPresent(snapshot, essentialMarker(name, false))) return false;
+    if (!lockPresent(snapshot, waitingMarker(name))) return false;
     releaseLease(lease, "expired");
     return true;
   } catch {
@@ -550,7 +574,7 @@ async function deferToEssentialWaiter(
 }
 
 async function holdLease(locks: LockManager, name: string, lease: PersistentLease): Promise<void> {
-  if (await deferToEssentialWaiter(locks, name, lease)) return;
+  if (await deferToVisibleWaiter(locks, name, lease)) return;
   const held = new Promise<void>((resolve) => {
     lease.finish = resolve;
   });
@@ -640,16 +664,19 @@ function holdMarker(locks: LockManager, name: string, signal: AbortSignal): Prom
     );
 }
 
-// The visible markers exist only while the waiter's document is visible: a hidden document holding
-// a slot yields to a waiter someone is looking at, never to another hidden one.
-function announceVisibleWaiter(
+// The marker exists only while the waiter's document is visible, and the lease remembers whether it
+// is, so a granted hidden essential stream knows it must hand the slot on to a visible waiter.
+function announceWaiter(
   locks: LockManager,
   names: readonly string[],
+  lease: PersistentLease,
   waiting: AbortSignal,
 ): void {
+  countLocalWaiter(names, 1);
   let visible: AbortController | undefined;
   const sync = (): void => {
     if (waiting.aborted) return;
+    lease.documentVisible = !documentHidden();
     if (documentHidden()) {
       visible?.abort();
       visible = undefined;
@@ -658,28 +685,19 @@ function announceVisibleWaiter(
     if (visible !== undefined) return;
     const own = new AbortController();
     visible = own;
-    for (const name of names) void holdMarker(locks, essentialMarker(name, true), own.signal);
+    for (const name of names) void holdMarker(locks, waitingMarker(name), own.signal);
   };
   sync();
-  if (typeof document === "undefined") return;
-  document.addEventListener("visibilitychange", sync);
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", sync);
   waiting.addEventListener(
     "abort",
     () => {
-      document.removeEventListener("visibilitychange", sync);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", sync);
       visible?.abort();
+      countLocalWaiter(names, -1);
     },
     { once: true },
   );
-}
-
-function announceEssentialWaiter(
-  locks: LockManager,
-  names: readonly string[],
-  waiting: AbortSignal,
-): Promise<void>[] {
-  announceVisibleWaiter(locks, names, waiting);
-  return names.map((name) => holdMarker(locks, essentialMarker(name, false), waiting));
 }
 
 async function requestLease(locks: LockManager, lease: PersistentLease): Promise<void> {
@@ -692,11 +710,13 @@ async function requestLease(locks: LockManager, lease: PersistentLease): Promise
   if (lease.ended) return;
   const waiting = new AbortController();
   lease.abort.signal.addEventListener("abort", () => waiting.abort(), { once: true });
-  const markers =
-    lease.options.essential === true ? announceEssentialWaiter(locks, names, waiting.signal) : [];
   const queued = new Set(waitCandidates(lease.options, names, yieldable));
+  // Essential streams and shared-pool consumers are what a person waits for; a background direct
+  // stream that queues announces nothing, so background streams never make each other yield.
+  if (lease.options.essential === true || lease.options.slots === undefined) {
+    announceWaiter(locks, [...queued], lease, waiting.signal);
+  }
   await Promise.allSettled([
-    ...markers,
     ...[...queued].map((name) =>
       locks.request(name, { signal: waiting.signal }, async () => {
         if (lease.ended || lease.granted) return;
@@ -727,6 +747,7 @@ export function acquirePersistentBrowserStreamCapacity(
     ended: false,
     granted: false,
     waiterQueryFailed: false,
+    documentVisible: true,
     acquisitionTimer: 0,
     leaseTimer: undefined,
     staggerTimer: undefined,

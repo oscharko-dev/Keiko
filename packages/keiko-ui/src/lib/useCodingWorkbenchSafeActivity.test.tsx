@@ -1367,4 +1367,25 @@ describe("useCodingWorkbenchSafeActivity under origin stream capacity", () => {
     view.unmount();
     held.forEach((admission) => admission.release());
   });
+
+  it("reports a long wait for a free connection and clears it once the stream is admitted", async () => {
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await advance(0);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await advance(60_000);
+    expect(view.result.current.connectionWaiting).toBe(true);
+    expect(streamSnapshotsMock).not.toHaveBeenCalled();
+    held[0]?.release();
+    await advance(2_000);
+    expect(view.result.current.connectionWaiting).toBe(false);
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(1);
+    view.unmount();
+    held.forEach((admission) => admission.release());
+  });
 });
