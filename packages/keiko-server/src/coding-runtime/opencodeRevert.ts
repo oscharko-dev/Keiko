@@ -492,10 +492,11 @@ async function restoreUndo(
  * this check between it and the request. `false` when a human edit landed meanwhile: nothing is
  * written and the index goes back to the undone state.
  *
- * Residual window, which Keiko cannot close: the proof and the runtime's own write are two steps. The
- * request is `DELETE /api/session/{id}/revert`; Keiko's client does not hand the runtime the proven
- * contents and nothing here shows the runtime re-reads the files before it writes them, so an edit
- * landing between this proof and that write (one HTTP round trip) is still overwritten.
+ * Residual window, which Keiko cannot close: the proof and the runtime's own write are two
+ * steps. The request is `DELETE /api/session/{id}/revert`; Keiko's client does not hand the
+ * runtime the proven contents and nothing here shows the runtime re-reads the files before it
+ * writes them, so an edit landing between this proof and that write (one HTTP round trip) is
+ * still overwritten.
  */
 async function clearOrRollBack(
   ports: OpenCodeRevertPorts,
@@ -541,11 +542,11 @@ async function reapplyIndexMoves(
 
 /**
  * Puts the index back to the undone state after a restore that cannot finish. A rollback that is
- * refused (a person restaged a path since) or fails leaves staged effects of the turn behind, so the
- * retained undo no longer claims `restored`: the outcome it keeps says the index changed or could not
- * be proven, and the refusal is on the log. The person's own staging is never overwritten, and the
- * moves are dropped: the index is theirs now, so a later Restore still brings the files back
- * without it instead of refusing every retry as `index-changed`.
+ * refused (a person restaged a path since) or fails leaves staged effects of the turn behind, so
+ * the retained undo no longer claims `restored`: the outcome it keeps says the index changed or
+ * could not be proven, and the refusal is on the log. The person's own staging is never
+ * overwritten, and the moves are dropped: the index is theirs now, so a later Restore still
+ * brings the files back without it instead of refusing every retry as `index-changed`.
  */
 async function rollBackIndex(
   ports: OpenCodeRevertPorts,

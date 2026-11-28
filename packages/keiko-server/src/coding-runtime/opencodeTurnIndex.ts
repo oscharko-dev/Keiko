@@ -40,7 +40,7 @@ const READ_MAX_BYTES = 16 * 1_024 * 1_024;
 const GIT_TIMEOUT_MS = 60_000;
 /** Paths restored by one `git restore` invocation, so the argument vector stays bounded. */
 const RESTORE_BATCH = 200;
-/** Characters of paths one Git invocation may carry (Windows caps a whole command line at 32,767). */
+/** Characters one Git invocation may carry (Windows caps a command line at 32,767). */
 const ARGV_BUDGET_CHARS = 16_000;
 /** Paths a turn may leave staged and still be restored one by one (`update-index --cacheinfo`). */
 const EXPLICIT_RESTORE_MAX = 64;
@@ -725,49 +725,53 @@ async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
     if (entry.mode === ABSENT_MODE) removals.push(path);
     else additions.push(entry);
   }
+  const source = `--source=${plan.headSha}`;
   return (
     (await runInBatches(
       removals,
-      (path) => path.length,
-      (batch) => run(["update-index", "--force-remove", "--", ...batch]),
+      ["update-index", "--force-remove", "--"],
+      (path) => [path],
+      run,
     )) &&
-    (await runInBatches(
-      atHead,
-      (path) => path.length,
-      (batch) => run(["restore", "--staged", `--source=${plan.headSha}`, "--", ...batch]),
-    )) &&
+    (await runInBatches(atHead, ["restore", "--staged", source, "--"], (path) => [path], run)) &&
     (await runInBatches(
       additions,
-      (entry) => entry.cacheInfo.length,
-      (batch) =>
-        run([
-          "update-index",
-          "--add",
-          ...batch.flatMap((entry) => ["--cacheinfo", entry.cacheInfo]),
-        ]),
+      ["update-index", "--add"],
+      (entry) => ["--cacheinfo", entry.cacheInfo],
+      run,
     ))
   );
 }
 
-/** Runs `run` over `items` in batches bounded by count and by the characters they put on the command line. */
+/**
+ * Runs one Git command over `items` in batches. A batch ends at RESTORE_BATCH items or when its
+ * whole command line, the `fixed` leading tokens and every item's tokens, would pass
+ * ARGV_BUDGET_CHARS.
+ * The count is the characters plus one separator per token: a bound, not the exact length the
+ * operating system measures. An item larger than the budget still runs, alone.
+ */
 async function runInBatches<T>(
   items: readonly T[],
-  size: (item: T) => number,
-  run: (batch: readonly T[]) => Promise<GitProcessResult>,
+  fixed: readonly string[],
+  tokens: (item: T) => readonly string[],
+  run: GitRun,
 ): Promise<boolean> {
+  const weigh = (parts: readonly string[]): number =>
+    parts.reduce((sum, part) => sum + part.length + 1, 0);
+  const base = weigh(fixed);
   let batch: T[] = [];
-  let chars = 0;
+  let chars = base;
   const flush = async (): Promise<boolean> => {
     if (batch.length === 0) return true;
-    const ok = succeeded(await run(batch));
+    const ok = succeeded(await run([...fixed, ...batch.flatMap(tokens)]));
     batch = [];
-    chars = 0;
+    chars = base;
     return ok;
   };
   for (const item of items) {
-    const cost = size(item) + 1;
-    if (batch.length > 0 && (batch.length >= RESTORE_BATCH || chars + cost > ARGV_BUDGET_CHARS))
-      if (!(await flush())) return false;
+    const cost = weigh(tokens(item));
+    const full = batch.length >= RESTORE_BATCH || chars + cost > ARGV_BUDGET_CHARS;
+    if (batch.length > 0 && full && !(await flush())) return false;
     batch.push(item);
     chars += cost;
   }

@@ -611,6 +611,34 @@ describe("Restore makes the recorded index moves again", () => {
     expect(git(root, "ls-files", "-s")).toBe(turnEnd);
   });
 
+  it("bounds a batch by the whole command line when the paths are long", async () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    const directory = join("long", "d".repeat(100));
+    mkdirSync(join(root, directory), { recursive: true });
+    const names = Array.from({ length: 150 }, (_unused, index) =>
+      join(directory, `${"f".repeat(100)}-${String(index)}.txt`),
+    );
+    for (const name of names) writeFileSync(join(root, name), "one\n");
+    commit(root);
+    const record = await turn(
+      root,
+      () => {
+        for (const name of names) writeFileSync(join(root, name), "two\n");
+        git(root, "add", "long");
+      },
+      names,
+    );
+    const { moves } = await undone(root, record);
+
+    gitProcesses.widestArgv = 0;
+    await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("restored");
+
+    // 150 paths of about 270 characters each with their `--cacheinfo` token: one batch by count,
+    // several by the command line.
+    expect(gitProcesses.widestArgv).toBeLessThan(16_500);
+  });
+
   it("writes many paths in a few bounded Git runs and still refuses one a person restaged", async () => {
     const root = repository();
     const names = Array.from({ length: 450 }, (_unused, index) => `bulk/file-${String(index)}.txt`);
@@ -638,11 +666,45 @@ describe("Restore makes the recorded index moves again", () => {
     expect(gitProcesses.widestArgv).toBeLessThan(16_500);
     expect(git(root, "ls-files", "-s")).toBe(turnEnd);
 
-    // The index is put back to the undone state, then a person restages one path: Restore refuses it.
+    // The index is put back to the undone state, then a person restages one path.
     git(root, "restore", "--staged", "--", "bulk");
     writeFileSync(join(root, names[7] ?? ""), "three\n");
     git(root, "add", names[7] ?? "");
     await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("changed-after-turn");
+  });
+});
+
+describe("paths are literal, never pathspec patterns", () => {
+  // `:` cannot appear in a Windows file name.
+  const magic = process.platform === "win32" ? [] : [":(top).txt"];
+  const names = ["a[1].ts", ...magic];
+
+  it("undoes and restores only the files named, not those a pattern in the name would match", async () => {
+    const root = repository();
+    for (const name of [...names, "a1.ts"]) writeFileSync(join(root, name), "one\n");
+    git(root, "add", "-A");
+    git(root, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "names");
+    let recorded: TurnIndexMoves | undefined;
+    const record = await turn(
+      root,
+      () => {
+        for (const name of [...names, "a1.ts"]) writeFileSync(join(root, name), "two\n");
+        git(root, "--literal-pathspecs", "add", "--", ...names, "a1.ts");
+      },
+      names,
+    );
+    const turnEnd = git(root, "ls-files", "-s");
+
+    const result = await restoreTurnIndex(root, record, governedOf(record), (moves) => {
+      recorded = moves;
+    });
+
+    expect(result.restoredCount).toBe(names.length);
+    // `a1.ts` is the person's staging: the glob in `a[1].ts` must not have reached it.
+    expect(staged(root)).toEqual(["a1.ts"]);
+    if (recorded === undefined) throw new Error("nothing was undone");
+    await expect(reapplyTurnIndexMoves(root, recorded)).resolves.toBe("restored");
+    expect(git(root, "ls-files", "-s")).toBe(turnEnd);
   });
 });
 

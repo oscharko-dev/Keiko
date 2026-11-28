@@ -8,10 +8,10 @@
  * one, and the end-of-turn index is never accepted as proof of what Keiko wrote.
  *
  * The record is bounded: the run least recently written is forgotten first, and a run keeps a
- * bounded number of paths, owned and withdrawn together (`truncated` says the cap cut some, or that a mutation's entries could
- * not be read). A forgotten, cut or restarted record cannot be told from a person's own staging, so
- * the undo reports any changed path it does not name as a closed outcome instead of claiming it
- * restored everything.
+ * bounded number of paths, owned and withdrawn together (`truncated` says the cap cut some, or that
+ * a mutation's entries could not be read). A forgotten, cut or restarted record cannot be told from
+ * a person's own staging, so the undo reports any changed path it does not name as a closed outcome
+ * instead of claiming it restored everything.
  *
  * Accepted loss: the record is process-global memory, so it holds at most 256 runs and is gone
  * after a server restart. An undo that follows a restart therefore reports `partial` for the
@@ -35,7 +35,7 @@ export interface GovernedIndexRecord {
    * the turn-start entry.
    */
   readonly previous: ReadonlyMap<string, string>;
-  /** The per-run cap cut paths, or a mutation's entries could not be read: the record is incomplete. */
+  /** The per-run cap cut paths, or a mutation's entries could not be read: record incomplete. */
   readonly truncated: boolean;
 }
 
