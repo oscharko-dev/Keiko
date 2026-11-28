@@ -4398,6 +4398,14 @@ function explicitChecksFor(
   return checks;
 }
 
+function effectiveReadinessModelId(
+  parsed: GatewayReadinessRequest,
+  deps: UiHandlerDeps,
+): string | undefined {
+  const selection = chooseProvider(currentGatewayConfig(deps), parsed.modelId, parsed.options);
+  return "status" in selection ? parsed.modelId : selection.provider.modelId;
+}
+
 async function trackExplicitCheck<T>(
   deps: UiHandlerDeps,
   modelId: string | undefined,
@@ -4430,7 +4438,9 @@ async function settleExplicitReadiness(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const report = await trackExplicitCheck(deps, parsed.modelId, () =>
+  // A request without a model id checks the default chat model: track the model the run will
+  // really check, so a deactivation cannot be undone by its verdict.
+  const report = await trackExplicitCheck(deps, effectiveReadinessModelId(parsed, deps), () =>
     runGatewayReadiness(parsed, deps, correlationId, "settings"),
   );
   if ("status" in report) return report;

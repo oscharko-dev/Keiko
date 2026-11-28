@@ -796,6 +796,33 @@ it("deactivates an activated chat model without a provider request and records e
   expectActivityLogProof("gateway.readiness.deactivation.line", formatActivityLogProofLine(line));
 });
 
+it("refuses to deactivate the default model while a readiness request without a model id checks it", async () => {
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  // The selected model: the one a request without `modelId` checks (the first chat model).
+  await activate(deps, CHAT_A);
+  const completion = holdChatCompletion(CHAT_A);
+  const checking = handleGatewayReadiness(
+    selectionRequest({ options: { probes: ["chat"] } }),
+    deps,
+  );
+  await vi.waitFor(() => {
+    expect(completion.held()).toBe(true);
+  });
+  expect(
+    await handleGatewayDeactivation(deactivationRequest({ modelId: CHAT_A }, "corr-default"), deps),
+  ).toMatchObject({ status: 409, body: { error: { code: "CONFLICT" } } });
+  completion.release();
+  expect(await checking).toMatchObject({ status: 200, body: { modelId: CHAT_A } });
+  expect(currentConversationReady(deps, CHAT_A)).toBe(true);
+  // Once the check ended, the deactivation is accepted and stays.
+  expect(
+    await handleGatewayDeactivation(deactivationRequest({ modelId: CHAT_A }, "corr-after"), deps),
+  ).toMatchObject({ status: 200, body: { outcome: "deactivated" } });
+  expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+});
+
 it("reports a failed selection check instead of leaving an unhandled rejection", async () => {
   const sink = loggedSink();
   const gateway = gatewayDouble();
