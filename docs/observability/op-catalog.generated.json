@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0ca487bb7f8f2dc95a21a96bafd27cd985d17438dd3ec9ab36aa7aaa3d13f344",
+    "catalogDigest": "fa0e43695bf5c95a42eb4e9d798824e98d6f18f79f4d683ffbb3c81c7fae8ec5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -20419,7 +20419,7 @@
         "proofIds": ["coding-sidecar.gateway.readiness-insufficient.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:478",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5710"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5712"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20678,7 +20678,7 @@
         "proofIds": ["coding-sidecar.gateway.request-validated.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:403",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:6453"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:6455"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20819,7 +20819,7 @@
         "proofIds": ["coding-sidecar.gateway.skill-attached.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:453",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:6386"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:6388"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21118,7 +21118,7 @@
         "proofIds": ["coding-sidecar.gateway.usage-settled.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:873",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5061"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5063"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -130241,7 +130241,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:5812",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:5814",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
