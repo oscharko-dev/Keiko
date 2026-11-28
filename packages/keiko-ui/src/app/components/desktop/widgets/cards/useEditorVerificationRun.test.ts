@@ -1409,3 +1409,73 @@ describe("useEditorVerificationRun under origin stream capacity", () => {
     held.forEach((admission) => admission.release());
   });
 });
+
+describe("useEditorVerificationRun waiting status", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("shows the wait only for the root that started, and puts its status back when admitted", async () => {
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await advance(0);
+    const started = render();
+    const idle = renderHook(() => useEditorVerificationRun({ root: "/other", activeFile: null }));
+    await advance(0);
+    act(() => started.result.current.runWorkspaceVerification("typecheck"));
+    await advance(60_000);
+    expect(started.result.current.statusBarRun?.label).toBe(
+      "Verification: waiting for a free connection",
+    );
+    expect(idle.result.current.statusBarRun).toBeNull();
+    held[0]?.release();
+    await advance(2_000);
+    expect(started.result.current.statusBarRun?.label).toBe("Verification: starting…");
+    expect(idle.result.current.statusBarRun).toBeNull();
+    held.forEach((admission) => admission.release());
+  });
+
+  it("shows the wait for a root whose active run lost its stream and restores its status after", async () => {
+    const { result } = render();
+    await advance(0);
+    act(() => result.current.runWorkspaceVerification("typecheck"));
+    await advance(0);
+    const first = FakeEventSource.instances[0];
+    act(() =>
+      first?.emit("run-started", {
+        runId: "run-1",
+        projectId: "/ws",
+        kinds: ["typecheck"],
+        startedAtMs: 1,
+      }),
+    );
+    await advance(0);
+    const before = result.current.statusBarRun?.label;
+    expect(before).toBe("Verification: starting…");
+    FakeEventSource.autoOpen = false;
+    act(() => first?.emitError());
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await advance(30_000);
+    expect(result.current.statusBarRun?.label).toBe("Verification: waiting for a free connection");
+    held[0]?.release();
+    await advance(5_000);
+    expect(result.current.statusBarRun?.label).toBe(before);
+    held.forEach((admission) => admission.release());
+  });
+});

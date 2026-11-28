@@ -418,15 +418,37 @@ function armSharedSourceReadyTimer(): void {
   }, EVENT_SOURCE_READY_TIMEOUT_MS);
 }
 
-function showWaitingForConnection(waiting: boolean): void {
+const WAITING_FOR_CONNECTION_LABEL = "Verification: waiting for a free connection";
+// The status each waiting root had before the wait, so a wait that ends, with or without an
+// admission, puts back exactly what it replaced.
+const waitingRoots = new Map<string, SharedRunState>();
+
+// Only roots that depend on the stream (a run starting, or one whose stream must reconnect) show
+// the wait; a subscribed root with nothing to run never does.
+function showWaiting(): void {
   for (const root of sourceDependentRoots()) {
     const entry = projectStates.get(root);
-    if (entry === undefined || entry.activeRunId !== null) continue;
-    emit(root, entry, {
-      running: true,
-      label: waiting ? "Verification: waiting for a free connection" : "Verification: starting…",
-    });
+    if (entry === undefined || waitingRoots.has(root)) continue;
+    waitingRoots.set(root, entry.pendingState ?? entry.state);
+    emit(root, entry, { running: true, label: WAITING_FOR_CONNECTION_LABEL });
   }
+}
+
+// A status another event already replaced is left alone: only the wait's own label is undone.
+function endWaiting(): void {
+  for (const [root, previous] of waitingRoots) {
+    const entry = projectStates.get(root);
+    const current = entry?.pendingState ?? entry?.state;
+    if (entry !== undefined && current?.label === WAITING_FOR_CONNECTION_LABEL) {
+      emit(root, entry, previous);
+    }
+  }
+  waitingRoots.clear();
+}
+
+function showWaitingForConnection(waiting: boolean): void {
+  if (waiting) showWaiting();
+  else endWaiting();
 }
 
 function reconnectDelay(): number {
@@ -476,6 +498,7 @@ function createSharedSource(): void {
   // An essential stream that never yields: it exists only while a run is active, and a closed
   // stream would lose the run's terminal event, which the server cannot replay.
   sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, {
+    nonReplayable: true,
     onWaiting: showWaitingForConnection,
   });
   void waitForSharedSource();
@@ -691,6 +714,7 @@ export function resetEditorVerificationRunStateForTests(): void {
   projectStates.clear();
   projectIdByRunId.clear();
   rootsAwaitingFreshTerminal.clear();
+  waitingRoots.clear();
   totalListenerCount = 0;
 }
 
