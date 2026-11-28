@@ -48,7 +48,7 @@ describe("Coding Workbench body notice flow", () => {
   });
 
   it("insets the in-place model activation like the alert above it", () => {
-    const activation = cssBlock(".modelActivation");
+    const activation = cssBlock(".cmpModelActivation");
 
     expect(activation).toContain("margin: 0 var(--space-6) var(--space-3);");
     expect(cssBlock(".alert")).toContain("margin: var(--space-3) var(--space-6);");

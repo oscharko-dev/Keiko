@@ -35,7 +35,7 @@ export function CodingWorkbenchModelActivation({
   if (readiness === null) return null;
   if (readiness.kind === "not-activated") {
     return (
-      <div className={windowStyles.modelActivation} data-testid="coding-workbench-model-activation">
+      <div className={windowStyles.cmpModelActivation} data-testid="coding-workbench-model-activation">
         <button
           className={`${windowStyles.button} ${windowStyles.buttonPrimary}`}
           type="button"
@@ -48,7 +48,7 @@ export function CodingWorkbenchModelActivation({
   }
   return (
     <div
-      className={windowStyles.modelActivation}
+      className={windowStyles.cmpModelActivation}
       data-testid="coding-workbench-model-activation-failed"
     >
       <button className={windowStyles.button} type="button" onClick={onOpenSettings}>
