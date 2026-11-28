@@ -204,7 +204,16 @@ export function SyncControl({
   // and must not be painted in the neutral colour just because the request itself did not throw.
   const failed = error !== null || outcome?.failed === true;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "6px 9px",
+        minWidth: 0,
+        maxWidth: "100%",
+      }}
+    >
       <button
         type="button"
         disabled={disabled}
@@ -240,7 +249,7 @@ export function SyncControl({
         style={{
           display: "block",
           minWidth: 0,
-          maxWidth: 172,
+          maxWidth: "min(172px, 100%)",
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",

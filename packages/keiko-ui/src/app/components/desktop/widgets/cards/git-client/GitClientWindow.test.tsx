@@ -902,6 +902,38 @@ describe("GitClientWindow — repository list", () => {
     await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 2));
   });
 
+  // U-35 (#4491): a change made by an IDE or a terminal converges when the document becomes
+  // visible, without disturbing the selected change or the commit summary being typed.
+  it("converges after an outside change on visibility and keeps the selection and typed summary", async (): Promise<void> => {
+    const user = userEvent.setup();
+    let current = makeStatusWithChanges();
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> => current);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+    await user.click(await screen.findByRole("button", { name: /^src\/index\.ts, / }));
+    const summary = await screen.findByLabelText("Summary");
+    fireEvent.change(summary, { target: { value: "feat: keep me" } });
+    const initialReads = getStatus.mock.calls.length;
+
+    current = makeStatus({
+      clean: false,
+      unstagedCount: 1,
+      changes: [
+        ...makeStatusWithChanges().changes,
+        change("scripts/gen.js", { worktreeStatus: "M", unstaged: true }),
+      ],
+    });
+    act((): void => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await screen.findByRole("button", { name: /^scripts\/gen\.js, / });
+    expect(getStatus.mock.calls.length).toBeGreaterThan(initialReads);
+    expect(screen.getByRole("button", { name: /^src\/index\.ts, / })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(screen.getByLabelText("Summary")).toHaveValue("feat: keep me");
+  });
+
   it("does not read a status on focus while no repository is connected", (): void => {
     const client = makeClient({
       listRepositories: vi.fn(

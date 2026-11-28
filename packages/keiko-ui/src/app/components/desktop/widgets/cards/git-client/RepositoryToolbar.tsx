@@ -138,12 +138,22 @@ function ToolbarCell({
     <div
       style={{
         ...TOOLBAR_CELL_STYLE,
-        minWidth,
+        // The comfortable width, but never wider than the toolbar itself (U-35).
+        minWidth: `min(${String(minWidth)}px, 100%)`,
         cursor: "default",
         ...(last === true ? { borderRight: "none" } : null),
       }}
     >
-      <span style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      <span
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          minWidth: 0,
+          maxWidth: "100%",
+          flex: "1 1 auto",
+        }}
+      >
         {label !== undefined ? <span style={TOOLBAR_CELL_LABEL_STYLE}>{label}</span> : null}
         {children}
       </span>
@@ -323,8 +333,10 @@ function RepositoryCell({
   const menuAddRepositoryLabel = repositorySelectionLocked ? undefined : addRepository?.label;
   return (
     <ToolbarCell label={t("gitClientWindow.ui.repository")} minWidth={248}>
-      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-        <span style={{ color: "var(--fg-dim)" }}>
+      <span
+        style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}
+      >
+        <span style={{ color: "var(--fg-dim)", flex: "none" }}>
           <FolderIcon size={16} />
         </span>
         <KeikoSelect

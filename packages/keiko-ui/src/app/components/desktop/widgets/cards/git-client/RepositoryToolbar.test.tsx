@@ -153,3 +153,34 @@ describe("RepositoryToolbar — Connect to Chat", () => {
     expect(results).toHaveNoViolations();
   });
 });
+
+// U-35 (#4491): at a window width of about 530 px the Sync label overlapped the repository path and
+// the sync status crowded the repository block. Each cell is bounded by the toolbar, its text
+// columns may shrink, and the sync status wraps inside its own cell. jsdom has no layout, so the
+// pin is the inline style that produces it.
+describe("RepositoryToolbar — narrow window layout (U-35)", () => {
+  it("bounds every toolbar cell by the toolbar and lets its text shrink", () => {
+    render(<RepositoryToolbar {...baseProps()} />);
+    const toolbar = screen.getByRole("banner");
+    const cells = Array.from(toolbar.children).filter(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement && child.style.maxWidth === "100%",
+    );
+    expect(cells.length).toBeGreaterThanOrEqual(3);
+    for (const cell of cells) {
+      expect(cell.style.minWidth).toMatch(/^min\(\d+px, 100%\)$/);
+      expect(cell.style.boxSizing).toBe("border-box");
+      // The branch menu opens inside its cell, so a cell must never clip.
+      expect(cell.style.overflow).toBe("");
+    }
+  });
+
+  it("wraps the sync status inside its own cell and shortens it to the cell width", () => {
+    render(<RepositoryToolbar {...baseProps()} />);
+    const status = screen.getByRole("status");
+    expect(status.style.maxWidth).toBe("min(172px, 100%)");
+    const row = status.parentElement;
+    expect(row?.style.flexWrap).toBe("wrap");
+    expect(row?.style.maxWidth).toBe("100%");
+  });
+});

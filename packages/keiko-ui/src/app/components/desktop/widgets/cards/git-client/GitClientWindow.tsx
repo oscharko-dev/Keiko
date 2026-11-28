@@ -11,7 +11,7 @@
 // (contract §7). Styling composes existing globals.css tokens via inline styles (ADR-0051); no new CSS.
 // See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   Dispatch,
@@ -64,7 +64,11 @@ import {
   useHandedOffRepositoryConnection,
   useMountedRef,
 } from "./useHandedOffRepositoryConnection";
-import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
+import {
+  type AmbientRefresh,
+  statusFingerprintDiffers,
+  useRepositoryStatusRefresh,
+} from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import {
@@ -1741,7 +1745,24 @@ export function GitClientWindow({
   const refreshStatus = useCallback((): void => {
     setStatusRevision((revision): number => revision + 1);
   }, []);
-  useRepositoryStatusRefresh(selectedPath, mutationRepositoryRoot, refreshStatus);
+  // U-35: what the window shows and whether it is reading, as the ambient probe needs them
+  // without re-subscribing on every settled read.
+  const shownStatusRef = useRef<GitRepositoryStatusResponse | null>(null);
+  const statusReadingRef = useRef(false);
+  useLayoutEffect((): void => {
+    shownStatusRef.current = statusRead.projectKey === selectedPath ? statusRead.response : null;
+    statusReadingRef.current = statusRead.loading;
+  }, [selectedPath, statusRead.loading, statusRead.projectKey, statusRead.response]);
+  const ambientRefresh = useMemo(
+    (): AmbientRefresh => ({
+      isBusy: (): boolean => statusReadingRef.current,
+      probe: async (): Promise<boolean> =>
+        selectedPath !== null &&
+        statusFingerprintDiffers(shownStatusRef.current, await client.getStatus(selectedPath)),
+    }),
+    [client, selectedPath],
+  );
+  useRepositoryStatusRefresh(selectedPath, mutationRepositoryRoot, refreshStatus, ambientRefresh);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;
