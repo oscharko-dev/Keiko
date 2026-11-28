@@ -3764,6 +3764,24 @@ function withAskedCallId(
   return event.callId === undefined ? request : { ...request, callId: event.callId };
 }
 
+/**
+ * Supervised workspace asks leave through `supervisedMutationEvent`, not the generic branch, so the
+ * review the card is built from is remembered here too (U-27): without it a task-branch card had
+ * no name and no enabled Approve. A branch ask whose name cannot be verified returns false: it
+ * fails closed and says so instead of showing a card nobody can approve.
+ */
+function observeSupervisedAsk(
+  active: ActiveRuntime,
+  event: SidecarPermissionEvent,
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): boolean {
+  if (!observeCodingToolApproval(active, event, actionKind)) return false;
+  const review = approvalReviewFacts(event, undefined);
+  if (actionKind === "git-branch" && review === undefined) return false;
+  rememberApprovalReview(active.pendingApprovalReviews, review);
+  return true;
+}
+
 function supervisedMutationEvent(
   active: ActiveRuntime,
   sequence: number,
@@ -3794,7 +3812,7 @@ function supervisedMutationEvent(
     operatorStopped: false,
   });
   if (decision.status === "approval-required" && decision.permissionRequest !== undefined) {
-    if (!observeCodingToolApproval(active, event, actionKind)) {
+    if (!observeSupervisedAsk(active, event, actionKind)) {
       return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
     }
     return runtimeEvent(active, sequence, "permission-requested", {
