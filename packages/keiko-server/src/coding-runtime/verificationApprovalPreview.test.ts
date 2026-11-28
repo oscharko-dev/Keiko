@@ -116,6 +116,18 @@ describe("verification approval preview", () => {
     expect(validReview(preview)).toBe(true);
   });
 
+  it("masks a token the script-body cut would split, so no part of it is shown", () => {
+    const token = `ghp_${"AbCdEfGhIj".repeat(4)}`;
+    // The token starts at char 380 of the body and straddles the 400-char cut.
+    const scriptBody = `${"x".repeat(379)} ${token} tail`;
+    const preview = previewFromSteps([
+      { command: "npm", args: ["run", "test"], scriptName: "test", scriptBody },
+    ]);
+    const text = JSON.stringify(preview);
+    expect(text).not.toContain("ghp_");
+    expect(text).not.toContain("AbCdEf");
+  });
+
   it("masks credentials: an Authorization header, a --password flag and a -D system property", () => {
     const preview = previewFromSteps([
       { command: "curl", args: ["-H", `Authorization: ${BEARER}`, "https://example.test"] },

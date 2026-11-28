@@ -83,12 +83,16 @@ export function cutVisibly(
   return { text: `${text.slice(0, end)}${ELLIPSIS}`, cut: true };
 }
 
+/**
+ * The step's text, already projected. The script body is projected whole BEFORE it is cut, so a
+ * credential the cut would split is masked first and no part of it is shown.
+ */
 function stepText(step: VerificationPreviewStep): string {
   const line = [step.command, ...step.args].map(shellWord).join(" ");
-  const where = step.cwd === undefined ? line : `${line}  (in ${step.cwd})`;
+  const where = projectText(step.cwd === undefined ? line : `${line}  (in ${step.cwd})`);
   if (step.scriptName === undefined || step.scriptBody === undefined) return where;
-  const body = cutVisibly(step.scriptBody, SCRIPT_BODY_MAX_CHARS).text;
-  return `${where}\n  runs the project's own "${step.scriptName}" script: ${body}`;
+  const body = cutVisibly(projectText(step.scriptBody), SCRIPT_BODY_MAX_CHARS).text;
+  return `${where}\n  runs the project's own "${projectText(step.scriptName)}" script: ${body}`;
 }
 
 /** Pure projection of a planned set of steps into the card's bounded, redacted lines. */
@@ -98,10 +102,7 @@ export function previewFromSteps(
   if (steps.length === 0) return { status: "unavailable", reason: "no-runnable-step" };
   const kept = steps.slice(0, CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS);
   const lines = kept.map((step) =>
-    cutVisibly(
-      projectText(stepText(step)),
-      CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS,
-    ),
+    cutVisibly(stepText(step), CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS),
   );
   return {
     status: "commands",
