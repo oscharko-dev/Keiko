@@ -834,8 +834,10 @@ describe("GitClientWindow — repository list", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
-    expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path);
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
+    expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path, expect.anything());
   });
 
   it("clears a repository-scoped commit draft when the selected repository changes", async () => {
@@ -900,6 +902,41 @@ describe("GitClientWindow — repository list", () => {
       window.dispatchEvent(new Event("focus"));
     });
     await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 2));
+  });
+
+  // Review #4573 findings 10 and 21.
+  it("ends the older status read when a newer one starts, so its Git work stops", async (): Promise<void> => {
+    const signals: AbortSignal[] = [];
+    const getStatus = vi.fn(
+      (_path: string, options?: { readonly signal?: AbortSignal | undefined }) => {
+        if (options?.signal !== undefined) signals.push(options.signal);
+        return signals.length === 1
+          ? new Promise<GitRepositoryStatusResponse>(() => undefined)
+          : Promise.resolve(makeStatus());
+      },
+    );
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+    await waitFor((): void => expect(signals).toHaveLength(1));
+    expect(signals[0]?.aborted).toBe(false);
+    act((): void => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor((): void => expect(signals.length).toBeGreaterThan(1));
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals.at(-1)?.aborted).toBe(false);
+  });
+
+  it("adopts the first successful status after a failed read when the window is focused again", async (): Promise<void> => {
+    let attempt = 0;
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("transport failed");
+      return makeStatusWithChanges();
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(1));
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByRole("button", { name: /^src\/index\.ts, / })).toBeInTheDocument();
   });
 
   // U-35 (#4491): a change made by an IDE or a terminal converges when the document becomes
@@ -1042,7 +1079,9 @@ describe("GitClientWindow — repository list", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor((): void => expect(getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor((): void =>
+      expect(getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
     expect(screen.getByText("Loading changes…")).toBeInTheDocument();
     const readsAfterSwitch = getStatus.mock.calls.length;
 
@@ -1073,7 +1112,9 @@ describe("GitClientWindow — repository list", () => {
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
 
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
     expect(screen.queryByLabelText("Stage README.md")).not.toBeInTheDocument();
     expect(screen.getByText("Loading changes…")).toBeInTheDocument();
 
@@ -1104,7 +1145,9 @@ describe("GitClientWindow — repository list", () => {
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
 
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
     expect(screen.queryByRole("button", { name: "Branch: main" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Branch: Loading branches" })).toBeDisabled();
 
@@ -1863,7 +1906,9 @@ describe("GitClientWindow — repository list", () => {
 
     await user.click(screen.getByRole("button", { name: /beta/ }));
 
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
     expect(client.getStatus).not.toHaveBeenCalledWith(REPO_A.path);
     expect(client.getStatus).not.toHaveBeenCalledWith(legacy.path);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1893,7 +1938,9 @@ describe("GitClientWindow — repository list", () => {
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith("/repos/legacy"));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith("/repos/legacy", expect.anything()),
+    );
     expect(client.getStatus).not.toHaveBeenCalledWith(REPO_A.path);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -2772,7 +2819,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
 
     await user.click(screen.getByRole("button", { name: "Branch: main" }));
     const search = screen.getByRole("searchbox", { name: "Search branches" });
@@ -2821,7 +2870,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
 
     await user.click(screen.getByRole("button", { name: "New branch" }));
     const dialog = screen.getByRole("dialog", { name: "New branch" });
@@ -2888,7 +2939,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
 
     await user.click(screen.getByRole("button", { name: "New branch" }));
     const dialog = screen.getByRole("dialog", { name: "New branch" });
@@ -2922,7 +2975,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() => expect(listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()));
     const branchReadsBeforeCreate = listBranches.mock.calls.length;
 
     await user.click(screen.getByRole("button", { name: "New branch" }));
@@ -2979,7 +3032,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
 
     await user.click(screen.getByRole("button", { name: "Branch: main" }));
     await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
@@ -3008,7 +3063,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
 
     await user.click(screen.getByRole("button", { name: "Branch: main" }));
     await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
@@ -3040,7 +3097,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(() => switchPending),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Branch: main" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
@@ -3049,7 +3108,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
     fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
 
     await act(async () => {
       resolveSwitch({
@@ -3268,8 +3329,10 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const [settlement] = settlements() as ClientDiagnosticMeta[];
     expect(getStatus).toHaveBeenLastCalledWith(REPO_A.path, {
       correlationId: settlement?.correlationId,
+      signal: expect.any(AbortSignal),
     });
-    expect(getStatus.mock.calls[0]).toEqual([REPO_A.path]);
+    expect(getStatus.mock.calls[0]?.[0]).toBe(REPO_A.path);
+    expect(getStatus.mock.calls[0]?.[1]?.correlationId).toBeUndefined();
   });
 
   it("offers no read Retry for a folder that is not a Git repository", async () => {
@@ -3285,8 +3348,12 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(client.getSummary).toHaveBeenCalledWith(REPO_A.path));
-    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() =>
+      expect(client.getSummary).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
+    await waitFor(() =>
+      expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
+    );
     expect(await screen.findByText("This folder is not a Git repository.")).toBeInTheDocument();
     expect(screen.queryByText("Could not load branches.")).not.toBeInTheDocument();
     expect(screen.queryByText("Could not read the sync state.")).not.toBeInTheDocument();
@@ -3500,7 +3567,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     await waitFor(() => expect(client.syncExecute).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
     await act(async () => {
       resolveSync({
         schemaVersion: "1",
@@ -4127,6 +4196,7 @@ describe("GitClientWindow — empty / loading / error states", () => {
     // The retried request itself carries the attempt's id, joining the server's lines for it.
     expect(listBranches).toHaveBeenLastCalledWith(REPO_A.path, {
       correlationId: attempts[0]?.correlationId,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -4922,7 +4992,9 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     fireEvent.click(screen.getByLabelText("Stage README.md"));
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
     fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
 
     await act(async () => {
       resolveStage({
@@ -4954,7 +5026,9 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     fireEvent.click(screen.getByLabelText("Stage README.md"));
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
     fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
+    );
     await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
     await waitFor(() =>
       expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
@@ -5581,7 +5655,7 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
       />,
     );
     await waitFor(() => {
-      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT);
+      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT, expect.anything());
     });
     expect(
       screen.queryByText("This local repository is unavailable. Choose another repository."),
@@ -5609,7 +5683,9 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
       />,
     );
 
-    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT));
+    await waitFor(() =>
+      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT, expect.anything()),
+    );
     expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("Keiko");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("recent list unavailable")).not.toBeInTheDocument();

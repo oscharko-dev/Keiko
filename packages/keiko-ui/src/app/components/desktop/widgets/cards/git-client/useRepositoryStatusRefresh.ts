@@ -50,6 +50,9 @@ export interface AmbientRefresh {
   // Drops the status the probe kept for its own refresh: a refresh that another trigger shares
   // must read again, because that trigger may follow a change the probe's read predates.
   readonly discardProbed?: () => void;
+  // Called when a check asked for by focus, visibility or a restore finds the status unchanged: the
+  // selected working-tree diff can still differ (an already unstaged file changed again).
+  readonly refreshDiff?: () => void;
   // True while the window is not rendered (minimized, or under a hidden ancestor) although the
   // document itself is visible; nothing is probed then.
   readonly isPaused?: () => boolean;
@@ -245,6 +248,7 @@ class ProbeLoop {
   private pending = false;
   private failureReported = false;
   private disposed = false;
+  private returnCheck = false;
   private running: AbortController | undefined;
 
   constructor(
@@ -268,6 +272,7 @@ class ProbeLoop {
   requestCheck(): void {
     this.delay = AMBIENT_BASE_INTERVAL_MS;
     this.pending = true;
+    this.returnCheck = true;
     this.stop();
     this.tick();
   }
@@ -282,10 +287,11 @@ class ProbeLoop {
     this.delay = Math.min(this.delay * 2, AMBIENT_MAX_INTERVAL_MS);
   }
 
-  private settle(changed: boolean): void {
+  private settle(changed: boolean, fromReturn: boolean): void {
     if (this.disposed) return;
     this.failureReported = false;
     if (!changed) {
+      if (fromReturn) this.ambientRef.current?.refreshDiff?.();
       // A "no difference" answered while a read or mutation started meanwhile is not an answer:
       // check again once the window is quiet instead of backing off.
       if (this.ambientRef.current?.isBusy() === true) this.pending = true;
@@ -318,11 +324,13 @@ class ProbeLoop {
     }
     this.pending = false;
     this.inFlight = true;
+    const fromReturn = this.returnCheck;
+    this.returnCheck = false;
     const controller = new AbortController();
     this.running = controller;
     boundedProbe(ambient.probe, controller)
       .then(
-        (changed) => this.settle(changed),
+        (changed) => this.settle(changed, fromReturn),
         (error: unknown) => this.fail(error),
       )
       .finally((): void => {

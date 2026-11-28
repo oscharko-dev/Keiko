@@ -34,6 +34,7 @@ function setVisibility(state: "visible" | "hidden"): void {
 interface Harness {
   readonly refresh: Mock<() => void>;
   readonly probe: Mock<(signal: AbortSignal) => Promise<boolean>>;
+  readonly refreshDiff: Mock<() => void>;
   readonly state: { busy: boolean; paused: boolean; changed: boolean };
   readonly restore: () => void;
   readonly unmount: () => void;
@@ -44,6 +45,7 @@ function mount(
 ): Harness {
   const state = { busy: false, paused: false, changed: false };
   const refresh = vi.fn<() => void>();
+  const refreshDiff = vi.fn<() => void>();
   const probe = vi.fn<(signal: AbortSignal) => Promise<boolean>>(
     overrides.probe ?? (async (): Promise<boolean> => state.changed),
   );
@@ -52,6 +54,7 @@ function mount(
   const { unmount } = renderHook((): void =>
     useRepositoryStatusRefresh(path, undefined, refresh, {
       probe,
+      refreshDiff,
       isBusy: (): boolean => state.busy,
       isPaused: (): boolean => state.paused,
       watchRendered: (callback): (() => void) => {
@@ -62,7 +65,7 @@ function mount(
       },
     }),
   );
-  return { refresh, probe, state, unmount, restore: (): void => onRendered() };
+  return { refresh, refreshDiff, probe, state, unmount, restore: (): void => onRendered() };
 }
 
 async function advance(ms: number): Promise<void> {
@@ -98,6 +101,29 @@ describe("useRepositoryStatusRefresh ambient refresh (U-35)", () => {
     });
     await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // Review #4573 finding 10: a file that was already unstaged and changed again keeps its path,
+  // status and counters, so the status comparison alone leaves its diff stale.
+  it("re-reads the shown diff when a focus or restore check finds the status unchanged, not on an interval", async (): Promise<void> => {
+    const { refresh, refreshDiff, state, restore } = mount();
+    await advance(AMBIENT_BASE_INTERVAL_MS);
+    expect(refreshDiff).not.toHaveBeenCalled();
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refreshDiff).toHaveBeenCalledTimes(1);
+    act((): void => restore());
+    await advance(0);
+    expect(refreshDiff).toHaveBeenCalledTimes(2);
+    state.changed = true;
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refreshDiff).toHaveBeenCalledTimes(2);
   });
 
   it("checks when the document becomes visible and not when it becomes hidden", async (): Promise<void> => {
