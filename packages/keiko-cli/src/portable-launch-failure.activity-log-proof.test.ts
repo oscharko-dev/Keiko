@@ -12,14 +12,19 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { LAUNCH_FAILURE_REASONS } from "./launch-failure-note.js";
 import { emitPortableLaunchFailed, LaunchFailureRecorder } from "./portable-launch-failure.js";
+import {
+  SMART_APP_CONTROL_STATES,
+  type SmartAppControlState,
+} from "./windows-smart-app-control.js";
 
 function emitted(
   reason: (typeof LAUNCH_FAILURE_REASONS)[number],
   note: "written" | "failed",
+  smartAppControl: SmartAppControlState = "not-windows",
 ): SecurityLogEvent[] {
   const events: SecurityLogEvent[] = [];
   const sink: SecurityLogSink = { write: (event): void => void events.push(event) };
-  emitPortableLaunchFailed(sink, reason, note);
+  emitPortableLaunchFailed(sink, reason, note, smartAppControl);
   return events;
 }
 
@@ -33,6 +38,7 @@ describe("portable.launch.failed activity log proof", () => {
     expect(record).toMatchObject({
       reason: "port-in-use",
       launcherBox: "written",
+      smartAppControl: "not-windows",
       errorKind: "conflict",
       level: "error",
     });
@@ -55,6 +61,15 @@ describe("portable.launch.failed activity log proof", () => {
       const line = formatActivityLogProofLine(events[0] ?? {});
       const record = expectActivityLogProof("portable.launch.failed.emitted-line", line);
       expect(record).toMatchObject({ reason, launcherBox: "failed" });
+    }
+  });
+
+  // #4569: a start that Smart App Control stopped names that cause in the persisted line.
+  it("persists every closed Smart App Control state through the registered formatter", () => {
+    for (const state of SMART_APP_CONTROL_STATES) {
+      const line = formatActivityLogProofLine(emitted("process-exited", "failed", state)[0] ?? {});
+      const record = expectActivityLogProof("portable.launch.failed.emitted-line", line);
+      expect(record).toMatchObject({ reason: "process-exited", smartAppControl: state });
     }
   });
 
@@ -83,8 +98,13 @@ describe("portable.launch.failed activity log proof", () => {
     visit(catalog);
 
     expect(found.length).toBeGreaterThan(0);
-    const fields = (found[0] as { fields: { reason: { values: string[] } } }).fields;
+    const fields = (
+      found[0] as {
+        fields: { reason: { values: string[] }; smartAppControl: { values: string[] } };
+      }
+    ).fields;
     expect(fields.reason.values).toEqual([...LAUNCH_FAILURE_REASONS]);
+    expect(fields.smartAppControl.values).toEqual([...SMART_APP_CONTROL_STATES]);
   });
 
   it("keeps the first recorded reason: the earliest cause is the most specific", () => {

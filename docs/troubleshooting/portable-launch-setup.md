@@ -55,6 +55,66 @@ Gatekeeper, quarantine, or organization-managed notarization policy is blocking 
 
 ---
 
+## Smart App Control
+
+| Field             | Value                                          |
+| ----------------- | ---------------------------------------------- |
+| Severity          | Blocker                                        |
+| Surface           | Windows portable and standalone launch         |
+| Stable identifier | `portable launch blocked by Smart App Control` |
+
+**Symptom**
+
+On Windows 11 with Smart App Control on, Keiko does not start from `Keiko.exe` or from
+`Start Keiko.cmd`, and no browser tab opens. Windows may show a Smart App Control notification. When
+the start reaches the bundled Node.js runtime, the console window shows
+`keiko portable launch: Windows Smart App Control is on.` before "Keiko could not start", and the
+activity log records `portable.launch.failed` with `smartAppControl: "on"` (#4569).
+
+**Root Cause**
+
+Smart App Control lets a program file run or load only when it is signed by a trusted certificate
+or has good reputation in Microsoft's cloud service. Unlike SmartScreen it offers no per-file
+**Run anyway**, and it cannot be given an exception for one file. The bundled `node.exe` and the
+OpenCode sidecar are signed by their publishers, but Keiko's own files are not signed yet:
+`Keiko.exe`, `keiko-runtime-supervisor.exe`, `keiko-secure-workspace-read.exe`, `rg.exe` and
+`usearch.node`. Every release has new file hashes, so they also carry no reputation. A blocked
+`Keiko.exe` stops the portable form before any Keiko code runs; in the standalone folder the bundled
+Node.js starts and the block hits the first unsigned helper.
+
+**Diagnostic Steps**
+
+1. Open **Windows Security → App & browser control → Smart App Control** and read the state
+   (**On**, **Evaluation** or **Off**). Without opening the app, the same state is readable without
+   administrator rights:
+
+   ```powershell
+   reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState
+   ```
+
+   `0x1` is On, `0x2` Evaluation (nothing is blocked yet) and `0x0` Off.
+
+2. Open **Windows Security → Protection history** to see which file Smart App Control blocked.
+3. From a support report, read the `smartAppControl` field of the `portable.launch.failed` line.
+   `on` together with a failed start points to this entry; `evaluation`, `off`, `unknown` and
+   `not-windows` point to another cause.
+
+**Resolution**
+
+- Keiko cannot start under Smart App Control on until its Windows files are signed. Signing is an
+  open owner decision for the Windows release (see the portable signing contract); until then this
+  is a documented limitation, not a defect the person can fix with a setting inside Keiko.
+- Start Keiko on a computer where Smart App Control is **Off** or **Evaluation**, such as an
+  organization-managed device, where Smart App Control is normally off and the organization's own
+  application-control policy (AppLocker or WDAC) decides.
+- Do not tell users to turn Smart App Control off as the normal fix. Windows does not let a person
+  turn it back on without resetting or reinstalling Windows, so that is the person's own decision,
+  never a Keiko instruction.
+- **Run anyway**, unblocking the file in its properties, or moving the folder does not help: Smart
+  App Control checks the file itself, not its download mark.
+
+---
+
 ## Linux managed coding runtime reports confinement unavailable
 
 | Field             | Value                                                   |

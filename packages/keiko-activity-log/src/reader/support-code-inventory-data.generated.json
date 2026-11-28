@@ -119,6 +119,7 @@
     "keiko-cli/update-output",
     "keiko-cli/verify",
     "keiko-cli/windows-helper-start",
+    "keiko-cli/windows-smart-app-control",
     "keiko-connectors/adf-to-text",
     "keiko-connectors/atlassian-connection-verification",
     "keiko-connectors/atlassian-credential-custody",

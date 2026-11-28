@@ -5,6 +5,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { emitSecurityLogEvent, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { LaunchFailureReason } from "./launch-failure-note.js";
+import type { SmartAppControlState } from "./windows-smart-app-control.js";
 
 /**
  * One line for every `portable launch` that ends non-zero (#4358): the closed reason of the failure,
@@ -62,6 +63,15 @@ const PORTABLE_LAUNCH_FAILED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["written", "not-requested", "failed"],
     },
+    // The Windows Smart App Control state when the start failed (#4569): `on` names a block that
+    // "Run anyway" cannot lift. Literal, like `reason`; a test keeps it equal to
+    // SMART_APP_CONTROL_STATES.
+    smartAppControl: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["on", "evaluation", "off", "unknown", "not-windows"],
+    },
   },
   causal: "none",
   lifecycle: "failure",
@@ -84,13 +94,14 @@ export function emitPortableLaunchFailed(
   sink: SecurityLogSink | undefined,
   reason: LaunchFailureReason,
   note: "written" | "not-requested" | "failed",
+  smartAppControl: SmartAppControlState,
 ): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
       PORTABLE_LAUNCH_FAILED_OPERATION,
       { level: "error", errorKind: errorKindFor(reason) },
-      { reason, launcherBox: note },
+      { reason, launcherBox: note, smartAppControl },
     ),
   );
 }

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8fcbac381d3d6575524265912229252318d229da17bdd3a067cc1b268e645940",
+    "catalogDigest": "cd4a721541cb02f3b98031bd34c61027585f61cad3d66d93e80f50088878fc05",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -41582,6 +41582,12 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["written", "not-requested", "failed"]
+          },
+          "smartAppControl": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["on", "evaluation", "off", "unknown", "not-windows"]
           }
         },
         "causal": "none",
@@ -41590,8 +41596,8 @@
         "failureClasses": ["portable-launch-failure"],
         "proofIds": ["portable.launch.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/portable-launch-failure.ts:17",
-        "emitterSites": ["packages/keiko-cli/src/portable-launch-failure.ts:90"]
+        "registrationSite": "packages/keiko-cli/src/portable-launch-failure.ts:18",
+        "emitterSites": ["packages/keiko-cli/src/portable-launch-failure.ts:101"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -110883,6 +110889,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "smartAppControl",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
@@ -123680,7 +123692,7 @@
     {
       "op": "portable.launch.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/portable-launch-failure.ts:20",
+      "site": "packages/keiko-cli/src/portable-launch-failure.ts:21",
       "package": "keiko-cli"
     },
     {

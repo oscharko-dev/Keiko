@@ -383,7 +383,7 @@ describe("Windows CLI security-log production wiring", () => {
     commandMocks.portable.mockImplementation((_args, _io, _env, deps) => {
       const securityLogSink = createCliSecurityLogSink(stateDir, deps?.securityLogSinkFactory);
       emitLate = (): void => {
-        emitPortableLaunchFailed(securityLogSink, "launch-error", "not-requested");
+        emitPortableLaunchFailed(securityLogSink, "launch-error", "not-requested", "not-windows");
       };
       return 43;
     });
@@ -409,6 +409,7 @@ describe("Windows CLI security-log production wiring", () => {
           loss: "none",
           reason: "launch-error",
           launcherBox: "not-requested",
+          smartAppControl: "not-windows",
         },
       }),
     ]);
