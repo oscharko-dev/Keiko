@@ -56,6 +56,26 @@ afterEach(() => {
 });
 
 describe("shared EventSource with actual origin leases", () => {
+  // U-37: more background settings subscriptions than connections rotated every 5 s, and each
+  // reopen re-read the whole settings snapshot (a steady request every ~2 s while nothing changed).
+  it("rotates background streams slowly while essential ones keep their lease cadence", async () => {
+    const releases = Array.from({ length: 5 }, (_, index) =>
+      subscribeSharedEventSource(
+        `/api/editor/settings/events?root=${String(index)}`,
+        ["ready"],
+        vi.fn(),
+        { priority: "background" },
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(CapacityEventSource.instances).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(CapacityEventSource.instances).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(CapacityEventSource.instances.length).toBeGreaterThan(3);
+    releases.forEach((release) => release());
+  });
+
   // U-37: the shared pool shrinks by one connection per unshared stream, and grows back.
   it("holds fewer shared connections while unshared streams are open", async () => {
     const releaseHeld = [1, 2].map(() => holdUnbudgetedBrowserStream());

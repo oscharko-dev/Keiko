@@ -6482,6 +6482,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "delivery-step-shown",
           "repository-resolved",
           "workspace-activation-requested",
+          "runtime-readiness-retry",
         ],
       },
       section: {
@@ -6639,6 +6640,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["window-selection", "window-pinned", "shell-seed", "active-follow"],
+      },
+      readinessRetryOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["started", "recovered", "exhausted"],
+      },
+      attempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",

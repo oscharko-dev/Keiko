@@ -2395,13 +2395,12 @@ function activeRunMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode 
   return activeRunState(snapshot?.state) ? (snapshot?.effectiveMode ?? null) : null;
 }
 
-function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {
+export function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {
   const snapshot = state.run.value;
-  return (
-    (activeRunState(snapshot?.state)
-      ? snapshot?.effectiveMode
-      : state.runtime.value?.effectiveMode) ?? null
-  );
+  if (activeRunState(snapshot?.state)) return snapshot?.effectiveMode ?? null;
+  // An answer anchored to a live run states that run's posture, not what the next run will hold.
+  const readiness = state.runtime.value;
+  return readiness?.liveRunAnchored === true ? null : (readiness?.effectiveMode ?? null);
 }
 
 function bindingSelectionChanged(

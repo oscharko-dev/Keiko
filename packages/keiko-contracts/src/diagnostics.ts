@@ -2433,6 +2433,8 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // refresh and not on a click: the closed trigger names where the repository it binds came from
   // (U-3). Once per request.
   "workspace-activation-requested",
+  // A failed runtime readiness read was read again (U-37): which attempt, and how it ended.
+  "runtime-readiness-retry",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2617,6 +2619,20 @@ export const CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS = [
 export type ClientCodingWorkbenchActivationTrigger =
   (typeof CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS)[number];
 
+/**
+ * How a bounded re-read of a failed runtime readiness stands: `started` when attempt n is sent,
+ * `recovered` when it succeeded, `exhausted` when the last attempt failed and none is left.
+ */
+export const CLIENT_CODING_WORKBENCH_READINESS_RETRY_OUTCOMES = [
+  "started",
+  "recovered",
+  "exhausted",
+] as const;
+export type ClientCodingWorkbenchReadinessRetryOutcome =
+  (typeof CLIENT_CODING_WORKBENCH_READINESS_RETRY_OUTCOMES)[number];
+/** Bounds the attempt number of a readiness retry. */
+export const CLIENT_CODING_WORKBENCH_READINESS_RETRY_ATTEMPT_MAX = 16;
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2681,6 +2697,11 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | {
       readonly interaction: "workspace-activation-requested";
       readonly activationTrigger: ClientCodingWorkbenchActivationTrigger;
+    }
+  | {
+      readonly interaction: "runtime-readiness-retry";
+      readonly readinessRetryOutcome: ClientCodingWorkbenchReadinessRetryOutcome;
+      readonly attempt: number;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2709,6 +2730,9 @@ const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_ACTIVATION_TRIGGER_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS,
+);
+const CODING_WORKBENCH_READINESS_RETRY_OUTCOME_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_READINESS_RETRY_OUTCOMES,
 );
 const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
@@ -2782,6 +2806,12 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "workspace-activation-requested": {
     activationTrigger: (value) => isSetMember(value, CODING_WORKBENCH_ACTIVATION_TRIGGER_SET),
+  },
+  "runtime-readiness-retry": {
+    readinessRetryOutcome: (value) =>
+      isSetMember(value, CODING_WORKBENCH_READINESS_RETRY_OUTCOME_SET),
+    attempt: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_READINESS_RETRY_ATTEMPT_MAX),
   },
 };
 

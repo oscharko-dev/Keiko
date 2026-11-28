@@ -7856,6 +7856,12 @@
               "required": false
             },
             {
+              "name": "attempt",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "deliveryState",
               "type": "string",
               "dataClass": "closed-enum",
@@ -7905,6 +7911,12 @@
             },
             {
               "name": "progressState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "readinessRetryOutcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false

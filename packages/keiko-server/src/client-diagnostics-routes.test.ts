@@ -1745,6 +1745,10 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "workspace-activation-requested", activationTrigger: "window-selection" },
     { interaction: "workspace-activation-requested", activationTrigger: "shell-seed" },
     { interaction: "workspace-activation-requested", activationTrigger: "active-follow" },
+    // U-37: a failed readiness read read again, never a body.
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome: "started", attempt: 1 },
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome: "recovered", attempt: 2 },
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome: "exhausted", attempt: 3 },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1805,6 +1809,9 @@ describe("POST /api/diagnostics/client", () => {
     },
     { interaction: "workspace-activation-requested" },
     { interaction: "workspace-activation-requested", activationTrigger: "/repos/a" },
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome: "/repos/a", attempt: 1 },
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome: "started", attempt: -1 },
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome: "started" },
     { interaction: "repository-resolved" },
     { interaction: "repository-resolved", repositorySource: "/repos/synthetic-repository" },
     { interaction: "repository-resolved", repositorySource: "window", repositoryPath: "/repos/a" },

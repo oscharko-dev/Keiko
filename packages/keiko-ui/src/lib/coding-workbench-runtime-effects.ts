@@ -28,6 +28,10 @@ import type {
 } from "./coding-workbench-live-state";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
+import { newClientCorrelationId } from "./bff-correlation";
+import { activeRunState } from "@/app/components/desktop/widgets/coding-workbench/codingWorkbenchLabels";
+import type { ClientCodingWorkbenchReadinessRetryOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 
@@ -132,6 +136,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useRunRereadOnReturn(refreshRun);
   usePostRunDescriptionRefresh(state.run.value, refreshRun);
   useRuntimeReadinessRetry(state.runtime.status, refreshRuntime);
+  useAnchoredReadinessReread(state, refreshRuntime);
 }
 
 /** Waits before each re-read of a failed runtime readiness; after the last one the failure stays. */
@@ -142,26 +147,64 @@ export const RUNTIME_READINESS_RETRY_DELAYS_MS: readonly number[] = [2_000, 8_00
  * transient failure (a refused or reset request while the page was still reloading) left "Runtime
  * could not be refreshed" on screen, and the composer without its agent switch, although every
  * later read of the same server succeeded. A bounded, backed-off retry runs only while the
- * resource is in error and ends at the first success; it is not a polling loop.
+ * resource is in error and ends at the first success; it is not a polling loop. Each attempt, the
+ * recovery and the exhaustion are reported as body-free closed evidence under one correlation id.
  */
 function useRuntimeReadinessRetry(
   status: CodingWorkbenchResourceStatus,
   refreshRuntime: () => Promise<void>,
 ): void {
   const attempts = useRef(0);
+  const correlationId = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (status === "ready") attempts.current = 0;
+    if (status === "ready" && attempts.current > 0) {
+      reportReadinessRetry("recovered", attempts.current, correlationId.current);
+      attempts.current = 0;
+      correlationId.current = undefined;
+    }
     if (status !== "error") return;
     const delay = RUNTIME_READINESS_RETRY_DELAYS_MS[attempts.current];
-    if (delay === undefined) return;
+    if (delay === undefined) {
+      reportReadinessRetry("exhausted", attempts.current, correlationId.current);
+      return;
+    }
     const timer = window.setTimeout(() => {
       attempts.current += 1;
+      correlationId.current ??= newClientCorrelationId();
+      reportReadinessRetry("started", attempts.current, correlationId.current);
       void refreshRuntime();
     }, delay);
     return (): void => {
       window.clearTimeout(timer);
     };
   }, [status, refreshRuntime]);
+}
+
+function reportReadinessRetry(
+  readinessRetryOutcome: ClientCodingWorkbenchReadinessRetryOutcome,
+  attempt: number,
+  correlationId: string | undefined,
+): void {
+  reportCodingWorkbenchInteraction(
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome, attempt },
+    correlationId,
+  );
+}
+
+/**
+ * A readiness answer anchored to a live run states that run's posture. When the run has ended the
+ * answer is stale (the next run holds what is selected now), so it is read again once; the new
+ * answer is not anchored, which ends the effect.
+ */
+function useAnchoredReadinessReread(
+  state: CodingWorkbenchRuntimeState,
+  refreshRuntime: () => Promise<void>,
+): void {
+  const anchored = state.runtime.value?.liveRunAnchored === true;
+  const runSettled = state.run.status === "ready" && !activeRunState(state.run.value?.state);
+  useEffect(() => {
+    if (anchored && runSettled) void refreshRuntime();
+  }, [anchored, runSettled, refreshRuntime]);
 }
 
 /**

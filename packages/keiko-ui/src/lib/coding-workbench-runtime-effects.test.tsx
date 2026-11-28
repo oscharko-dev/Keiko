@@ -31,6 +31,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { fetchCodingWorkbenchSidecarGatewayProfile } from "./coding-workbench-provider-api";
 
 function jsonResponse(body: unknown): Response {
@@ -218,6 +219,108 @@ describe("useCodingWorkbenchWorkspaceEffect", () => {
 });
 
 describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
+  // U-37: an answer anchored to a live run is stale once that run has ended and is read again.
+  it("re-reads an anchored readiness once the run is no longer active", () => {
+    const refreshRuntime = vi.fn(async () => undefined);
+    const stateFor = (runState: string, anchored: boolean): CodingWorkbenchRuntimeState => ({
+      ...createInitialCodingWorkbenchRuntimeState(),
+      runtime: {
+        status: "ready",
+        value: { liveRunAnchored: anchored ? true : undefined },
+        error: null,
+      } as never,
+      run: { status: "ready", value: { runId: "run-1", state: runState }, error: null } as never,
+    });
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource: vi.fn(async () => undefined),
+          refreshRuntime,
+          refreshRun: vi.fn(async () => undefined),
+          intent: { current: { pickedModelId: null } },
+        });
+      },
+      { initialProps: { state: stateFor("running", true) } },
+    );
+    refreshRuntime.mockClear();
+    rerender({ state: stateFor("running", true) });
+    expect(refreshRuntime).not.toHaveBeenCalled();
+    rerender({ state: stateFor("succeeded", true) });
+    expect(refreshRuntime).toHaveBeenCalledOnce();
+    // The fresh answer is not anchored: nothing reads again.
+    rerender({ state: stateFor("succeeded", false) });
+    expect(refreshRuntime).toHaveBeenCalledOnce();
+  });
+
+  // U-37: every retry attempt, the recovery and the exhaustion leave closed, body-free evidence, and
+  // a pending retry never fires after the window is gone.
+  it("reports each readiness retry, the recovery and the exhaustion, and stops on unmount", () => {
+    vi.useFakeTimers();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const refreshRuntime = vi.fn(async () => undefined);
+      const withStatus = (status: "error" | "loading" | "ready"): CodingWorkbenchRuntimeState => ({
+        ...createInitialCodingWorkbenchRuntimeState(),
+        runtime: { status, value: null, error: null },
+      });
+      const { rerender, unmount } = renderHook(
+        ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshSource: vi.fn(async () => undefined),
+            refreshRuntime,
+            refreshRun: vi.fn(async () => undefined),
+            intent: { current: { pickedModelId: null } },
+          });
+        },
+        { initialProps: { state: withStatus("error") } },
+      );
+      const reported = (): unknown[] =>
+        writer.mock.calls.map(
+          ([, meta]) =>
+            (meta as { codingWorkbenchInteraction?: unknown } | undefined)
+              ?.codingWorkbenchInteraction,
+        );
+      const delays = RUNTIME_READINESS_RETRY_DELAYS_MS;
+      act(() => vi.advanceTimersByTime(delays[0] ?? 0));
+      expect(reported()).toContainEqual({
+        interaction: "runtime-readiness-retry",
+        readinessRetryOutcome: "started",
+        attempt: 1,
+      });
+      rerender({ state: withStatus("ready") });
+      expect(reported()).toContainEqual({
+        interaction: "runtime-readiness-retry",
+        readinessRetryOutcome: "recovered",
+        attempt: 1,
+      });
+      // A new failure streak runs to exhaustion.
+      for (const delay of delays) {
+        rerender({ state: withStatus("error") });
+        act(() => vi.advanceTimersByTime(delay));
+        rerender({ state: withStatus("loading") });
+      }
+      rerender({ state: withStatus("error") });
+      expect(reported()).toContainEqual({
+        interaction: "runtime-readiness-retry",
+        readinessRetryOutcome: "exhausted",
+        attempt: delays.length,
+      });
+      // Unmount while a retry is pending: it never fires.
+      rerender({ state: withStatus("ready") });
+      rerender({ state: withStatus("error") });
+      const before = refreshRuntime.mock.calls.length;
+      unmount();
+      act(() => vi.advanceTimersByTime(10 * 60_000));
+      expect(refreshRuntime.mock.calls.length).toBe(before);
+    } finally {
+      resetClientDiagnosticWriter();
+      vi.useRealTimers();
+    }
+  });
+
   // U-37: a failed readiness read stayed on screen for good because nothing re-read it, although
   // every later read of the same server succeeded.
   it("re-reads a failed runtime readiness with backoff, ends at success and gives up after the last delay", () => {
