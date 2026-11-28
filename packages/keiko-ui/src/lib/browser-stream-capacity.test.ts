@@ -890,3 +890,37 @@ describe("rank priority among replayable streams", () => {
     own.forEach((p) => p.admission.release());
   });
 });
+
+describe("one waiter takes one slot", () => {
+  it("makes exactly one of a rank-0 holder on slot 3 and a rank-1 holder on slot 0 yield", async () => {
+    vi.useFakeTimers();
+    const base = createOriginLocksFixture();
+    // A lock query takes time, as it does across processes: both holders read the waiter's marker
+    // before either of them has released its slot.
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: base.request,
+        query: async () => {
+          const snapshot = await base.query();
+          await new Promise((resolve) => window.setTimeout(resolve, 50));
+          return snapshot;
+        },
+      },
+    });
+    Reflect.deleteProperty(document, "visibilityState");
+    const lowYielded = vi.fn();
+    const midYielded = vi.fn();
+    // Direct streams take slots from the top: the first holder sits on slot 3, the fourth on slot 0.
+    const low = admitDirectBrowserStream(vi.fn(), { replayRank: 0, onYield: lowYielded });
+    const fillers = Array.from({ length: 2 }, () => admitDirectBrowserStream(() => undefined));
+    const mid = admitDirectBrowserStream(vi.fn(), { replayRank: 1, onYield: midYielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const waiterAdmitted = vi.fn();
+    const waiter = admitDirectBrowserStream(waiterAdmitted, { replayRank: 2 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(waiterAdmitted).toHaveBeenCalledOnce();
+    expect(lowYielded.mock.calls.length + midYielded.mock.calls.length).toBe(1);
+    expect(lowYielded).toHaveBeenCalledOnce();
+    [low, mid, waiter, ...fillers].forEach((admission) => admission.release());
+  });
+});

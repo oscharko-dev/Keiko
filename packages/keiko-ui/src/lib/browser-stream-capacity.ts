@@ -619,8 +619,11 @@ function reportWaiterQueryFailureOnce(lease: PersistentLease): void {
 }
 
 // Replayable streams yield lowest rank first: a higher rank waits for the lower ones to act and
-// keeps its slot if the waiter has been served meanwhile.
+// keeps its slot if the waiter has been served meanwhile. The pause is longer than the whole stagger
+// of the slots (a slot checks (index + 1) * 100 ms after the trigger), so a higher rank never reads
+// the waiter before a lower rank on a later slot has had its turn and released.
 const REPLAY_RANK_DELAY_MS = 300;
+const REPLAY_RANK_BASE_DELAY_MS = 500;
 
 async function lowerRankYieldedFirst(
   locks: LockManager,
@@ -630,7 +633,10 @@ async function lowerRankYieldedFirst(
   const rank = lease.options.replayRank ?? 0;
   if (rank === 0) return false;
   await new Promise<void>((resolve) => {
-    lease.staggerTimer = window.setTimeout(resolve, rank * REPLAY_RANK_DELAY_MS);
+    lease.staggerTimer = window.setTimeout(
+      resolve,
+      REPLAY_RANK_BASE_DELAY_MS + rank * REPLAY_RANK_DELAY_MS,
+    );
   });
   if (lease.ended) return true;
   const snapshot = await locks.query();
