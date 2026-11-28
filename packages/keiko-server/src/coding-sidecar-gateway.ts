@@ -16,10 +16,8 @@ import { currentRedactionSecrets } from "./deps.js";
 import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
-import {
-  MAX_RUNTIME_MAX_DURATION_MINUTES,
-  runtimeMaxDurationMs,
-} from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { runtimeMaxDurationMs } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
   CancelledError,
   CircuitOpenError,
