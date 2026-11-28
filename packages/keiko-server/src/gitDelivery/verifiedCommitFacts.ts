@@ -111,7 +111,12 @@ export async function readVerifiedCommitRead(
   if (raw.truncated) throw new GitRawWorktreeReadError("git-raw-snapshot-incomplete");
   logDeniedPathExclusion(seams, context.correlationId, raw.deniedPathCount);
   logLargeFilesStreamed(seams, context.correlationId, "status", raw);
-  const base = await readGitBaseState(deps, context.baseRef, raw.head);
+  const base = await readGitBaseState(
+    deps,
+    context.baseRef,
+    raw.head,
+    context.baseNeverBorn === true,
+  );
   if (raw.branch !== context.headRef) throw new Error("verified-commit-repository-drift");
   const { digest: repositoryDigest } = await readVerifiedRepositoryIdentity(
     deps,

@@ -4287,10 +4287,12 @@ describe("the first commit of a repository whose unborn branch is protected", ()
     baseRef: "main",
     headRef: "main",
   });
+  // The run's governed task-branch record says the base had no commit when the branch was cut.
   const onTaskBranch = (): VerifiedCommitRunContext => ({
     ...context(),
     baseRef: "main",
     headRef: "feature/first",
+    baseNeverBorn: true,
   });
 
   beforeEach(() => {
@@ -4337,6 +4339,31 @@ describe("the first commit of a repository whose unborn branch is protected", ()
     expect(git(["rev-parse", "feature/first"])).toBe(git(["rev-parse", "HEAD"]));
     expect(git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(git(["rev-parse", "HEAD"]));
     expect(git(["branch", "--list", "main"])).toBe("");
+  });
+
+  it("refuses a second commit whose base is gone and was never recorded as unborn", async () => {
+    await runTaskBranch({
+      context: unbornMain(),
+      mutationDeps: options.mutationDeps,
+      execution: options.execution ?? {},
+      port: { admit: () => "admitted", adopt: () => true },
+      headSha: gitZeroObjectId(40),
+      branchName: "feature/first",
+    });
+    service = createVerifiedCommitService({ ...options, context: onTaskBranch });
+    const proposalId = await verifiedProposal();
+    expect((await service.execute(proposalId, await claim(proposalId)))?.status).toBe("succeeded");
+    // The task branch now has a commit; the same base with no record is a deleted branch.
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    git(["add", "code.js"]);
+    const unrecorded = (): VerifiedCommitRunContext => ({
+      ...context(),
+      baseRef: "main",
+      headRef: "feature/first",
+    });
+    service = createVerifiedCommitService({ ...options, context: unrecorded });
+    await expect(verifiedProposal()).rejects.toThrow();
+    expect(git(["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
   it("refuses to create the branch when the unborn branch moved since the review", async () => {

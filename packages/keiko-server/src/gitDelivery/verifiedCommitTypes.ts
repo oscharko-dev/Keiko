@@ -27,6 +27,12 @@ export interface VerifiedCommitRunContext {
   readonly workspace: WorkspaceInfo;
   readonly baseRef: string;
   readonly headRef: string;
+  /**
+   * Keiko's own record that the base branch had no commit when the task branch was cut from it
+   * (#4491). Only then may a base ref that resolves to nothing be read as never born under a born
+   * HEAD; without it a missing base is a deleted branch or a typo and the read fails closed.
+   */
+  readonly baseNeverBorn?: true;
   readonly issueBindingDigest?: string;
   readonly correlationId: string;
   readonly signal?: AbortSignal;

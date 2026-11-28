@@ -1216,17 +1216,21 @@ export async function readGitHeadState(deps: NodeGitWorktreeReaderDeps): Promise
 
 /**
  * The state of a base ref relative to the HEAD it is compared with. An unborn branch is its own
- * base (a fresh repository has nothing older); a base that names no commit is itself unborn, also
- * once the task branch cut from it has its own commit, so the protected branch that was never born
- * stays a usable, drift-checked base (#4491). Any other base must resolve to a commit.
+ * base (a fresh repository has nothing older); a base that names no commit is itself unborn, and
+ * stays so once the task branch cut from it has its own commit, but only on the caller's record
+ * that it was never born (`neverBorn`, #4491). Any other base must resolve to a commit.
  */
 export async function readGitBaseState(
   deps: NodeGitWorktreeReaderDeps,
   baseRef: string,
   head: GitHeadState,
+  neverBorn = false,
 ): Promise<GitHeadState> {
   if (head.kind === "unborn" && baseRef === head.branch) return head;
-  if (await baseRefIsAbsent(deps, baseRef)) {
+  // Under an unborn HEAD an absent base is the fresh repository's own. Under a born HEAD it is never
+  // born only when the caller holds a record that says so (`neverBorn`); otherwise a base that
+  // resolves to nothing is a deleted branch or a typo and the read fails closed.
+  if ((head.kind === "unborn" || neverBorn) && (await baseRefIsAbsent(deps, baseRef))) {
     const objectIdLength =
       head.kind === "unborn" ? head.objectIdLength : await readGitObjectIdLength(deps);
     return { kind: "unborn", branch: baseRef, objectIdLength };

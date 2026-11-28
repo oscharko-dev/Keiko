@@ -732,7 +732,13 @@ async function verifiedFactsMatch(
   const head = await readGitHeadState(deps);
   const branch = head.kind === "unborn" ? head.branch : await headBranchName(deps);
   const indexDigest = await readGitIndexTreeDigest(deps);
-  const base = await readGitBaseState(deps, expected.baseRef, head);
+  // The review-time fact is the record: a base that was never born then may still be absent now.
+  const base = await readGitBaseState(
+    deps,
+    expected.baseRef,
+    head,
+    expected.base.kind === "unborn",
+  );
   return (
     sameGitHeadState(head, expected.head) &&
     branch === expected.branchName &&

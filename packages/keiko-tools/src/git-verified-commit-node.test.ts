@@ -624,7 +624,7 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     ).toBe("succeeded");
     const head = await readGitHeadState({ workspace });
     expect(head.kind).toBe("born");
-    const base = await readGitBaseState({ workspace }, "fresh", head);
+    const base = await readGitBaseState({ workspace }, "fresh", head, true);
     expect(base).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });
     writeFileSync(join(root, "code.txt"), "second\n");
     git(["add", "code.txt"]);
@@ -643,6 +643,24 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     expect(git(["rev-list", "--count", "HEAD"])).toBe("2");
     expect(git(["branch", "--list", "fresh"])).toBe("");
   });
+  // Without Keiko's record that the base was never born, a base that resolves to nothing under a
+  // born HEAD is a deleted branch or a typo: the read fails closed, as it did before the root commit.
+  it("fails closed for a base that once existed and was deleted, and for one with no record", async () => {
+    git(["checkout", "-qf", "dev"]);
+    git(["branch", "gone", "dev"]);
+    git(["branch", "-D", "gone"]);
+    const head = await readGitHeadState({ workspace });
+    expect(head.kind).toBe("born");
+    await expect(readGitBaseState({ workspace }, "gone", head)).rejects.toThrow();
+    await expect(readGitBaseState({ workspace }, "gone", head, false)).rejects.toThrow();
+    await expect(readGitBaseState({ workspace }, "gone", head, true)).resolves.toMatchObject({
+      kind: "unborn",
+      branch: "gone",
+    });
+    await expect(readGitBaseState({ workspace }, "dev", head)).resolves.toMatchObject({
+      kind: "born",
+    });
+  });
   it("treats a base ref that appeared after the review as drift", async () => {
     await adapter().createBranch({
       branchName: "feature/first",
@@ -651,7 +669,7 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     });
     await adapter().commit(await unbornCandidateOn("feature/first", "fresh"));
     const head = await readGitHeadState({ workspace });
-    const base = await readGitBaseState({ workspace }, "fresh", head);
+    const base = await readGitBaseState({ workspace }, "fresh", head, true);
     writeFileSync(join(root, "code.txt"), "second\n");
     git(["add", "code.txt"]);
     const verified = {

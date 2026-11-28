@@ -229,6 +229,19 @@ describe("resolveVerifiedCommitContext after a governed task branch (#3907)", ()
     expect(unrelated).toMatchObject({ headRef: "codex/task", baseRef: "dev" });
   });
 
+  it("marks the base never born only when the record's head is the all-zero id", () => {
+    const born = resolveVerifiedCommitContext(
+      { ...deps(runId), governedTaskBranch: () => moved },
+      binding(runId),
+    );
+    expect(born).not.toHaveProperty("baseNeverBorn");
+    const unborn = resolveVerifiedCommitContext(
+      { ...deps(runId), governedTaskBranch: () => ({ ...moved, headSha: "0".repeat(40) }) },
+      binding(runId),
+    );
+    expect(unborn).toMatchObject({ headRef: "feature/x", baseRef: "dev", baseNeverBorn: true });
+  });
+
   it("takes both branches from the record Keiko made for this run", () => {
     const asked: string[] = [];
     const context = resolveVerifiedCommitContext(
