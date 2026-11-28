@@ -24,11 +24,8 @@ import type {
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
-import {
-  nodeWorkspaceFs,
-  type WorkspaceFs,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createGitReadSession,
   createNodeGitMutationAdapter,
