@@ -41,6 +41,15 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+// U-45: the boot pairing settles on the test's own terms; by default it never does, so a test that
+// does not care about it sees no read beyond the mount reads.
+const pairingSettledMock = vi.hoisted(() => vi.fn());
+vi.mock("./coding-app-session-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./coding-app-session-client")>();
+  return { ...actual, codingAppSessionPairingSettled: pairingSettledMock };
+});
+pairingSettledMock.mockImplementation(() => new Promise<boolean>(() => undefined));
+
 const manifestAccessMock = vi.hoisted(() => vi.fn());
 vi.mock("./workspace-manifest-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./workspace-manifest-api")>();
@@ -391,6 +400,41 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
   // U-45: Start is not the first place the person may learn the model is inactive. A start the server
   // refused as "model unavailable" re-reads the source, which also asks for the catalog, so the
   // in-place activation notice appears right after the refusal.
+  // U-45: the mount reads of a window restored on a fresh page load can run before the browser's
+  // boot pairing is established and be refused; nothing re-read them afterwards, so the window never
+  // learned that the model is inactive. Once the boot pairing has settled, source and runtime
+  // posture are read once more.
+  it("reads the source and the runtime posture again once the boot pairing has settled", async () => {
+    let settle: (paired: boolean) => void = () => undefined;
+    pairingSettledMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const refreshSource = vi.fn(async () => undefined);
+    const refreshRuntime = vi.fn(async () => undefined);
+    const intent = { current: { pickedModelId: null } };
+    renderHook(() => {
+      useCodingWorkbenchRuntimeRefreshEffects({
+        state: createInitialCodingWorkbenchRuntimeState(),
+        refreshSource,
+        refreshRuntime,
+        refreshRun: vi.fn(async () => undefined),
+        intent,
+      });
+    });
+    expect(refreshSource).toHaveBeenCalledOnce();
+    expect(refreshRuntime).toHaveBeenCalledOnce();
+    await act(async () => {
+      settle(true);
+      await Promise.resolve();
+    });
+    expect(refreshSource).toHaveBeenCalledTimes(2);
+    expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, "use");
+    expect(refreshRuntime).toHaveBeenCalledTimes(2);
+  });
+
   it("re-reads the source once per start refused as model-unavailable", () => {
     const refreshSource = vi.fn(async () => undefined);
     const initial = createInitialCodingWorkbenchRuntimeState();

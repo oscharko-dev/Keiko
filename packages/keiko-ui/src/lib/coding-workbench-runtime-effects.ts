@@ -15,6 +15,7 @@ import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
 import type { CodingWorkbenchModelCheck } from "./coding-workbench-provider-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
 import {
+  codingAppSessionPairingSettled,
   useCodingAppSessionEstablishments,
   useCodingAppSessionRedemptions,
   settleCodingAppSessionUnpairedReport,
@@ -86,6 +87,37 @@ function usePickedModelRefreshEffect({
 }
 
 /**
+ * U-45: a window restored on a fresh page load mounts and reads before the browser's boot pairing
+ * has settled, so those first reads (the source, the runtime posture, and through the source the
+ * model catalog) can be refused, and nothing read them again: the window never learned that the
+ * model is inactive. Once the boot pairing has settled they are read one more time. One read per
+ * mount, not a loop; a window that unmounts first reads nothing.
+ */
+function usePostPairingReread(
+  refreshRuntime: () => Promise<void>,
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  useEffect(() => {
+    const controller = new AbortController();
+    codingAppSessionPairingSettled(controller.signal).then(
+      () => {
+        if (controller.signal.aborted) return;
+        void refreshRuntime();
+        void refreshSource(false, undefined, "use");
+      },
+      () => undefined, // aborted by unmount: the window is gone and has nothing to read for
+    );
+    return (): void => {
+      controller.abort();
+    };
+  }, [refreshRuntime, refreshSource]);
+}
+
+/**
  * U-45: a Start the server refused because the model is not admitted is the one moment the window
  * may still not know that the model is inactive (a catalog or source read that never landed). The
  * refusal therefore re-reads the source once, which also asks for the unfiltered model catalog, so
@@ -111,6 +143,19 @@ function useModelRefusalReread(
   }, [refused, refreshSource]);
 }
 
+function useModelStateRereads(input: {
+  readonly mutation: CodingWorkbenchRuntimeState["mutation"];
+  readonly refreshRuntime: () => Promise<void>;
+  readonly refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>;
+}): void {
+  useModelRefusalReread(input.mutation, input.refreshSource);
+  usePostPairingReread(input.refreshRuntime, input.refreshSource);
+}
+
 export function useCodingWorkbenchRuntimeRefreshEffects({
   state,
   refreshRuntime,
@@ -132,7 +177,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
   usePickedModelRefreshEffect({ state, refreshSource, intent });
-  useModelRefusalReread(state.mutation, refreshSource);
+  useModelStateRereads({ mutation: state.mutation, refreshRuntime, refreshSource });
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,
