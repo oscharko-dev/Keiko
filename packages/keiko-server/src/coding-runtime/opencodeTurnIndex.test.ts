@@ -674,6 +674,98 @@ describe("Restore makes the recorded index moves again", () => {
   });
 });
 
+describe("a staged entry outside the plan is never taken out of the index", () => {
+  const commit = (root: string): void => {
+    git(root, "add", "-A");
+    git(root, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "shape");
+  };
+  const child = "shape/child.txt";
+
+  function replaceWithDirectory(root: string): void {
+    rmSync(join(root, "shape"), { force: true });
+    mkdirSync(join(root, "shape"));
+    writeFileSync(join(root, child), "person\n");
+    git(root, "add", child);
+  }
+
+  function replaceWithFile(root: string): void {
+    rmSync(join(root, "shape"), { recursive: true, force: true });
+    writeFileSync(join(root, "shape"), "person\n");
+    git(root, "add", "shape");
+  }
+
+  it("refuses an Undo that would restore a file over the person's staged child", async () => {
+    const root = repository();
+    writeFileSync(join(root, "shape"), "head\n");
+    commit(root);
+    const record = await turn(root, () => git(root, "rm", "-q", "--", "shape"), ["shape"]);
+    replaceWithDirectory(root);
+    const before = git(root, "ls-files", "-s");
+
+    const result = await restoreTurnIndex(root, record, governedOf(record));
+
+    expect(result).toEqual({ outcome: "changed-after-turn", restoredCount: 0 });
+    expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+
+  it("refuses an Undo that would restore a child under the person's staged file", async () => {
+    const root = repository();
+    mkdirSync(join(root, "shape"));
+    writeFileSync(join(root, child), "head\n");
+    commit(root);
+    const record = await turn(root, () => git(root, "rm", "-q", "--", child), [child]);
+    replaceWithFile(root);
+    const before = git(root, "ls-files", "-s");
+
+    const result = await restoreTurnIndex(root, record, governedOf(record));
+
+    expect(result.outcome).not.toBe("restored");
+    expect(result.restoredCount).toBe(0);
+    expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+
+  it("refuses a Restore that would put a file over the person's staged child", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "shape"), "turn\n");
+      git(root, "add", "shape");
+    }, ["shape"]);
+    let moves: TurnIndexMoves | undefined;
+    await restoreTurnIndex(root, record, governedOf(record), (made) => {
+      moves = made;
+    });
+    if (moves === undefined) throw new Error("nothing was undone");
+    replaceWithDirectory(root);
+    const before = git(root, "ls-files", "-s");
+
+    const result = await reapplyTurnIndexMoves(root, moves);
+
+    expect(result).not.toBe("restored");
+    expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+
+  it("refuses a Restore that would put a child under the person's staged file", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      mkdirSync(join(root, "shape"));
+      writeFileSync(join(root, child), "turn\n");
+      git(root, "add", child);
+    }, [child]);
+    let moves: TurnIndexMoves | undefined;
+    await restoreTurnIndex(root, record, governedOf(record), (made) => {
+      moves = made;
+    });
+    if (moves === undefined) throw new Error("nothing was undone");
+    replaceWithFile(root);
+    const before = git(root, "ls-files", "-s");
+
+    const result = await reapplyTurnIndexMoves(root, moves);
+
+    expect(result).not.toBe("restored");
+    expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+});
+
 describe("paths are literal, never pathspec patterns", () => {
   // `:` cannot appear in a Windows file name.
   const magic = process.platform === "win32" ? [] : [":(top).txt"];

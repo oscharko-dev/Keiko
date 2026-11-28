@@ -684,12 +684,34 @@ async function moveCopy(
   if (inside.headSha !== plan.headSha) return "changed";
   for (const [path, state] of plan.expected) if (stateOf(inside, path) !== state) return "changed";
   if (!(await applyTargetState(run, plan))) return "failed";
-  const after = await readIndexImage(run);
-  const held =
-    typeof after === "object" &&
-    after.headSha === plan.headSha &&
-    [...plan.target].every(([path, state]) => stateOf(after, path) === state);
-  return held ? "applied" : "failed";
+  return judgeAppliedCopy(inside, await readIndexImage(run), plan);
+}
+
+/**
+ * Whether the private copy may replace the live index: every planned path holds its target entry
+ * and nothing outside the plan changed. A file and a directory of one name cannot both be in the
+ * index, so putting a planned path back can take a person's staged entry below (or above) it out
+ * with it; such a collision is drift with the person's staging and the copy is never promoted.
+ */
+function judgeAppliedCopy(
+  inside: TurnIndexImage,
+  after: IndexRead,
+  plan: MovePlan,
+): TransactionResult {
+  if (typeof after !== "object" || after.headSha !== plan.headSha) return "failed";
+  if (![...plan.target].every(([path, state]) => stateOf(after, path) === state)) return "failed";
+  return outsidePlanUnchanged(inside, after, plan.target) ? "applied" : "changed";
+}
+
+function outsidePlanUnchanged(
+  before: TurnIndexImage,
+  after: TurnIndexImage,
+  target: ReadonlyMap<string, string>,
+): boolean {
+  const paths = new Set([...before.staged.keys(), ...after.staged.keys()]);
+  return [...paths].every(
+    (path) => target.has(path) || stateOf(before, path) === stateOf(after, path),
+  );
 }
 
 /** One recorded index entry (`mode oid`) for a path, ready for `update-index --cacheinfo`. */
