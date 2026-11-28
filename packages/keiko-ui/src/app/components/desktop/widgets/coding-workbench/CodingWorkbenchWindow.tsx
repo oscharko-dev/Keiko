@@ -973,9 +973,10 @@ function useRunChannels(run: WorkbenchRunValue): WorkbenchRunChannels {
   return { research, skills };
 }
 
-// An alert belongs to the attempt that produced it: another repository or another task shown in
-// the window ends it (U-42). The first render is no switch.
-function useDismissRefusalOnTaskSwitch(
+// An alert belongs to the attempt that produced it: leaving a repository or a task shown in the
+// window ends it (U-42). The first render and the first load of a repository or task are no
+// switch, so a refusal that arrives while the window is still settling stays.
+export function useDismissRefusalOnTaskSwitch(
   dismissRefusal: () => void,
   root: string | undefined,
   detail: CodingTaskSession["detail"],
@@ -983,9 +984,13 @@ function useDismissRefusalOnTaskSwitch(
   const taskId = detail?.task.id;
   const seen = useRef({ root, taskId });
   useEffect(() => {
-    if (seen.current.root === root && seen.current.taskId === taskId) return;
+    const before = seen.current;
+    if (before.root === root && before.taskId === taskId) return;
     seen.current = { root, taskId };
-    dismissRefusal();
+    const left =
+      (before.root !== undefined && before.root !== root) ||
+      (before.taskId !== undefined && before.taskId !== taskId);
+    if (left) dismissRefusal();
   }, [dismissRefusal, root, taskId]);
 }
 

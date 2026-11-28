@@ -400,6 +400,24 @@ function isAcknowledgedRecoveryRequired(state: CodingWorkbenchRuntimeState): boo
   );
 }
 
+function withoutMutationError(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  return state.mutation.status === "error"
+    ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
+    : state;
+}
+
+// The error was raised against the run that is still live (not a finished one, not no run at all).
+function failedAgainstLiveRun(state: CodingWorkbenchRuntimeState): boolean {
+  const runId = state.mutation.failedAgainst?.runId;
+  const run = state.run.value;
+  return (
+    runId !== undefined &&
+    runId !== null &&
+    run?.runId === runId &&
+    !STARTABLE_RUN_STATES.has(run.state)
+  );
+}
+
 const MODEL_UNAVAILABLE_ERROR_CODE = "CODING_RUNTIME_MODEL_UNAVAILABLE";
 
 // A start refused because the selected model was not admitted belongs to that model: choosing
@@ -783,14 +801,11 @@ const runtimeActionHandlers = {
   "mutation-complete": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: IDLE_MUTATION }),
   // A refusal belongs to the session it was given under; a new session shows the present instead.
-  "session-renewed": (state): CodingWorkbenchRuntimeState =>
-    state.mutation.status === "error"
-      ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
-      : state,
+  "session-renewed": (state): CodingWorkbenchRuntimeState => withoutMutationError(state),
+  // Leaving a task ends the alert of its refused start, never the failure of a run that is still
+  // live (a failed stop, approval or recovery acknowledgement): that failure still applies (U-42).
   "refusal-dismissed": (state): CodingWorkbenchRuntimeState =>
-    state.mutation.status === "error"
-      ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
-      : state,
+    failedAgainstLiveRun(state) ? state : withoutMutationError(state),
   "mutation-cancelled": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: CANCELLED_MUTATION }),
   "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>

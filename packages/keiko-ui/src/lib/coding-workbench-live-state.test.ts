@@ -1047,6 +1047,33 @@ describe("a refused action belongs to the attempt that produced it (U-42, U-46)"
     expect(left.mutation).toMatchObject({ status: "idle", error: null });
   });
 
+  it("keeps the failure of a run that is still live when a task is left", () => {
+    const live = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({ runId: "run-1", state: "running", pendingPermission: undefined }),
+    });
+    const failedStop = codingWorkbenchRuntimeReducer(live, {
+      kind: "mutation-failed",
+      error: { code: "CODING_RUNTIME_STOP_FAILED", message: "redacted", retryable: true },
+    });
+    expect(codingWorkbenchRuntimeReducer(failedStop, { kind: "refusal-dismissed" })).toBe(
+      failedStop,
+    );
+  });
+
+  it("clears the failure of a run that has ended when a task is left", () => {
+    const ended = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({ runId: "run-1", state: "succeeded", pendingPermission: undefined }),
+    });
+    const failed = codingWorkbenchRuntimeReducer(ended, {
+      kind: "mutation-failed",
+      error: { code: "CODING_RUNTIME_INVALID_INTENT", message: "redacted", retryable: true },
+    });
+    const left = codingWorkbenchRuntimeReducer(failed, { kind: "refusal-dismissed" });
+    expect(left.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
   it("never ends a pending action when a task is left", () => {
     const pending = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "mutation-start",
