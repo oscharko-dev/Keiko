@@ -300,3 +300,21 @@ regexes = [
   '''^\n?const SECRET = "planted-Secret-8f31c2d9";$''',
   '''^\n?[ \t]*"registry=\$\{NPM_REGISTRY\}\\n@a:registry=https://\$\{HOST_NAME\}/x/\\n//evil\.example/:_authToken=tok-0123456789",$''',
 ]
+
+[[allowlists]]
+description = "PR #4573: the synthetic curl basic-auth fixtures of the command-line credential redaction test in two immutable branch checkpoints. The password hunter2 is the classic placeholder and the host is example.test; the test proves the value is masked. The current fixtures assemble the value at runtime. Only these exact fixture lines in these two commits are exempt."
+condition = "AND"
+commits = ["3c22bea73bd4244fa5dcfe767acf6ee83fa27de1", "9e0bac627a43f19aa5cffe4e04387be8c1c2d77e"]
+paths = ['''^packages/keiko-server/src/coding-runtime/commandLineRedaction\.test\.ts$''']
+targetRules = ["curl-auth-user"]
+regexTarget = "line"
+regexes = ['''^\s*\["curl (?:-u |-u|--user )admin:hunter2 https://example\.test", "hunter2"\],$''']
+
+[[allowlists]]
+description = "PR #4573: the synthetic api_key field inside a quoted diff path of the diff-header redaction property test in one immutable branch checkpoint. The value is a made-up sequence the test proves is masked. The current fixture assembles it at runtime. Only this exact fixture line in this one commit is exempt."
+condition = "AND"
+commits = ["2b55ec802e2ed2b036033869e93a17d9ea2fccf1"]
+paths = ['''^packages/keiko-security/src/redaction-diff-quoted-paths\.property\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*'diff --git "a/caf\\\\303\\\\251 api_key=abcd1234efgh5678" "b/y"',$''']

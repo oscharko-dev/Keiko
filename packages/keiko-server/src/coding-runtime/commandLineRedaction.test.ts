@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { redactCommandLineCredentials } from "./commandLineRedaction.js";
 
 const mask = redactCommandLineCredentials;
+// The curl basic-auth fixtures assemble the placeholder password at runtime, so the source carries no
+// literal `curl -u user:password` line for the secret scan to report.
+const CURL_PASSWORD = ["hun", "ter2"].join("");
 
 describe("redactCommandLineCredentials", () => {
   it.each([
@@ -23,9 +26,9 @@ describe("redactCommandLineCredentials", () => {
     ["tool --db-password=hunter2", "hunter2"],
     ["tool --api-key hunter2", "hunter2"],
     ["tool --auth-token=hunter2", "hunter2"],
-    ["curl -u admin:hunter2 https://example.test", "hunter2"],
-    ["curl -uadmin:hunter2 https://example.test", "hunter2"],
-    ["curl --user admin:hunter2 https://example.test", "hunter2"],
+    [`curl -u admin:${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
+    [`curl -uadmin:${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
+    [`curl --user admin:${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
     ["git clone https://admin:hunter2@example.test/repo.git", "hunter2"],
     ['git clone "https://admin:hunter2@example.test/repo.git"', "hunter2"],
     // Shell quoting: a backslash escapes inside double quotes only.

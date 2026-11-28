@@ -150,6 +150,8 @@ describe("a path header Git would not have written stays refused", () => {
 
 const TOKEN_TAIL = "hp_0123456789abcdefghijklmnopqrstuvwxyzAB";
 const OCTAL_G = "\\147";
+// Assembled at runtime so the source carries no literal `api_key=<value>` for the secret scan.
+const API_KEY_VALUE = ["abcd1234", "efgh5678"].join("");
 
 function patchAround(headerLine: string): string {
   // A rename record belongs to a file section, so it follows that section's `diff --git` line.
@@ -172,7 +174,7 @@ describe("a credential spelled in a path header never reaches the output", () =>
     ],
     [
       "an api key field in a quoted path",
-      'diff --git "a/caf\\303\\251 api_key=abcd1234efgh5678" "b/y"',
+      `diff --git "a/caf\\303\\251 api_key=${API_KEY_VALUE}" "b/y"`,
     ],
     [
       "an octal-spelled token on a rename line",
@@ -180,7 +182,7 @@ describe("a credential spelled in a path header never reaches the output", () =>
     ],
   ])("masks %s", (_label, header) => {
     const redacted = redact(patchAround(header));
-    for (const value of [TOKEN_TAIL, "hunter2hunter2", "abcd1234efgh5678"])
+    for (const value of [TOKEN_TAIL, "hunter2hunter2", API_KEY_VALUE])
       expect(redacted).not.toContain(value);
   });
 
