@@ -898,6 +898,18 @@ export type CodingWorkbenchRuntimeRevertAction = "undo" | "restore";
 export const CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS: readonly CodingWorkbenchRuntimeRevertAction[] =
   Object.freeze(["undo", "restore"] as const);
 
+/**
+ * The run states a revert is admitted in, one owner for the server's admission and the browser's
+ * gate (U-41): a live run (`running`, `paused`) and a settled run whose healthy runtime the server
+ * holds for the post-completion undo window (`succeeded`, `failed`, #3904 AC3). A failed run keeps
+ * its edits, so it keeps the undo too.
+ */
+export const CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES: readonly CodingWorkbenchRuntimeStateName[] =
+  Object.freeze(["running", "paused"] as const);
+
+export const CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES: readonly CodingWorkbenchRuntimeStateName[] =
+  Object.freeze(["succeeded", "failed"] as const);
+
 export function isCodingWorkbenchRuntimeRevertAction(
   value: unknown,
 ): value is CodingWorkbenchRuntimeRevertAction {

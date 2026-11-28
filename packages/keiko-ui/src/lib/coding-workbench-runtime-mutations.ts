@@ -19,6 +19,8 @@ import {
   type CodingWorkbenchRuntimeForkRequest,
   type CodingWorkbenchRuntimeInboxAction,
   type CodingWorkbenchRuntimeRevertAction,
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+  CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
@@ -400,12 +402,21 @@ export function createFollowUpMutation(
   };
 }
 
-// A succeeded run is admitted while the server holds its runtime for undo (#3904 AC3).
-const REVERT_STATES: ReadonlySet<string> = new Set(["running", "paused", "succeeded"]);
+// A settled run (succeeded or failed) is admitted while the server holds its runtime for undo
+// (#3904 AC3); the contract owns the list so the browser gate cannot drift from the server (U-41).
+const REVERT_STATES: ReadonlySet<string> = new Set([
+  ...CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
+  ...CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+]);
+
+/** Whether a revert is admitted in this run state: the one rule the button and the gate share. */
+export function revertAdmitsRunState(state: string | undefined): boolean {
+  return state !== undefined && REVERT_STATES.has(state);
+}
 
 /**
  * Undo or restore of the run's newest turn (B3, S04): bound to the observed revision like a
- * follow-up, and only against a live run or a succeeded run whose undo window is open. The server
+ * follow-up, and only against a live run or a settled run whose undo window is open. The server
  * refuses everything else; this keeps the browser from sending a request it knows cannot be
  * admitted.
  */
@@ -415,7 +426,7 @@ export function createRevertMutation(
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
-  if (!runId || snapshot === null || !REVERT_STATES.has(snapshot.state))
+  if (!runId || snapshot === null || !revertAdmitsRunState(snapshot.state))
     throw codingWorkbenchRuntimeActionError(
       "The last turn can only be undone while the run is open.",
     );

@@ -11,6 +11,8 @@ import type { OpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthori
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   isCodingWorkbenchAgent,
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+  CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
   isCodingWorkbenchRuntimeRevertAction,
   parseCodingWorkbenchRuntimeFollowUpRequest,
   parseCodingWorkbenchRuntimeInboxRequest,
@@ -329,7 +331,15 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
 ]);
-const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(["succeeded", "failed"]);
+const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+);
+
+/** Every state a revert is admitted in: the shared contract owns the list the browser also gates on. */
+const REVERT_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
+  ...CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
+  ...CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+]);
 
 const REVERT_KEYS = ["requestId", "expectedRevision", "action"] as const;
 const INBOX_KEYS = ["requestId", "expectedRevision", "action", "itemId"] as const;
@@ -1430,7 +1440,7 @@ function admittedRevertAction(
 ): CodingWorkbenchRuntimeRevertAction | undefined {
   if (!operation.ok) return undefined;
   const { state } = operation.current;
-  if (!FOLLOW_UP_STATES.has(state) && !HELD_STATES.has(state)) return undefined;
+  if (!REVERT_STATES.has(state)) return undefined;
   const action = operation.value.action;
   return isCodingWorkbenchRuntimeRevertAction(action) ? action : undefined;
 }

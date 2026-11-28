@@ -173,6 +173,7 @@ import {
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
+import { revertAdmitsRunState } from "@/lib/coding-workbench-runtime-mutations";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
 import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
@@ -511,14 +512,6 @@ function selectedResumeMode(
  * when the run is waiting for the very action the trust notice is offering. A reasonless pause is
  * the operator's own, and keeps resuming exactly as it always has.
  */
-
-/** Run states whose undo counts the Workbench reads (B3, #3904 AC3). */
-const REVERT_READ_STATES: ReadonlySet<string> = new Set([
-  "running",
-  "paused",
-  "succeeded",
-  "failed",
-]);
 
 export function operatorResumeAvailable(
   resumeMode: CodingWorkbenchMode | null,
@@ -1999,7 +1992,7 @@ function WorkbenchColumns(
   // no counts once that window has closed.
   const revert = useCodingWorkbenchRevert({
     runId: state.run.value?.runId,
-    live: REVERT_READ_STATES.has(state.run.value?.state ?? ""),
+    live: revertAdmitsRunState(state.run.value?.state),
     revision: state.run.value?.revision,
     changeSignal: changesSignal,
   });

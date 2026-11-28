@@ -2,6 +2,10 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 
 import { describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS,
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import {
   expectActivityLogProof,
@@ -1931,6 +1935,26 @@ describe("CodingRuntimeOperationCoordinator held run undo", () => {
       ok: false,
     });
   });
+
+  it.each(
+    CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES.flatMap((heldState) =>
+      CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS.map((action) => [heldState, action] as const),
+    ),
+  )(
+    "admits every state the shared revert contract names: a held %s run takes %s (U-41)",
+    async (heldState, action) => {
+      const revert = vi.fn<Revert>(() => Promise.resolve({ ok: true, ...state }));
+      const subject = coordinator({
+        taskDispatcher: dispatcher({ revert }),
+        current: () => undefined,
+        held: () => heldSnapshot({ state: heldState }),
+      });
+      await expect(
+        subject.submitRevert("run-1", { ...revertBody(), action }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(revert).toHaveBeenCalledOnce();
+    },
+  );
 
   it("refuses a stale revision and a reused request id, and reverts nothing for them", async () => {
     const revert = vi.fn<Revert>(() =>
