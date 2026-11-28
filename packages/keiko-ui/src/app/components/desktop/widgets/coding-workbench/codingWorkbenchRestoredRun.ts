@@ -479,6 +479,31 @@ function countKey(counts: Map<string, number>, key: string): void {
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
+function feedMessageCounts(
+  feeds: UseCodingWorkbenchSafeActivityResult["earlierFeeds"],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const feed of feeds ?? []) {
+    for (const turn of feed.turns) {
+      for (const message of turn.messages) {
+        const text = message.segments.map((segment) => segment.text).join("");
+        if (text.trim().length > 0)
+          countKey(counts, earlierMessageKey(feed.runId, message.role, text));
+      }
+    }
+  }
+  return counts;
+}
+
+function storedMessageCounts(history: readonly ChatMessage[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const message of history) {
+    if (message.runId === undefined) continue;
+    countKey(counts, earlierMessageKey(message.runId, message.role, message.content));
+  }
+  return counts;
+}
+
 // The messages the timeline shows from the feeds of earlier runs, by run, role and text. A key is
 // carried only when the feed holds at least as many occurrences as Coding History does: with fewer,
 // which stored occurrence the feed kept is unknowable, so every one of them stays readable in the
@@ -487,24 +512,9 @@ function carriedEarlierMessageKeys(
   feeds: UseCodingWorkbenchSafeActivityResult["earlierFeeds"],
   history: readonly ChatMessage[],
 ): ReadonlySet<string> {
-  const carried = new Map<string, number>();
-  for (const feed of feeds ?? []) {
-    for (const turn of feed.turns) {
-      for (const message of turn.messages) {
-        const text = message.segments.map((segment) => segment.text).join("");
-        if (text.trim().length > 0)
-          countKey(carried, earlierMessageKey(feed.runId, message.role, text));
-      }
-    }
-  }
-  const stored = new Map<string, number>();
-  for (const message of history) {
-    if (message.runId !== undefined) {
-      countKey(stored, earlierMessageKey(message.runId, message.role, message.content));
-    }
-  }
+  const stored = storedMessageCounts(history);
   const keys = new Set<string>();
-  for (const [key, count] of carried) {
+  for (const [key, count] of feedMessageCounts(feeds)) {
     if (count >= (stored.get(key) ?? 0)) keys.add(key);
   }
   return keys;

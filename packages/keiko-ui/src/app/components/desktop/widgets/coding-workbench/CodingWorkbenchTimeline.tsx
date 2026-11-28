@@ -731,22 +731,33 @@ function markPairedGitProposals(items: readonly TimelineItem[]): readonly Timeli
   const marked = [...items];
   const open = new Map<string, number>();
   marked.forEach((item, index) => {
-    const key = item.kind === "tool" ? gitProposalKey(item) : undefined;
-    if (item.kind !== "tool" || key === undefined) return;
+    if (item.kind !== "tool") return;
+    const key = gitProposalKey(item);
+    if (key === undefined) return;
     if (item.tool.tool !== "keiko_git_execute") {
       if (isOpenGitProposal(item.tool)) open.set(key, index);
       return;
     }
-    const at = open.get(key);
-    const proposal = at === undefined ? undefined : marked[at];
-    if (at === undefined || proposal?.kind !== "tool") return;
-    const label = proposalLabelKey(proposal.tool);
-    if (label !== undefined) marked[index] = { ...item, redeemedLabel: label };
-    if (!executeCompleted(item.tool)) return;
-    markSuperseded(marked, [at]);
-    open.delete(key);
+    redeemPairedProposal(marked, open, key, index);
   });
   return marked;
+}
+
+function redeemPairedProposal(
+  marked: TimelineItem[],
+  open: Map<string, number>,
+  key: string,
+  executeIndex: number,
+): void {
+  const execute = marked[executeIndex];
+  const at = open.get(key);
+  const proposal = at === undefined ? undefined : marked[at];
+  if (execute?.kind !== "tool" || at === undefined || proposal?.kind !== "tool") return;
+  const label = proposalLabelKey(proposal.tool);
+  if (label !== undefined) marked[executeIndex] = { ...execute, redeemedLabel: label };
+  if (!executeCompleted(execute.tool)) return;
+  markSuperseded(marked, [at]);
+  open.delete(key);
 }
 
 /**

@@ -70,7 +70,10 @@ import type {
   GitChangeSnapshotService,
   GitChangeSnapshotCaptureInput,
 } from "../gitChangeSnapshotService.js";
-import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+import type {
+  GitChangeSnapshot,
+  GitChangeSnapshotUnavailableReason,
+} from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
   authorizeGitDeliveryModelEgress,
   type GitDeliveryDescriptionAuthorityPort,
@@ -1543,6 +1546,15 @@ function minimalWorkspaceInfo(root: string): WorkspaceInfo {
   };
 }
 
+// A HEAD or ref that moved during the capture is proven drift, not a missing capability: it keeps
+// its stale reason so the card shows it. Every other unavailable reason has no draft to show.
+function unavailableCaptureOutcome(
+  reason: GitChangeSnapshotUnavailableReason,
+): ProductionWorkbenchDescriptionOutcome {
+  const drifted = reason === "head-mismatch" || reason === "revision-mismatch";
+  return { reason: drifted ? "stale-snapshot" : "generation-unavailable" };
+}
+
 async function dispatchWorkbenchDescription(
   deps: ProductionWorkbenchDescriptionDeps,
   scope: WorkbenchDescriptionScope,
@@ -1563,12 +1575,7 @@ async function dispatchWorkbenchDescription(
   const capture = await deps.snapshots.capture(captureInput);
   const captured = capture.snapshot;
   if (captured.outcome === "failed") return { reason: "provider-failed" };
-  if (captured.outcome === "unavailable") {
-    // A HEAD or ref that moved during the capture is proven drift, not a missing capability: it
-    // keeps its stale reason so the card shows it. Every other unavailable reason has no draft.
-    const drifted = captured.reason === "head-mismatch" || captured.reason === "revision-mismatch";
-    return { reason: drifted ? "stale-snapshot" : "generation-unavailable" };
-  }
+  if (captured.outcome === "unavailable") return unavailableCaptureOutcome(captured.reason);
   if (capture.reference === undefined) return { reason: "generation-unavailable" };
   if (captured.remoteDigest !== scope.remoteDigest) return { reason: "stale-snapshot" };
   if (captured.baseSha !== scope.baseSha || captured.headSha !== scope.headSha) {

@@ -2257,9 +2257,7 @@ describe("CodingToolFacade", () => {
       failureOrigin: "keiko-refused",
       refusalCause: cause,
     });
-    expect(
-      codingToolHumanDecisionPresentation({ status: "denied", evidence: [] } as CodingToolResult),
-    ).toEqual({});
+    expect(codingToolHumanDecisionPresentation({ status: "denied", evidence: [] })).toEqual({});
   });
 
   // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.

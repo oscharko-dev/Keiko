@@ -190,6 +190,29 @@ function RetryButton({
   );
 }
 
+// Complete task, New task and Try again each remove or disable the control that was activated, so
+// each hands the keyboard focus over once the action has settled.
+function withFocusHandover(
+  session: CodingTaskSession,
+  awaitFocus: (action: () => Promise<void>) => Promise<void>,
+): CodingTaskSession {
+  const repeat = session.retry;
+  return {
+    ...session,
+    finish: () => awaitFocus(session.finish),
+    newTask: () => awaitFocus(session.newTask),
+    retry:
+      repeat === undefined
+        ? undefined
+        : (): void => {
+            void awaitFocus(() => {
+              repeat();
+              return Promise.resolve();
+            });
+          },
+  };
+}
+
 export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const { session } = props;
   const t = useCodingWorkbenchTranslate();
@@ -200,23 +223,7 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const errorHeld = useHeldNotice("task-session", session.error);
   const error = session.error && !errorHeld;
   if (session.detail === null && !session.pending && !error) return null;
-  const repeat = session.retry;
-  const marked: CodingTaskSession = {
-    ...session,
-    finish: () => awaitFocus(session.finish),
-    newTask: () => awaitFocus(session.newTask),
-    // A successful Try again removes the button that held the focus: it hands the focus over like
-    // the first Complete task did.
-    retry:
-      repeat === undefined
-        ? undefined
-        : () => {
-            void awaitFocus(() => {
-              repeat();
-              return Promise.resolve();
-            });
-          },
-  };
+  const marked = withFocusHandover(session, awaitFocus);
   return (
     <div ref={barRef} className={styles.cmpSessionBar}>
       {session.detail !== null ? (
