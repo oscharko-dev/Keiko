@@ -90,6 +90,7 @@ import {
   type GitStageEffectContext,
   type GitStageLineEndings,
 } from "./git-stage-node.js";
+import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import { withGitBranchRefLocks } from "@oscharko-dev/keiko-workspace/internal/git-index";
 
@@ -481,9 +482,40 @@ function verifiedIndexEffect(
     filterDriverNames: () => (filterDrivers ??= readStageConfig(ctx).then((c) => c?.filterDrivers)),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
     signal: ctx.signal,
-    run: (argv, stdin, indexPath, timeoutMs) =>
-      runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin, timeoutMs),
+    run: (argv, stdin, indexPath, timeoutMs, quarantine) =>
+      runOne(
+        withObjectQuarantine(
+          indexPath === undefined ? ctx : withIndexPath(ctx, indexPath),
+          quarantine,
+        ),
+        argv,
+        stdin,
+        timeoutMs,
+      ),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
+  };
+}
+
+// Objects the run writes go to the quarantine; the live store stays readable as an alternate so an
+// object that already exists is recognised and not written again.
+function withObjectQuarantine(
+  ctx: RunContext,
+  quarantine: GitObjectQuarantine | undefined,
+): RunContext {
+  if (quarantine === undefined) return ctx;
+  return {
+    ...ctx,
+    runDeps: {
+      ...ctx.runDeps,
+      policy: {
+        ...ctx.runDeps.policy,
+        pinnedEnv: {
+          ...ctx.runDeps.policy.pinnedEnv,
+          GIT_OBJECT_DIRECTORY: quarantine.directory,
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: quarantine.liveDirectory,
+        },
+      },
+    },
   };
 }
 

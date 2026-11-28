@@ -4,7 +4,9 @@ import {
   type Stats,
   fstatSync,
   lstatSync,
+  mkdirSync,
   openSync,
+  readdirSync,
   readlinkSync,
   renameSync,
   rmSync,
@@ -24,9 +26,21 @@ import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 
 const MAX_INDEX_BYTES = 16_777_216;
+/**
+ * A private object directory for candidate objects Git writes by path: nothing in it is visible to
+ * the repository until `publish` moves the objects that passed every check into the live store, so
+ * bytes that were refused never become readable Git objects. It lives inside the live `objects`
+ * directory (as Git's own receive quarantine does), so publishing is a rename on one filesystem.
+ */
+export interface GitObjectQuarantine {
+  readonly directory: string;
+  readonly liveDirectory: string;
+  readonly publish: () => void;
+}
 export interface GitIndexTransaction {
   readonly temporaryIndexPath: string;
   readonly check: () => boolean;
+  readonly openObjectQuarantine: () => GitObjectQuarantine;
 }
 
 /**
@@ -54,12 +68,17 @@ export async function withGitIndexTransaction<T>(
   const temporaryIndexPath = join(base.path, `.keiko-index-${randomUUID()}`);
   const check = (): boolean => sameDirectory(base.path, directory) && sameLock(lock, descriptor);
   const temporary = { owned: false };
+  const quarantines: string[] = [];
   try {
     if (!check()) throw new Error("git-index-metadata-drift");
     const indexExisted = await copyIndex(fs, base.path, temporaryIndexPath, () => {
       temporary.owned = true;
     });
-    const result = await mutate({ temporaryIndexPath, check });
+    const result = await mutate({
+      temporaryIndexPath,
+      check,
+      openObjectQuarantine: () => openObjectQuarantine(base.path, quarantines),
+    });
     if (accept(result)) {
       if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base.path)
         throw new Error("git-index-metadata-drift");
@@ -68,7 +87,46 @@ export async function withGitIndexTransaction<T>(
     }
     return result;
   } finally {
+    for (const quarantine of quarantines) rmSync(quarantine, { recursive: true, force: true });
     cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
+  }
+}
+const LOOSE_FAN_OUT = /^[0-9a-f]{2}$/u;
+const LOOSE_OBJECT_REST = /^[0-9a-f]{38,62}$/u;
+// The live object directory a gitdir writes to: a linked worktree shares its main repository's.
+function liveObjectsOf(gitdir: string): string {
+  const live = join(branchRefsBase(gitdir), "objects");
+  if (!lstatSync(live).isDirectory()) throw new Error("git-object-store-unavailable");
+  return live;
+}
+function openObjectQuarantine(gitdir: string, owned: string[]): GitObjectQuarantine {
+  const liveDirectory = liveObjectsOf(gitdir);
+  const directory = join(liveDirectory, `incoming-keiko-${randomUUID()}`);
+  mkdirSync(directory, { mode: 0o700 });
+  owned.push(directory);
+  return {
+    directory,
+    liveDirectory,
+    publish: (): void => {
+      publishQuarantine(directory, liveDirectory);
+    },
+  };
+}
+// Moves every loose object of the quarantine into the live store; an object that is already there
+// is the same content, so it is left alone. Any other entry in the quarantine fails closed.
+function publishQuarantine(directory: string, liveDirectory: string): void {
+  for (const fanOut of readdirSync(directory)) {
+    if (!LOOSE_FAN_OUT.test(fanOut)) throw new Error("git-object-quarantine-invalid");
+    const source = join(directory, fanOut);
+    if (!lstatSync(source).isDirectory()) throw new Error("git-object-quarantine-invalid");
+    mkdirSync(join(liveDirectory, fanOut), { recursive: true });
+    for (const rest of readdirSync(source)) {
+      const object = join(source, rest);
+      if (!LOOSE_OBJECT_REST.test(rest) || !lstatSync(object).isFile())
+        throw new Error("git-object-quarantine-invalid");
+      const target = join(liveDirectory, fanOut, rest);
+      if (lstatSync(target, { throwIfNoEntry: false }) === undefined) renameSync(object, target);
+    }
   }
 }
 // The private copy replaces the live index. An index that was absent under Git's own lock is still

@@ -10,6 +10,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  readdirSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -47,6 +48,7 @@ function git(
   args: readonly string[],
   indexPath?: string,
   stdin?: Uint8Array | string,
+  quarantine?: { readonly directory: string; readonly liveDirectory: string },
 ): string {
   return execFileSync("git", [...args], {
     cwd,
@@ -58,6 +60,12 @@ function git(
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null",
       ...(indexPath === undefined ? {} : { GIT_INDEX_FILE: indexPath }),
+      ...(quarantine === undefined
+        ? {}
+        : {
+            GIT_OBJECT_DIRECTORY: quarantine.directory,
+            GIT_ALTERNATE_OBJECT_DIRECTORIES: quarantine.liveDirectory,
+          }),
     },
   });
 }
@@ -130,10 +138,10 @@ function context(
     ...(observer.signal === undefined ? {} : { signal: observer.signal }),
     check: () => Promise.resolve(true),
     authorized: () => true,
-    run: (argv, stdin, indexPath, timeoutMs): Promise<CommandResult> => {
+    run: (argv, stdin, indexPath, timeoutMs, quarantine): Promise<CommandResult> => {
       before?.(argv);
       observer.timeouts?.push(timeoutMs);
-      const stdout = git(repo, argv, indexPath, stdin);
+      const stdout = git(repo, argv, indexPath, stdin, quarantine);
       observer.after?.(argv);
       return Promise.resolve({
         command: "git",
@@ -378,6 +386,27 @@ describe("a large file stages", () => {
       "git-stage-file-changed",
     );
     expect(git(repo, ["ls-files", "-s"])).toBe(indexBefore);
+    // The bytes Git read after the edit were never the approved candidate: they must not have been
+    // published as a loose object of the live store, and no quarantine is left behind.
+    const refused = git(repo, ["hash-object", "--no-filters", "--", "large.json"]).trim();
+    expect(existsSync(join(repo, ".git", "objects", refused.slice(0, 2), refused.slice(2)))).toBe(
+      false,
+    );
+    expect(
+      readdirSync(join(repo, ".git", "objects")).filter((n) => n.startsWith("incoming")),
+    ).toEqual([]);
+  });
+
+  it("publishes the approved bytes' object only after every check passed", async () => {
+    const repo = repository();
+    writeGenerated(repo);
+    const approved = git(repo, ["hash-object", "--no-filters", "--", "large.json"]).trim();
+    await expect(
+      stageExactFiles(context(repo), request(repo, ["large.json"]), "exact"),
+    ).resolves.toBe(true);
+    expect(git(repo, ["rev-parse", ":large.json"]).trim()).toBe(approved);
+    expect(git(repo, ["cat-file", "-t", approved]).trim()).toBe("blob");
+    expect(git(repo, ["fsck", "--strict"])).toBe("");
   });
 
   it("fails closed with its own code when a large file is swapped for a link", async () => {

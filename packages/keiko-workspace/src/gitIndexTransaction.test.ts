@@ -268,3 +268,60 @@ describe("a workspace root below an always-denied segment", () => {
     expect(existsSync(join(managed, ".git", "index.lock"))).toBe(false);
   });
 });
+
+describe("the object quarantine of an index transaction", () => {
+  const blobId = (text: string): string =>
+    execFileSync("git", ["hash-object", "--stdin"], {
+      cwd: root,
+      input: text,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    }).trim();
+  const quarantined = (text: string, directory: string): string =>
+    execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: text,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_OBJECT_DIRECTORY: directory,
+      },
+    }).trim();
+
+  it("keeps an object private until published and removes the quarantine afterwards", async () => {
+    let id = "";
+    let directory = "";
+    await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        const quarantine = transaction.openObjectQuarantine();
+        directory = quarantine.directory;
+        id = quarantined("candidate\n", quarantine.directory);
+        expect(existsSync(join(root, ".git", "objects", id.slice(0, 2), id.slice(2)))).toBe(false);
+        quarantine.publish();
+        expect(git(["cat-file", "-p", id])).toBe("candidate");
+        return Promise.resolve(true);
+      },
+      () => false,
+    );
+    expect(id).toBe(blobId("candidate\n"));
+    expect(existsSync(directory)).toBe(false);
+  });
+
+  it("refuses to publish an entry that is not a loose object", async () => {
+    await expect(
+      withGitIndexTransaction(
+        root,
+        (transaction) => {
+          const quarantine = transaction.openObjectQuarantine();
+          writeFileSync(join(quarantine.directory, "stray"), "x");
+          quarantine.publish();
+          return Promise.resolve(true);
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("git-object-quarantine-invalid");
+  });
+});

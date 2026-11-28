@@ -9,6 +9,7 @@ import {
   inspectGitStageFile,
   isGitStageLargeFile,
   withGitIndexTransaction,
+  type GitObjectQuarantine,
   type GitStageContent,
   type GitStageFile,
   type GitStageLargeFile,
@@ -39,7 +40,11 @@ export interface GitStageEffectContext {
     indexPath?: string,
     // A run that reads a large file by path is allowed time in proportion to its size.
     timeoutMs?: number,
+    // A run that writes an object by path writes it here, not into the live object store.
+    quarantine?: GitObjectQuarantine,
   ) => Promise<CommandResult>;
+  // The private object directory the objects Git writes by path go to until they are verified.
+  readonly objectQuarantine?: GitObjectQuarantine | undefined;
   // The run's cancellation: checked between the chunks of every streamed read.
   readonly signal?: AbortSignal | undefined;
   // Every configured `filter.<name>` driver name, or `undefined` when the configuration cannot be
@@ -385,7 +390,15 @@ async function hashLargeObject(
           "hash-object",
         ];
   const argv = [...head, ...(write ? ["-w"] : []), "--", file.path];
-  return objectId(await ctx.run(argv, undefined, undefined, largeHashTimeoutMs(file.size)));
+  return objectId(
+    await ctx.run(
+      argv,
+      undefined,
+      undefined,
+      largeHashTimeoutMs(file.size),
+      write ? ctx.objectQuarantine : undefined,
+    ),
+  );
 }
 const streamOptions = (
   ctx: GitStageEffectContext,
@@ -1037,6 +1050,22 @@ export async function gitStagedObjectIdOf(
   });
   return new Map(paths.map((path) => [path, answers.get(path)]));
 }
+async function updatePrivateIndex(
+  ctx: GitStageEffectContext,
+  temporaryIndexPath: string,
+  entries: readonly Uint8Array[],
+): Promise<boolean> {
+  for (const part of entries) {
+    const result = await ctx.run(
+      // NOSONAR typescript:S9382 -- the parts are fed one after the other to one private index
+      ["update-index", "-z", "--index-info"],
+      part,
+      temporaryIndexPath,
+    );
+    if (result.exitCode !== 0 || result.truncated) return false;
+  }
+  return true;
+}
 /**
  * Objects are created from the verified bytes without any filter driver; the only conversion is
  * Git's built-in line-ending one under `lineEndings`, admitted only when it round-trips exactly. Git
@@ -1068,22 +1097,17 @@ export async function stageExactFiles(
           request.worktreeDigest
       )
         return false;
+      // Objects Git writes by path stay private until every identity and content check passed.
+      const quarantine = transaction.openObjectQuarantine();
       const entries = await indexEntries(
-        ctx,
+        { ...ctx, objectQuarantine: quarantine },
         files,
         gitHeadObjectIdLength(expected.head),
         lineEndings,
       );
       if (entries === undefined) return false;
-      for (const part of entries) {
-        const result = await ctx.run(
-          // NOSONAR typescript:S9382 -- the parts are fed one after the other to one private index
-          ["update-index", "-z", "--index-info"],
-          part,
-          transaction.temporaryIndexPath,
-        );
-        if (result.exitCode !== 0 || result.truncated) return false;
-      }
+      quarantine.publish();
+      if (!(await updatePrivateIndex(ctx, transaction.temporaryIndexPath, entries))) return false;
       return transaction.check() && (await ctx.check());
     },
     (result) => {
