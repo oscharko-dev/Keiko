@@ -591,21 +591,75 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     });
 
     it("counts entries it drops and rewrites the record without them", () => {
-      activate(memory(), ...providersOf(512));
+      kdf.fake = true;
+      try {
+        activate(memory(), ...providersOf(512));
+        const record = join(dir, MODEL_ACTIVATION_FILE);
+        const stored = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+        // 512 valid + garbage + a copy = 514; then garbage at index 10 makes 515. The first 512
+        // hold 1 garbage entry (malformed 1); the last 3 lie past the bound (overflow 3).
+        stored.entries.push({ garbage: true }, ...stored.entries.slice(0, 1));
+        stored.entries.splice(10, 0, { garbage: true });
+        writeFileSync(record, JSON.stringify(stored), { mode: 0o600 });
+        events.length = 0;
+        expect(restoredIds(memory(), ...providersOf(512))).toHaveLength(511);
+        const dropped = changeLines().filter((line) => line.change === "discarded");
+        expect(dropped).toEqual([
+          expect.objectContaining({ reason: "unreadable", count: 1 }),
+          expect.objectContaining({ reason: "capacity", count: 3 }),
+        ]);
+        const rewritten = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+        expect(rewritten.entries).toHaveLength(511);
+        expect(rewritten.entries.every((entry) => !("garbage" in (entry as object)))).toBe(true);
+      } finally {
+        kdf.fake = false;
+      }
+    });
+
+    it("keeps the valid entries of a record with a dropped entry when the rewrite fails", () => {
+      kdf.fake = true;
+      try {
+        activate(memory(), ...providersOf(511));
+        const record = join(dir, MODEL_ACTIVATION_FILE);
+        const stored = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+        stored.entries.push({ garbage: true });
+        writeFileSync(record, JSON.stringify(stored), { mode: 0o600 });
+        writer.failures = 2;
+        const running = memory();
+        expect(restoredIds(running, ...providersOf(511))).toHaveLength(511);
+        expect(existsSync(record)).toBe(true);
+        writer.failures = 0;
+        expect(restoredIds(memory(), ...providersOf(511))).toHaveLength(511);
+      } finally {
+        kdf.fake = false;
+        writer.failures = 0;
+      }
+    });
+
+    it("counts the whole record under product-changed", () => {
+      activate(memory({ productVersion: "1.5.9" }), provider());
       const record = join(dir, MODEL_ACTIVATION_FILE);
       const stored = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
-      stored.entries.push({ garbage: true }, ...stored.entries.slice(0, 1));
-      // Entry 513 is a valid-looking copy past the bound; the garbage sits at index 512.
-      stored.entries.splice(10, 0, { garbage: true });
+      stored.entries.push({ garbage: true });
       writeFileSync(record, JSON.stringify(stored), { mode: 0o600 });
       events.length = 0;
-      expect(restoredIds(memory(), ...providersOf(512)).length).toBeGreaterThan(500);
-      const reasons = changeLines().filter((line) => line.change === "discarded");
-      expect(reasons).toContainEqual(expect.objectContaining({ reason: "unreadable", count: 1 }));
-      expect(reasons).toContainEqual(expect.objectContaining({ reason: "capacity" }));
-      const rewritten = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
-      expect(rewritten.entries.every((entry) => !("garbage" in (entry as object)))).toBe(true);
-      expect(rewritten.entries.length).toBeLessThanOrEqual(512);
+      restoredIds(memory({ productVersion: "1.5.10" }), provider());
+      expect(changeLines()).toContainEqual(
+        expect.objectContaining({ change: "discarded", reason: "product-changed", count: 2 }),
+      );
+    });
+
+    it("reports a refusal again after the overflow dropped to zero and returned", () => {
+      kdf.fake = true;
+      try {
+        const running = memory();
+        activate(running, ...providersOf(513));
+        activate(running, ...providersOf(512));
+        activate(running, ...providersOf(513));
+        expect(capacityLines()).toHaveLength(2);
+      } finally {
+        kdf.fake = false;
+      }
     });
 
     it("restamps an empty record of another product version", () => {

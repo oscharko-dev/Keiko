@@ -366,6 +366,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
   private unrecorded = false;
   /** The file may still hold a record this start could not replace or withdraw. */
   private rewritePending = false;
+  /** The pending rewrite only drops entries the reader skipped: a failed write never withdraws. */
+  private droppedOnly = false;
   private readonly installation: string;
 
   public constructor(private readonly options: ModelActivationMemoryOptions) {
@@ -401,7 +403,9 @@ class FileModelActivationMemory implements ModelActivationMemory {
     if (invalidates && !this.write(entries, correlationId)) {
       // The discard of an incompatible record did not land: keep it pending, never call it done.
       this.rewritePending = true;
-      this.withdrawRecord(entries, new Map(), correlationId);
+      // A valid record that only carries dropped entries is never withdrawn; it stays pending.
+      this.droppedOnly = this.onlyReaderDropped(outcome, counts);
+      if (!this.droppedOnly) this.withdrawRecord(entries, new Map(), correlationId);
     }
     return restored.map(({ entry, provider }) => ({
       modelId: provider.modelId,
@@ -460,8 +464,10 @@ class FileModelActivationMemory implements ModelActivationMemory {
       this.commitBindings();
       this.unrecorded = false;
       this.rewritePending = false;
+      this.droppedOnly = false;
       this.logWritten(removed, saved, correlationId);
-    } else if (removedCount > 0 || stale) this.withdrawRecord(next, removed, correlationId);
+    } else if (removedCount > 0 || (stale && !this.droppedOnly))
+      this.withdrawRecord(next, removed, correlationId);
     else this.unrecorded = true;
   }
 
@@ -618,12 +624,23 @@ class FileModelActivationMemory implements ModelActivationMemory {
     this.commitBindings();
     this.unrecorded = false;
     this.rewritePending = false;
+    this.droppedOnly = false;
     this.logRemovals(removed, correlationId);
     if (next.size > 0 && this.write(next, correlationId)) {
       this.durable = new Map(next);
       this.commitBindings();
       this.logChange("saved", undefined, next.size, correlationId);
     }
+  }
+
+  /** Whether the only reasons to rewrite are entries the reader dropped from a current record. */
+  private onlyReaderDropped(
+    outcome: ReadOutcome,
+    counts: ReadonlyMap<ActivationDiscardReason, number>,
+  ): boolean {
+    if (outcome.kind !== "file" || outcome.file.productVersion !== this.options.productVersion)
+      return false;
+    return [...counts.keys()].every((reason) => reason === "unreadable" || reason === "capacity");
   }
 
   private classify(
@@ -642,7 +659,10 @@ class FileModelActivationMemory implements ModelActivationMemory {
     if (outcome.kind === "none") counts.set("first-start", 0);
     else if (outcome.kind !== "file") counts.set(outcome.kind, outcome.entries);
     else if (outcome.file.productVersion !== this.options.productVersion)
-      counts.set("product-changed", outcome.file.entries.length);
+      counts.set(
+        "product-changed",
+        outcome.file.entries.length + outcome.file.malformed + outcome.file.overflow,
+      );
     else {
       for (const entry of outcome.file.entries) {
         const { reason, provider } = this.verdict(entry, providers);
