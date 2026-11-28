@@ -636,6 +636,73 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       }
     });
 
+    describe("a pending rewrite of a record with a dropped entry", () => {
+      const withGarbage = (...models: ModelProviderConfig[]): string => {
+        activate(memory(), ...models);
+        const record = join(dir, MODEL_ACTIVATION_FILE);
+        const stored = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+        stored.entries.push({ garbage: true });
+        writeFileSync(record, JSON.stringify(stored), { mode: 0o600 });
+        return record;
+      };
+      const wanted = (
+        ...models: ModelProviderConfig[]
+      ): { provider: ModelProviderConfig; activatedAt: string }[] =>
+        models.map((entry) => ({ provider: entry, activatedAt: ACTIVATED_AT }));
+      const a = provider({ modelId: "chat-a" });
+      const b = provider({ modelId: "chat-b" });
+
+      afterEach(() => {
+        writer.failures = 0;
+      });
+
+      it("stays recorded when a sync that changes nothing cannot write either", () => {
+        const record = withGarbage(a, b);
+        writer.failures = 1;
+        const running = memory();
+        expect(restoredIds(running, a, b)).toEqual(["chat-a", "chat-b"]);
+        writer.failures = 1;
+        // Deactivating a model that was never stored removes nothing from the record.
+        running.sync(wanted(a, b), "deactivated", "corr-noop");
+        expect(running.recorded()).toBe(true);
+        expect(existsSync(record)).toBe(true);
+        expect(restoredIds(memory(), a, b)).toEqual(["chat-a", "chat-b"]);
+      });
+
+      it("keeps the protection on a later sync and rewrites once the disk allows it", () => {
+        const record = withGarbage(a, b);
+        writer.failures = 1;
+        const running = memory();
+        restoredIds(running, a, b);
+        running.sync(wanted(a, b), "invalidated", "corr-later");
+        expect(running.recorded()).toBe(true);
+        expect(readFileSync(record, "utf8")).not.toContain("garbage");
+        expect(restoredIds(memory(), a, b)).toEqual(["chat-a", "chat-b"]);
+      });
+
+      it("still withdraws when a real discard accompanies the dropped entry", () => {
+        const record = withGarbage(a, b);
+        writer.failures = 2;
+        const running = memory();
+        const rotated = provider({ modelId: "chat-b", apiKey: "sk-test-rotated-b" });
+        expect(restoredIds(running, a, rotated)).toEqual(["chat-a"]);
+        expect(running.recorded()).toBe(true);
+        expect(existsSync(record)).toBe(false);
+        expect(restoredIds(memory(), a, b)).toEqual([]);
+      });
+
+      it("withdraws on a later removal so the removed model never comes back", () => {
+        withGarbage(a, b);
+        writer.failures = 1;
+        const running = memory();
+        restoredIds(running, a, b);
+        writer.failures = 1;
+        running.sync(wanted(a), "deactivated", "corr-removal");
+        expect(running.recorded()).toBe(true);
+        expect(restoredIds(memory(), a, b)).toEqual(["chat-a"]);
+      });
+    });
+
     it("counts the whole record under product-changed", () => {
       activate(memory({ productVersion: "1.5.9" }), provider());
       const record = join(dir, MODEL_ACTIVATION_FILE);

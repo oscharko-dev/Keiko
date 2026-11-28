@@ -466,9 +466,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
       this.rewritePending = false;
       this.droppedOnly = false;
       this.logWritten(removed, saved, correlationId);
-    } else if (removedCount > 0 || (stale && !this.droppedOnly))
-      this.withdrawRecord(next, removed, correlationId);
-    else this.unrecorded = true;
+    } else this.afterFailedWrite(next, removed, saved, correlationId);
   }
 
   /** Reports what the bound refused, on every path, once per distinct count of this instance. */
@@ -476,6 +474,22 @@ class FileModelActivationMemory implements ModelActivationMemory {
     if (overflow > 0 && overflow !== this.reportedOverflow)
       this.logChange("discarded", "capacity", overflow, correlationId);
     this.reportedOverflow = overflow;
+  }
+
+  /**
+   * A write failed. A removal withdraws the record; so does a stale one, unless it only drops
+   * entries the reader skipped, which leaves the on-disk record correct and still recorded.
+   */
+  private afterFailedWrite(
+    next: ReadonlyMap<string, StoredActivation>,
+    removed: ReadonlyMap<ActivationRemovalReason, number>,
+    saved: number,
+    correlationId: string,
+  ): void {
+    const removals = removed.size > 0;
+    if (removals || (this.rewritePending && !this.droppedOnly))
+      this.withdrawRecord(next, removed, correlationId);
+    else if (!this.droppedOnly || saved > 0) this.unrecorded = true;
   }
 
   private logWritten(
