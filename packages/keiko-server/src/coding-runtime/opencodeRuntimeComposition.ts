@@ -115,6 +115,7 @@ import {
   codingToolEditPresentation,
   codingToolGitPresentation,
   codingToolGitProposalPresentation,
+  codingToolHumanDecisionPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -5887,7 +5888,10 @@ function bridgeServicePresentation(
   const facts =
     result === undefined || service.request === undefined
       ? {}
-      : governedToolPresentation(service.request, result);
+      : {
+          ...governedToolPresentation(service.request, result),
+          ...codingToolHumanDecisionPresentation(result),
+        };
   return Object.freeze({
     ...facts,
     bridgeDurationMs: Math.max(0, Date.now() - service.startedAtMs),

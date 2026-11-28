@@ -85,6 +85,7 @@ import {
   type VerificationNotRunReason,
   VERIFICATION_RESOURCE_LIMIT_WORDS,
   GOVERNED_ASK_DECLINED_REASON_CODE,
+  GOVERNED_ASK_EXPIRED_REASON_CODE,
   COMMIT_PROOF_UNAVAILABLE_CAUSES,
 } from "./codingToolIpc.js";
 import { isPermanentCommitProofCause } from "./codingCommitProofCause.js";
@@ -1051,6 +1052,7 @@ function projectGovernedFailure(
   // The operator declined a server-raised ask (a Git stage, commit, push or pull-request proposal):
   // the same decision as a declined step, so the model reads why and goes on (ADR-0124 D6).
   if (reasonCode === GOVERNED_ASK_DECLINED_REASON_CODE) return humanDecisionToolResult("denied");
+  if (reasonCode === GOVERNED_ASK_EXPIRED_REASON_CODE) return humanDecisionToolResult("expired");
   if (typeof reasonCode !== "string" || !forwardsReasonCode(request, reasonCode)) {
     return projected("failed");
   }
@@ -1650,6 +1652,30 @@ export function humanDecisionToolResult(outcome: "denied" | "expired"): CodingTo
     evidence: [],
     guidance: HUMAN_DECISION_GUIDANCE[outcome],
   };
+}
+
+/**
+ * Server-private live presentation of a step a person declined or nobody decided in time. Both
+ * approval sources (the runtime permission ask and the server-raised proposal ask) answer with the
+ * same human-decision result, so both name the same closed refusal cause on the row; a refusal
+ * Keiko's own policy made carries none.
+ */
+export function codingToolHumanDecisionPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  const cause = humanDecisionCause(result);
+  return cause === undefined ? {} : { failureOrigin: "keiko-refused", refusalCause: cause };
+}
+
+function humanDecisionCause(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation["refusalCause"] {
+  if (!("guidance" in result)) return undefined;
+  if (result.status === "denied" && result.guidance === HUMAN_DECISION_GUIDANCE.denied)
+    return "approval-declined";
+  if (result.status === "cancelled" && result.guidance === HUMAN_DECISION_GUIDANCE.expired)
+    return "approval-expired";
+  return undefined;
 }
 
 function projectAuxiliary(

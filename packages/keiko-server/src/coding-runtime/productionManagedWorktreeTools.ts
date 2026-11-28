@@ -105,6 +105,7 @@ import type {
 import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   GOVERNED_ASK_DECLINED_REASON_CODE,
+  GOVERNED_ASK_EXPIRED_REASON_CODE,
   dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
@@ -1072,7 +1073,10 @@ async function releaseStageProposal(
   signal: AbortSignal | undefined,
   callId: string | undefined,
 ): Promise<
-  import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
+  | import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult
+  | "declined"
+  | "expired"
+  | undefined
 > {
   if (
     (result.kind !== "stage" && result.kind !== "unstage") ||
@@ -1093,14 +1097,21 @@ async function releaseStageProposal(
   );
   recordProposalApprovalWait(input, actionKind, result.proposalId, outcome);
   if (outcome === "denied") return "declined";
+  if (outcome === "expired") return "expired";
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
 }
 
 function stageReleaseResult(
-  released: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined,
+  released:
+    | import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult
+    | "declined"
+    | "expired"
+    | undefined,
 ): GovernedCodingToolResult {
   if (released === "declined")
     return { status: "failed", reasonCode: GOVERNED_ASK_DECLINED_REASON_CODE };
+  if (released === "expired")
+    return { status: "failed", reasonCode: GOVERNED_ASK_EXPIRED_REASON_CODE };
   return released === undefined
     ? { status: "failed", reasonCode: "git-authority-revoked" }
     : { status: "completed", git: released };
@@ -1124,6 +1135,11 @@ function declinableProposalProbe(
   };
 }
 
+function deliveryWaitReasonCode(outcome: ProposalApprovalWaitOutcome): string {
+  if (outcome === "denied") return GOVERNED_ASK_DECLINED_REASON_CODE;
+  return outcome === "expired" ? GOVERNED_ASK_EXPIRED_REASON_CODE : "delivery-authority-revoked";
+}
+
 // A human's "no" reaches the model as that decision; every other unapproved end of the wait stays
 // the revoked delivery authority it always was.
 function deliveryWaitResult(
@@ -1131,11 +1147,7 @@ function deliveryWaitResult(
   ready: GovernedCodingToolResult,
 ): GovernedCodingToolResult {
   if (outcome === "approved") return ready;
-  return {
-    status: "failed",
-    reasonCode:
-      outcome === "denied" ? GOVERNED_ASK_DECLINED_REASON_CODE : "delivery-authority-revoked",
-  };
+  return { status: "failed", reasonCode: deliveryWaitReasonCode(outcome) };
 }
 
 function buildVerifiedCommitPort(

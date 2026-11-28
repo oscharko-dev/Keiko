@@ -75,6 +75,8 @@ export const CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS = 1_024;
  * proposal) the operator declined; the facade answers it as the human's decision (ADR-0124 D6).
  */
 export const GOVERNED_ASK_DECLINED_REASON_CODE = "approval-denied";
+/** The marker of a server-raised ask nobody decided in time; answered as the expired decision. */
+export const GOVERNED_ASK_EXPIRED_REASON_CODE = "approval-expired";
 
 export type CodingToolAction =
   | "read"

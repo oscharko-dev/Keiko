@@ -23,6 +23,7 @@ import {
   codingToolEditPresentation,
   codingToolGitPresentation,
   codingToolGitProposalPresentation,
+  codingToolHumanDecisionPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -2244,6 +2245,21 @@ describe("CodingToolFacade", () => {
     expect(humanDecisionToolResult(outcome)).toMatchObject({
       guidance: humanDecisionFeedback(outcome),
     });
+  });
+
+  // Both approval sources answer with this one result, so both name the same closed cause; a refusal
+  // Keiko's own policy made names none (the row then says Keiko blocked it).
+  it.each([
+    ["denied", "approval-declined"],
+    ["expired", "approval-expired"],
+  ] as const)("names %s as %s on the row of the human's decision only", (outcome, cause) => {
+    expect(codingToolHumanDecisionPresentation(humanDecisionToolResult(outcome))).toEqual({
+      failureOrigin: "keiko-refused",
+      refusalCause: cause,
+    });
+    expect(
+      codingToolHumanDecisionPresentation({ status: "denied", evidence: [] } as CodingToolResult),
+    ).toEqual({});
   });
 
   // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.

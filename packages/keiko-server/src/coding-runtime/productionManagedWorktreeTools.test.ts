@@ -42,7 +42,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { codingToolVerificationPresentation } from "./codingToolFacade.js";
+import {
+  codingToolHumanDecisionPresentation,
+  codingToolVerificationPresentation,
+} from "./codingToolFacade.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
@@ -261,9 +264,7 @@ describe("production managed worktree tools", () => {
       refused: vi.fn(() => true),
     };
 
-    await expect(waitForRuntimeProposalApproval(probe, "commit-full")).resolves.toBe(
-      "unavailable",
-    );
+    await expect(waitForRuntimeProposalApproval(probe, "commit-full")).resolves.toBe("unavailable");
     expect(probe.review).not.toHaveBeenCalled();
   });
 
@@ -399,6 +400,55 @@ describe("production managed worktree tools", () => {
           },
         }),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The proposal's own ask can lapse too: nobody decided in time. That is the expired decision, not
+  // a revoked Git authority, so the row names the same closed cause as every other approval source.
+  it("answers a stage proposal nobody decided in time with the expired decision", async () => {
+    vi.useFakeTimers();
+    try {
+      const proposal = {
+        kind: "stage" as const,
+        proposalId: "stage-expired-1",
+        status: "approval-required" as const,
+        reason: "approval-required" as const,
+        pathCount: 1,
+      };
+      const service = {
+        execute: vi.fn(() => Promise.resolve(proposal)),
+        review: vi.fn(() => proposal),
+        matchesApproval: vi.fn(() => false),
+      } as unknown as RuntimeGitService;
+      const approvals = createCodingToolApprovalBridge(undefined, service);
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+        requestStageApproval: vi.fn(),
+        approvalProofVerifier: approvals,
+        log: [],
+      });
+      const pending = facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src/index.ts"],
+          actionId: "stage-1",
+          idempotencyKey: "stage-1",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(MAX_APPROVAL_CHALLENGE_TTL_MS + 1_000);
+      const result = await pending;
+      expect(result).toEqual(humanDecisionToolResult("expired"));
+      expect(codingToolHumanDecisionPresentation(result)).toEqual({
+        failureOrigin: "keiko-refused",
+        refusalCause: "approval-expired",
+      });
     } finally {
       vi.useRealTimers();
     }
