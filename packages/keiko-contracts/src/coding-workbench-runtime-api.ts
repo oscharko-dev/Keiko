@@ -802,9 +802,10 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * knows it. The server launches in its own active workspace and refuses the start with
    * `workspace-selection-mismatch` when that is another folder, so a run starts in exactly the
    * repository on screen or not at all. A statement, never authority: it cannot select, widen or
-   * replace the server's binding.
+   * replace the server's binding. Absent (a UI bundle opened before an upgrade sends no field)
+   * asserts nothing: the server launches in its own active workspace.
    */
-  readonly expectedWorkspace: CodingWorkbenchExpectedWorkspace;
+  readonly expectedWorkspace?: CodingWorkbenchExpectedWorkspace | undefined;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
@@ -1546,7 +1547,9 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
-  validateExpectedWorkspace(value.expectedWorkspace, errors);
+  if (value.expectedWorkspace !== undefined) {
+    validateExpectedWorkspace(value.expectedWorkspace, errors);
+  }
   validateRuntimePreference(value.runtimePreference, errors);
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);

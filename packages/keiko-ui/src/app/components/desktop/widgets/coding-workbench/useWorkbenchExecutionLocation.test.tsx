@@ -417,6 +417,28 @@ describe("workbench execution location restoration", () => {
     expect(result.current.ready).toBe(false);
   });
 
+  // `beginStart` returns silently while the window shows no repository. That is only honest because
+  // Start is never enabled then: no root is never "ready", whatever binding the server still holds.
+  it("is never ready while the window shows no repository, so Start cannot be pressed", () => {
+    const { result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: {
+        root: null,
+        branch: undefined,
+        location: "worktree" as const,
+        activeInstance: managed as WorkspaceInstance | null,
+        branchLoading: false,
+        branchError: false,
+        branchDenied: false,
+        workspaceLoading: false,
+        workspaceError: false,
+        runIsActive: false,
+        folderMode: false,
+        refresh,
+      },
+    });
+    expect(result.current.ready).toBe(false);
+  });
+
   it("discards a stale branch read when the selected workspace changes", async () => {
     let finishRead: ((value: unknown) => void) | undefined;
     mocks.fetchGitStatus.mockReturnValueOnce(

@@ -4834,20 +4834,20 @@ export class CodingRuntimeOrchestrator {
     if ("gap" in found) return found;
     const { active } = found;
     // The run starts in the repository the person sees or not at all: the request states the root
-    // the Workbench shows, and the server's global pointer is not allowed to differ from it.
+    // the Workbench shows, and the server's global pointer is not allowed to differ from it. A
+    // request that states none (a UI bundle from before the upgrade) asserts nothing.
+    const expectedRoot = request.expectedWorkspace?.root;
     if (
+      expectedRoot !== undefined &&
       !workspaceRootsNameSameFolder(
-        request.expectedWorkspace.root,
+        expectedRoot,
         active.instance.repositoryRoot,
         process.platform !== "linux",
       )
     ) {
       return {
         gap: "workspace-selection-mismatch",
-        detail: selectionMismatchDetail(
-          request.expectedWorkspace.root,
-          active.instance.repositoryRoot,
-        ),
+        detail: selectionMismatchDetail(expectedRoot, active.instance.repositoryRoot),
       };
     }
     const principal = this.deps.serverPrincipal();
