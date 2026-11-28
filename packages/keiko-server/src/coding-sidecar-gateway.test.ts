@@ -4084,7 +4084,9 @@ describe("coding-sidecar gateway", () => {
         try {
           await Promise.resolve();
           pulls += 1;
-          yield { type: "delta", token: "first" };
+          // The first line is held until the next line begins, so the token that carries both
+          // settles the preface as prose and streams at once.
+          yield { type: "delta", token: "first\nnext" };
           pulls += 1;
           yield { type: "delta", token: "must-not-be-pulled" };
         } finally {
@@ -4116,7 +4118,7 @@ describe("coding-sidecar gateway", () => {
       expect(pulls).toBe(1);
       expect(returned).toBe(false);
       expect(response.res.destroyed).toBe(false);
-      expect(response.body()).toContain('"content":"first"');
+      expect(response.body()).toContain('"content":"first\\nnext"');
 
       await vi.advanceTimersByTimeAsync(1);
       expect(await pending).toBe(STREAMING);
@@ -4137,7 +4139,7 @@ describe("coding-sidecar gateway", () => {
   it("resumes the provider iterator when the reader drains", async () => {
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
       await Promise.resolve();
-      yield { type: "delta", token: "first" };
+      yield { type: "delta", token: "first\nnext" };
       yield { type: "delta", token: "second" };
       yield { type: "done", response: assistantResponse("azure-coding-model") };
     };
@@ -4163,7 +4165,7 @@ describe("coding-sidecar gateway", () => {
       ),
     );
     await vi.waitFor(() => {
-      expect(response.body()).toContain('"content":"first"');
+      expect(response.body()).toContain('"content":"first\\nnext"');
     });
     expect(response.body()).not.toContain('"content":"second"');
     response.drain();
@@ -5955,7 +5957,7 @@ describe("coding sidecar gateway turn failure projection", () => {
       const response = mockResponse({ captureBody: true });
       const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
         await Promise.resolve();
-        yield { type: "delta", token: "I will search now." };
+        yield { type: "delta", token: "I will search now.\nThen read." };
         throw new MalformedToolCallError("private-malformed-invocation-canary");
       };
       const deps = {
@@ -7874,9 +7876,21 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     // of its completed safe unit before finish, rather than terminal-only concatenation.
     expect(response.body()).not.toContain('"content":"First "');
     upstream.push(sseDelta({ content: "public line.\n" }));
+    // The first line may be a preface to a tool call written as text, so it is held until the
+    // next line begins; it is never held beyond that.
+    expect(response.body()).not.toContain("First public line.");
+    // The privacy owner hands the next line over once it is complete; the first line is in the
+    // body from then on, before the provider has finished.
+    upstream.push(sseDelta({ content: "second line.\n" }));
     await vi.waitFor(() => {
-      expect(response.body()).toContain('"content":"First public line.\\n"');
+      expect(response.body()).toContain('"content":"First public line.\\n');
     });
+    // Every later complete line streams before the provider has finished.
+    upstream.push(sseDelta({ content: "third line.\n" }));
+    await vi.waitFor(() => {
+      expect(response.body()).toContain("third line.");
+    });
+    expect(response.body()).not.toContain('"finish_reason":"stop"');
     upstream.push(sseDelta({ content: "second." }));
     upstream.push(sseFinish("stop"));
     upstream.push("data: [DONE]\n\n");
@@ -7885,7 +7899,8 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     expect(await pending).toBe(STREAMING);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { content: "First public line.\n" },
+      { content: "First public line.\nsecond line.\n" },
+      { content: "third line.\n" },
       { content: "second." },
     ]);
     expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
@@ -8407,7 +8422,7 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
         (): (() => AsyncIterable<GatewayStreamChunk>) =>
           async function* (): AsyncGenerator<GatewayStreamChunk> {
             await Promise.resolve();
-            yield { type: "delta", token: "partial" };
+            yield { type: "delta", token: "partial\nanswer" };
             throw new TransportError("connection reset after answer text");
           },
       ),
@@ -12499,7 +12514,7 @@ it("explains unavailable continuation after a live stream has opened", async () 
   const response = mockResponse({ captureBody: true });
   const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
     await Promise.resolve();
-    yield { type: "delta", token: "Visible partial answer." };
+    yield { type: "delta", token: "Visible partial answer.\nMore." };
     throw new ReasoningHistoryUnavailableError();
   };
   try {
@@ -13036,6 +13051,16 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     expect(seq.requests).toHaveLength(1);
     expect(liveText(body)).toBe(markup);
   });
+
+  it.each(["Done.", "Done.\n", "Ok.\n   \n"])(
+    "forwards a short single-line live answer %j once when the attempt ends, without a retry",
+    async (content) => {
+      const { body, seq } = await live([textual(content)]);
+
+      expect(seq.requests).toHaveLength(1);
+      expect(liveText(body)).toBe(content);
+    },
+  );
 
   it("recovers a live tool call that follows a short preface, discarding both unseen", async () => {
     const markup = `Ok.\n<shell command="${"npm test ".repeat(30)}" />`;

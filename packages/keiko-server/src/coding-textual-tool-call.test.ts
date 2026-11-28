@@ -335,6 +335,27 @@ describe("LiveTextHold", () => {
     expect(split.isHolding).toBe(true);
   });
 
+  it("forwards a held short first line when the attempt ends or the hold is released", () => {
+    const single = new LiveTextHold(true, TOOLS);
+    expect(single.push("Done.")).toBe("");
+    expect(single.release()).toBe("Done.");
+    expect(single.push("later")).toBe("later");
+    const undecided = new LiveTextHold(true, TOOLS);
+    expect(undecided.push("Ok.\n   ")).toBe("");
+    expect(undecided.release()).toBe("Ok.\n   ");
+  });
+
+  it("never forwards a short preface whose next line starts a tool call, and restarts clean", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("Ok.\n")).toBe("");
+    expect(hold.push('<shell command="ls" />')).toBe("");
+    expect(hold.isHolding).toBe(true);
+    hold.restart(true);
+    expect(hold.isHolding).toBe(false);
+    expect(hold.push("Fine.")).toBe("");
+    expect(hold.push("\nNext")).toBe("Fine.\nNext");
+  });
+
   it("releases a preface whose next line is not markup, as prose, at once", () => {
     const hold = new LiveTextHold(true, TOOLS);
     expect(hold.push("Ok.\nHere is the plan:")).toBe("Ok.\nHere is the plan:");
