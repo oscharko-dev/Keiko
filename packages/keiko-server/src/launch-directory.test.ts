@@ -169,8 +169,8 @@ describe("insideInstallationPayload", () => {
 });
 
 describe("insideInstallationPayload on a POSIX host", () => {
-  it("keeps the case of a POSIX path, so a person's lower-case folder is not a payload", () => {
-    if (process.platform === "win32") return;
+  it("keeps the case of a POSIX path, so a person's lower-case folder is not a payload", (context) => {
+    if (process.platform === "win32") context.skip();
     for (const path of [
       "/home/u/code/system/keiko/app",
       "/home/u/code/system/Keiko/APP",
@@ -197,8 +197,8 @@ describe("insideInstallationPayload on a POSIX host", () => {
     expect(insideInstallationPayload(join(root, "Keiko-projects"))).toBe(false);
   });
 
-  it("refuses a path it cannot resolve for a reason other than not existing", () => {
-    if (process.platform === "win32" || process.getuid?.() === 0) return;
+  it("refuses a path it cannot resolve for a reason other than not existing", (context) => {
+    if (process.platform === "win32" || process.getuid?.() === 0) context.skip();
     const { root } = folders();
     const locked = join(root, "locked");
     mkdirSync(join(locked, "inner"), { recursive: true });
