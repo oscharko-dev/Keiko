@@ -17,6 +17,7 @@ import {
   MODEL_ACTIVATION_FILE,
   createModelActivationMemory,
   activatedModelsOf,
+  type ActivatedModel,
   type ModelActivationMemory,
 } from "./model-activation-memory.js";
 
@@ -498,6 +499,32 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(restoredIds(memory(), rotated)).toEqual(["chat-a"]);
     });
 
+    it("keeps a withheld replacement out after a further withheld change and a settle", () => {
+      const second = provider({ modelId: "chat-b" });
+      activate(memory(), provider(), second);
+      const running = memory();
+      running.restore([provider(), second], "corr-restore");
+      const rotated = provider({ apiKey: "sk-test-rotated-twice-withheld" });
+      const withheld = (correlationId: string): void => {
+        running.sync(
+          [{ provider: rotated, activatedAt: ACTIVATED_AT }],
+          "deactivated",
+          correlationId,
+          undefined,
+          "withheld",
+        );
+      };
+      writer.failures = 2;
+      withheld("corr-failed-change-1");
+      withheld("corr-failed-change-2");
+      running.settle("deactivated", "corr-settle-1");
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(false);
+      // An allowed sync in between makes the accepted binding durable; later settles keep it.
+      activate(running, rotated);
+      running.settle("deactivated", "corr-settle-2");
+      expect(restoredIds(memory(), rotated)).toEqual(["chat-a"]);
+    });
+
     it("keeps a changed binding outstanding after its write failed", () => {
       const running = memory();
       activate(running, provider());
@@ -602,6 +629,41 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
         activate(running, ...providersOf(513));
         expect(running.recorded()).toBe(false);
         expect(capacityLines()).toHaveLength(1);
+      } finally {
+        kdf.fake = false;
+        writer.failures = 0;
+      }
+    });
+
+    it("keeps a withheld binding withheld while it is past the bound", () => {
+      kdf.fake = true;
+      try {
+        const running = memory();
+        activate(running, provider());
+        const rotated = provider({ apiKey: "sk-test-rotated-past-the-bound" });
+        const at = (entries: ModelProviderConfig[]): ActivatedModel[] =>
+          entries.map((entry) => ({ provider: entry, activatedAt: ACTIVATED_AT }));
+        writer.failures = 1;
+        activate(running, provider(), ...providersOf(512));
+        running.sync(
+          at([...providersOf(512), rotated]),
+          "invalidated",
+          "corr-w1",
+          undefined,
+          "withheld",
+        );
+        // The settle fills the bound, so the withheld model is counted past it.
+        running.settle("invalidated", "corr-settle-1");
+        running.sync(
+          at([...providersOf(511), rotated]),
+          "invalidated",
+          "corr-w2",
+          undefined,
+          "withheld",
+        );
+        // Freed capacity never writes the binding a failed change withheld.
+        running.settle("invalidated", "corr-settle-2");
+        expect(restoredIds(memory(), rotated)).toEqual([]);
       } finally {
         kdf.fake = false;
         writer.failures = 0;

@@ -457,7 +457,9 @@ class FileModelActivationMemory implements ModelActivationMemory {
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
     additions: "allowed" | "withheld" = "allowed",
   ): void {
-    this.apply(activated, reason, correlationId, removalReasons, additions, new Set());
+    // A further failed change keeps what an earlier one withheld; a regular sync recomputes it.
+    const held = additions === "withheld" ? this.withheldKeys : new Set<string>();
+    this.apply(activated, reason, correlationId, removalReasons, additions, held);
   }
 
   private apply(
@@ -562,6 +564,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
       const key = modelDigest(this.options.installationId, model.provider.modelId);
       if (next.size >= MAX_ENTRIES) {
         overflow += 1;
+        // Past the capacity a withheld binding stays withheld, so freed capacity never writes it.
+        if (held.has(key)) withheld.add(key);
         // Past the capacity too, a withheld sync keeps only what was already wanted.
         if (stillWanted(additions, before, key)) kept.push(model);
         continue;
