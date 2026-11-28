@@ -455,7 +455,10 @@ describe("exact-file staging under the effective core.autocrlf", () => {
       // The same read without an operation scope probes before every read: strictly more processes.
       const unscoped = await countedRead(convertibleRepository(), undefined);
       expect(unscoped.argvs.filter(isPromisorProbe).length).toBeGreaterThan(5);
-      expect(unscoped.argvs.length - scoped.argvs.length).toBe(
+      // The installed git's version, read once per spawn function, is not a per-read process.
+      const reads = (argvs: readonly string[][]): number =>
+        argvs.filter((argv) => argv[0] !== "version").length;
+      expect(reads(unscoped.argvs) - reads(scoped.argvs)).toBe(
         unscoped.argvs.filter(isPromisorProbe).length - 1,
       );
       expect(unscoped.evidence[0]?.timing?.gitSpawnCount).toBe(0);
@@ -1497,5 +1500,50 @@ describe("the batched object write of exact-file staging", () => {
     expect(perFileWrites(calls)).toBe(1);
     expect(git(repo, ["show", `:${odd}`])).toBe(`verified ${odd}\n`);
     expectIndexHoldsVerified(repo, ["a.txt"]);
+  });
+});
+
+// The first stage of a fresh `git init`: no index file exists yet, because Git writes it only with
+// its first staged entry. The private copy starts absent under Git's own lock and Git creates it.
+describe("the first governed stage of a repository whose index was never written", () => {
+  function freshRepository(): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-fresh-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    git(base, ["config", "user.name", "Keiko Test"]);
+    git(base, ["config", "user.email", "keiko@example.test"]);
+    writeFileSync(join(base, "first.txt"), "first\n");
+    return base;
+  }
+
+  function unbornRequest(): Parameters<typeof stageExactFiles>[1] {
+    return {
+      pathspecs: ["first.txt"],
+      verified: {
+        head: { kind: "unborn", branch: "main", objectIdLength: 40 },
+        stagedTreeDigest: "0".repeat(64),
+        branchName: "main",
+        baseRef: "refs/heads/main",
+        base: { kind: "unborn", branch: "main", objectIdLength: 40 },
+      },
+    };
+  }
+
+  it("stages the first file and lets the root commit follow", async () => {
+    const repo = freshRepository();
+    expect(existsSync(join(repo, ".git", "index"))).toBe(false);
+    await expect(stageExactFiles(context(repo), unbornRequest())).resolves.toBe(true);
+    expect(git(repo, ["ls-files"]).trim()).toBe("first.txt");
+    git(repo, ["-c", "commit.gpgsign=false", "commit", "-qm", "root"]);
+    expect(git(repo, ["show", "HEAD:first.txt"])).toBe("first\n");
+    expect(existsSync(join(repo, ".git", "index.lock"))).toBe(false);
+  });
+
+  it("leaves no private index behind when the stage is refused", async () => {
+    const repo = freshRepository();
+    const refused = { ...context(repo), authorized: () => false };
+    await expect(stageExactFiles(refused, unbornRequest())).resolves.toBe(false);
+    expect(existsSync(join(repo, ".git", "index"))).toBe(false);
+    expect(existsSync(join(repo, ".git", "index.lock"))).toBe(false);
   });
 });

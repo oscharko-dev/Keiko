@@ -56,7 +56,7 @@ export async function withGitIndexTransaction<T>(
   const temporary = { owned: false };
   try {
     if (!check()) throw new Error("git-index-metadata-drift");
-    await copyIndex(fs, base.path, temporaryIndexPath, () => {
+    const indexExisted = await copyIndex(fs, base.path, temporaryIndexPath, () => {
       temporary.owned = true;
     });
     const result = await mutate({ temporaryIndexPath, check });
@@ -65,6 +65,12 @@ export async function withGitIndexTransaction<T>(
         throw new Error("git-index-metadata-drift");
       if (!accept(result)) throw new Error("git-index-authority-denied");
       assertIndexFile(temporaryIndexPath);
+      // An index that was absent under Git's own lock is still absent: nothing wrote it meanwhile.
+      if (
+        !indexExisted &&
+        lstatSync(join(base.path, "index"), { throwIfNoEntry: false }) !== undefined
+      )
+        throw new Error("git-index-metadata-drift");
       renameSync(temporaryIndexPath, join(base.path, "index"));
     }
     return result;
@@ -118,8 +124,16 @@ async function copyIndex(
   base: string,
   target: string,
   onCreated: () => void,
-): Promise<void> {
+): Promise<boolean> {
   const source = join(base, "index");
+  // A repository whose index was never written (a fresh `git init` before its first stage) has no
+  // index file; Git reads an absent GIT_INDEX_FILE as the empty index and creates it on its first
+  // write. Under the held lock nothing else can create it, so the private copy simply starts absent
+  // and the owner of the copy is still recorded so a failed run removes whatever Git wrote.
+  if (lstatSync(source, { throwIfNoEntry: false }) === undefined) {
+    onCreated();
+    return false;
+  }
   assertIndexFile(source);
   const stat = fs.stat(source);
   const bytes = await fs.readFileBytes?.(source, MAX_INDEX_BYTES, "reject", stat);
@@ -135,6 +149,7 @@ async function copyIndex(
   } finally {
     closeSync(descriptor);
   }
+  return true;
 }
 
 export interface GitStageFile {
