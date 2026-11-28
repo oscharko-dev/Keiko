@@ -1379,6 +1379,25 @@ describe("undo and the Git index (U-34b)", () => {
     });
   });
 
+  it("classifies an index that cannot be changed as unavailable, not as a conflict", async () => {
+    const { port, root, log } = await undoneIndexOnlyTurn();
+    writeFileSync(join(root, "intent.txt"), "intent\n");
+    gitIn(root, "add", "-N", "intent.txt");
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "revert-failed",
+    });
+
+    expect(refusals(log.events)).toMatchObject([
+      {
+        errorKind: "unavailable",
+        correlationId: CORRELATION_ID,
+        extra: { operation: "restore", reason: "revert-failed" },
+      },
+    ]);
+  });
+
   it("puts the index back to the undone state when clearing the runtime's revert fails", async () => {
     const { port, root, log } = await undoneIndexOnlyTurn(() =>
       Promise.reject(new Error("clear failed")),
@@ -1411,7 +1430,10 @@ describe("undo and the Git index (U-34b)", () => {
     expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("staged by the person\n");
     expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
     expect(refusals(made.log.events)).toMatchObject([
-      { extra: { operation: "restore", reason: "index-changed" } },
+      {
+        correlationId: CORRELATION_ID,
+        extra: { operation: "restore", reason: "index-changed" },
+      },
       { extra: { operation: "restore", reason: "revert-failed" } },
     ]);
   });

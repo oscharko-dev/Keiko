@@ -296,7 +296,9 @@ async function revertTurn(
     return recordRevertRefusal(ports, runId, action, "run-unavailable", correlationId);
   try {
     const outcome =
-      action === "undo" ? await undoLastTurn(ports, run) : await restoreUndo(ports, run);
+      action === "undo"
+        ? await undoLastTurn(ports, run)
+        : await restoreUndo(ports, run, correlationId);
     if (!outcome.ok)
       return recordRevertRefusal(ports, runId, action, outcome.reason, correlationId);
     recordRevertApplied(ports.activityLog, runId, action, outcome, correlationId);
@@ -445,6 +447,7 @@ function stagedIndexPaths(staged: OpenCodeStagedRevert): { indexPathCount?: numb
 async function restoreUndo(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
+  correlationId: string | undefined,
 ): Promise<RevertOutcome> {
   const staged = run.revert;
   if (staged === undefined) return { ok: false, reason: "nothing-staged" };
@@ -461,7 +464,7 @@ async function restoreUndo(
   } catch (error) {
     // The files stay undone, so the index goes back to the undone state with them.
     if (staged.indexMoves !== undefined && moved === "restored")
-      await undoIndexMoves(ports, run, staged.indexMoves);
+      await undoIndexMoves(ports, run, staged.indexMoves, correlationId);
     throw error;
   }
   run.revert = undefined;
@@ -496,6 +499,7 @@ async function undoIndexMoves(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
   moves: TurnIndexMoves,
+  correlationId: string | undefined,
 ): Promise<void> {
   try {
     const result = await reapplyTurnIndexMoves(run.workspaceRoot, {
@@ -508,7 +512,7 @@ async function undoIndexMoves(
         runId: run.runId,
         operation: "restore",
         reason: result === "changed-after-turn" ? "index-changed" : "revert-failed",
-        correlationId: undefined,
+        correlationId,
         error: undefined,
       });
   } catch (error) {
@@ -952,7 +956,10 @@ function writeRefusal(
 }
 
 function refusalErrorKind(reason: OpenCodeRevertRefusal, error: unknown): ActivityLogErrorKind {
-  if (error === undefined) return reason === "run-unavailable" ? "unavailable" : "conflict";
+  if (error === undefined) {
+    // A revert that failed without a throw is an index that could not be changed.
+    return reason === "run-unavailable" || reason === "revert-failed" ? "unavailable" : "conflict";
+  }
   const classified = errorKindOf(error);
   const registered = activityLogErrorKindOr(classified, "unavailable");
   if (registered !== "unavailable" || classified === "unavailable") return registered;
