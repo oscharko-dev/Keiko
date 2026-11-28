@@ -1187,6 +1187,14 @@ For a saturated probe, `delayMs` records the remaining request budget (zero at e
 fabricated cooldown. A stream records its start before admission waiting and its zero-chunk failure
 if admission is refused or cancelled. Late sibling probes cannot extend a reopened outage.
 
+`gateway.prompt.usage-rejected` records, under the call's correlation, that the provider's reported
+prompt usage was not used to calibrate later admission (ADR-0052). `reason` is closed:
+`implausibly-low` and `implausibly-high` mark a figure outside the 0.25 to 2.0 times band of the
+local estimate (with a learned floor once ratios exist), and `ambiguous-cache-layout` marks a report
+whose prompt-cache tokens could be either inside or beside `prompt_tokens`. The line carries
+`reportedPromptTokens`, `localPromptTokens` and a `modelIdDigest`, never text. After it, the next
+prompt of that model keeps the local estimate until a usable report is recorded.
+
 On retries, `reportedPromptTokens` always describes only the current counter response and is
 absent when that response has no count. `providerPromptTokens` adds the current response-schema
 cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor

@@ -140,6 +140,26 @@ cost, so their token savings agree with the difference between the pre/post-comp
 The optional LiteLLM counter may still report a higher count and refuse admission; local assembly
 and gateway admission use the same local fallback, not a claim of provider-exact counting.
 
+**Usage-based prompt calibration (#4491).** The local estimate can be far from what a provider
+bills (a live Gemma 4 31B reported 0.61 of it), which refused prompts that fit. The gateway
+therefore keeps a per-model ledger, keyed by a digest of alias, endpoint and observed deployment, of
+the provider-reported prompt usage of earlier calls. A new prompt that provably extends a recorded
+one (same tools, identical message prefix) is estimated as the provider-reported prefix plus the
+estimated growth multiplied by at least 1.1 (or by the learned ratio when that is higher); anything
+that does not match keeps the conservative local estimate, and the calibrated figure only joins the
+maximum of the local, provider-counter and retained candidates. A report is recorded only inside a
+plausibility band of 0.25 to 2.0 times the local estimate for that prompt. Once ratios are learned
+the lower bound becomes half the median of the last eight accepted ratios, never above 0.3, so a
+cache-excluded or broken counter cannot teach the ledger its own under-reports. A report outside
+the band is never recorded. Prompt-cache tokens are read by an explicit layout rule: OpenAI-style
+`prompt_tokens_details.cached_tokens` within `prompt_tokens` is inclusive and cached tokens above
+`prompt_tokens` are exclusive (the size is the two added); top-level `cache_read_input_tokens` or
+`cache_creation_input_tokens` that fit inside `prompt_tokens` could be either layout and are
+flagged ambiguous, so the report is not used and admission stays on the local estimate. A prompt with
+an image or document part is never learned from, because its raw text estimate omits them.
+`gateway.prompt.usage-rejected` records each discarded report with the closed `reason`
+(`implausibly-low`, `implausibly-high`, `ambiguous-cache-layout`) and counts and a digest only.
+
 **Undeclared windows (amended for the 1.1.13 field report).** A chat capability whose window nobody
 declared — a LiteLLM `hosted_vllm` deployment without `max_model_len`, `context_length`, or
 `context_window` (the recognised whole-window fields), and without the legacy `max_input_tokens`
