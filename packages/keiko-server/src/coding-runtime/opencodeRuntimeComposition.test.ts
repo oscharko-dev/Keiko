@@ -3363,6 +3363,59 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  it("never posts a prompt when Stop has fully finished before the submit's check", async () => {
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}, {}, {}, {}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    try {
+      const submitted = fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "must not be sent");
+      // The epoch is even again (a different even value) by the time the submit reaches its check.
+      await Promise.allSettled([fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)]);
+
+      await expect(submitted).resolves.toBe(false);
+      expect(runControl.promptBodies).toEqual([]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("neither arms nor starts a scheduled wake when Stop lands during the submit's earlier awaits", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}, {}, {}, {}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl, activityLog });
+    try {
+      const submitted = fixture.runtime.runPort.submitTask(
+        FIXTURE_RUN_ID,
+        "wake",
+        undefined,
+        undefined,
+        undefined,
+        "schedule-wake",
+      );
+      const stopping = fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID);
+
+      await expect(submitted).resolves.toBe(false);
+      await Promise.allSettled([stopping]);
+      expect(runControl.promptBodies).toEqual([]);
+      // The wake's hand-off reads the schedule state and releases the lease: none of it may run.
+      expect(
+        activityLog.events.filter(
+          (event) =>
+            event.op === "coding-runtime.schedule.lease" && event.extra?.action === "release",
+        ),
+      ).toEqual([]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("records a body-free diagnostic when the interrupt of a stopping task throws", async () => {
     const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
     const runControl = {

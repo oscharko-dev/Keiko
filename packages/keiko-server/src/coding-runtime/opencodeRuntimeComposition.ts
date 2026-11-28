@@ -1450,7 +1450,9 @@ async function armAndPostTurn(
   origin: CodingRuntimeTurnOrigin | undefined,
   stopEpoch: number,
 ): Promise<boolean> {
-  if (!run.runtimeAdapter.armTurn()) return false;
+  // A Stop during any earlier await (agent switch, baseline, instructions) moved the epoch or took
+  // the run down: nothing is armed, indexed or woken for it.
+  if (stopSince(run, stopEpoch) || !run.runtimeAdapter.armTurn()) return false;
   // A step that continues the turn makes the image the turn last settled on stale.
   if (origin !== undefined) reopenTurnIndex(run.turnIndex);
   // A scheduled wake posts nothing: the runtime fires the due schedule into the armed turn.
@@ -1458,21 +1460,27 @@ async function armAndPostTurn(
     return startScheduledWakeTurn(run, { activityLog: sinks.activityLog }) && run.ready;
   // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
   // continuation of the human's request keeps that request's images: its undo reaches back to it.
-  if (origin === undefined) {
-    beginOpenCodeTurnImages(run);
-    // The index start is read before the model can stage anything, within a bound Stop can cut.
-    if (run.turnIndex !== undefined) {
-      const cut = await awaitIndexStart(run, run.turnIndex);
-      // Stop (the operator's or the lifecycle's) ended the wait, or the run went away meanwhile: no
-      // prompt or slash command may reach the runtime. Only an index read that merely ran out of
-      // time continues, with the start reported unavailable.
-      if (cut === "capture-aborted") return cancelStoppedTurn(run);
-    }
-  }
-  // A Stop during any earlier await (agent switch, baseline, instructions, index start) leaves the
-  // epoch moved or the run not ready; nothing may reach the runtime then.
-  if (run.interruptSeq !== stopEpoch || !run.ready) return cancelStoppedTurn(run);
+  if (origin === undefined && !(await beginNewTurn(run))) return cancelStoppedTurn(run);
+  // A Stop during the index start wait leaves the epoch moved or the run not ready; nothing may
+  // reach the runtime then.
+  if (stopSince(run, stopEpoch)) return cancelStoppedTurn(run);
   return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+}
+
+/** True when a Stop began or ended since `stopEpoch` was read, or the run is no longer ready. */
+function stopSince(run: ReadyRun, stopEpoch: number): boolean {
+  return run.interruptSeq !== stopEpoch || !run.ready;
+}
+
+/** Records the new turn's images and reads its index start; false when Stop ended that wait. */
+async function beginNewTurn(run: ReadyRun): Promise<boolean> {
+  beginOpenCodeTurnImages(run);
+  // The index start is read before the model can stage anything, within a bound Stop can cut.
+  if (run.turnIndex === undefined) return true;
+  // Stop (the operator's or the lifecycle's) ended the wait, or the run went away meanwhile: no
+  // prompt or slash command may reach the runtime. Only an index read that merely ran out of
+  // time continues, with the start reported unavailable.
+  return (await awaitIndexStart(run, run.turnIndex)) !== "capture-aborted";
 }
 
 function cancelStoppedTurn(run: ReadyRun): false {
