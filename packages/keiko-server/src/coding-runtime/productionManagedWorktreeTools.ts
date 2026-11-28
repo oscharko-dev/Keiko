@@ -445,6 +445,8 @@ interface ProposalApprovalProbe {
   readonly matchesApproval: (proposalId: string) => boolean;
   /** The operator declined the proposal: it stays reviewable, so this is read first. */
   readonly declined?: (proposalId: string) => boolean;
+  /** The system refused it (a full approval queue): the wait ends without a person's "no". */
+  readonly refused?: (proposalId: string) => boolean;
 }
 
 export function waitForRuntimeProposalApproval(
@@ -463,6 +465,7 @@ export function waitForRuntimeProposalApproval(
     inspect: (): ProposalApprovalWaitOutcome | undefined => {
       try {
         if (probe.declined?.(proposalId) === true) return "denied";
+        if (probe.refused?.(proposalId) === true) return "unavailable";
         if (probe.review(proposalId) === undefined) return "unavailable";
         return probe.matchesApproval(proposalId) ? "approved" : undefined;
       } catch (error) {
@@ -1116,6 +1119,8 @@ function declinableProposalProbe(
     matchesApproval: (proposalId) => service.matchesApproval(proposalId),
     declined: (proposalId) =>
       input.approvalProofVerifier?.proposalDeclined?.(runId, proposalId) === true,
+    refused: (proposalId) =>
+      input.approvalProofVerifier?.proposalRefused?.(runId, proposalId) === true,
   };
 }
 

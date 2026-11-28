@@ -6327,6 +6327,18 @@ describe("immutable draft delivery manager approvals", () => {
       ).toBe(false);
       expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(false);
 
+      // A queue bound ends the wait but is never a person's "no".
+      expect(
+        manager.declineApproval?.({
+          runId: "run-1",
+          requestId: proposalId,
+          actionKind: "push",
+          cause: "queue-full",
+        }),
+      ).toBe(true);
+      expect(bridge.proposalRefused?.("run-1", proposalId)).toBe(true);
+      expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(false);
+
       expect(
         manager.declineApproval?.({ runId: "run-1", requestId: proposalId, actionKind: "push" }),
       ).toBe(true);

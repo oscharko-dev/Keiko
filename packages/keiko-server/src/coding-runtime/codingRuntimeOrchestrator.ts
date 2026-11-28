@@ -2985,11 +2985,13 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     challenge: ApprovalChallenge,
     actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
+    cause?: "queue-full",
   ): void {
     this.deps.manager.declineApproval?.({
       runId,
       requestId: challenge.permission.requestId,
       actionKind,
+      ...(cause === undefined ? {} : { cause }),
     });
   }
 
@@ -3595,7 +3597,9 @@ export class CodingRuntimeOrchestrator {
     challenge: ApprovalChallenge,
   ): Promise<CodingRuntimeOrchestratorResult> {
     const { requestId, actionKind } = challenge.permission;
-    if (actionKind !== undefined) this.declineServerRaisedAsk(current.runId, challenge, actionKind);
+    if (actionKind !== undefined) {
+      this.declineServerRaisedAsk(current.runId, challenge, actionKind, "queue-full");
+    }
     const settled = await this.resolveRuntimePermission(current.runId, requestId, "denied");
     const live = this.current();
     if (live?.runId !== current.runId) return this.fail("invalid-intent");

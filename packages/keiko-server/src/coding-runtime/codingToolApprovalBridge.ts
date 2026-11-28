@@ -138,6 +138,8 @@ export interface CodingToolApprovalProofVerifier {
   readonly consumeCommit?: (runId: string, request: CommitToolRequest) => object | undefined;
   /** Whether the operator declined this run's Git stage, commit, push or pull-request proposal. */
   readonly proposalDeclined?: (runId: string, proposalId: string) => boolean;
+  /** Whether the system refused this run's proposal (a full approval queue): never a person's "no". */
+  readonly proposalRefused?: (runId: string, proposalId: string) => boolean;
   readonly matches: (input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -171,6 +173,8 @@ export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifie
    * wait reads (ADR-0124 D6). A decline grants nothing: it only ends that run's wait for that id.
    */
   readonly declineProposal?: (runId: string, proposalId: string) => void;
+  /** Ends that run's wait for that id like a decline, without recording a person's "no". */
+  readonly refuseProposal?: (runId: string, proposalId: string) => void;
   readonly observePermission: (input: CodingToolApprovalObservation) => boolean;
   readonly activatePermission: (input: CodingToolApprovalActivation) => boolean;
   readonly invalidateRun: (runId: string) => void;
@@ -226,6 +230,7 @@ export function createCodingToolApprovalBridge(
   const approved = new Map<string, ApprovedAction>();
   const bindings = new Map<string, number>();
   const declined = new Set<string>();
+  const refused = new Set<string>();
   const consumedPlans = new Map<string, string>();
   return {
     takeApprovedPlan: ({ runId, request }): string | undefined => {
@@ -240,8 +245,13 @@ export function createCodingToolApprovalBridge(
     declineProposal: (runId, proposalId): void => {
       recordDecline(declined, runId, proposalId);
     },
+    refuseProposal: (runId, proposalId): void => {
+      recordDecline(refused, runId, proposalId);
+    },
     proposalDeclined: (runId, proposalId): boolean =>
       declined.has(permissionKey(runId, proposalId)),
+    proposalRefused: (runId, proposalId): boolean =>
+      refused.has(permissionKey(runId, proposalId)),
     observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),
@@ -250,6 +260,7 @@ export function createCodingToolApprovalBridge(
       invalidateRun(pending, approved, bindings, runId);
       forgetRunPlans(consumedPlans, runId);
       forgetRunKeys(declined, runId);
+      forgetRunKeys(refused, runId);
       commitService?.invalidate();
       gitService?.invalidate();
       deliveryService?.invalidate();

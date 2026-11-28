@@ -253,6 +253,20 @@ describe("production managed worktree tools", () => {
     expect(probe.matchesApproval).not.toHaveBeenCalled();
   });
 
+  it("settles a proposal wait as unavailable, never denied, when the system refused it", async () => {
+    const probe = {
+      review: vi.fn(() => ({})),
+      matchesApproval: vi.fn(() => false),
+      declined: vi.fn(() => false),
+      refused: vi.fn(() => true),
+    };
+
+    await expect(waitForRuntimeProposalApproval(probe, "commit-full")).resolves.toBe(
+      "unavailable",
+    );
+    expect(probe.review).not.toHaveBeenCalled();
+  });
+
   // PR #3625: a commit proposal's ask is raised by the server itself, so a denial had nothing to
   // reply to. Before ADR-0124 D6 the denial ended the whole run and its abort released the wait; with
   // the run going on, the call held until the approval ceiling. The run's decline now settles it at

@@ -289,6 +289,11 @@ export interface CodingRuntimeApprovalDeclineRequest {
   readonly runId: string;
   readonly requestId: string;
   readonly actionKind: CodingWorkbenchSupervisedActionKind;
+  /**
+   * `queue-full`: the ask was refused because the run's approval queue was full. It ends the
+   * proposal's wait like a decline but is never recorded as a person's "no".
+   */
+  readonly cause?: "queue-full" | undefined;
 }
 
 export type CodingRuntimeApprovalIssueResult =
@@ -1159,10 +1164,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   }
 
   public declineApproval(request: CodingRuntimeApprovalDeclineRequest): boolean {
-    const declineProposal = this.deps.codingToolApprovals?.declineProposal;
+    const approvals = this.deps.codingToolApprovals;
+    const settle =
+      request.cause === "queue-full" ? approvals?.refuseProposal : approvals?.declineProposal;
     if (this.active?.context.runId !== request.runId || !isOwnedGitApproval(request)) return false;
-    if (declineProposal === undefined) return false;
-    declineProposal(request.runId, request.requestId);
+    if (settle === undefined) return false;
+    settle(request.runId, request.requestId);
     return true;
   }
 

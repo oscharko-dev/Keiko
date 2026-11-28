@@ -453,6 +453,17 @@ describe("coding tool approval bridge records declined proposals", () => {
     expect(bridge.proposalDeclined?.("run-other", "commit-1")).toBe(false);
   });
 
+  it("records a system refusal apart from a person's decline", () => {
+    const bridge = createCodingToolApprovalBridge();
+
+    bridge.refuseProposal?.(RUN_ID, "commit-1");
+
+    expect(bridge.proposalRefused?.(RUN_ID, "commit-1")).toBe(true);
+    expect(bridge.proposalDeclined?.(RUN_ID, "commit-1")).toBe(false);
+    bridge.invalidateRun(RUN_ID);
+    expect(bridge.proposalRefused?.(RUN_ID, "commit-1")).toBe(false);
+  });
+
   it("forgets a run's declines with the run", () => {
     const bridge = createCodingToolApprovalBridge();
     bridge.declineProposal?.(RUN_ID, "commit-1");

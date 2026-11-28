@@ -4895,6 +4895,31 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-4");
   });
 
+  it("refuses an overflowing delivery ask as a queue bound, never as a person's decline", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(deliveryPermission("delivery-1", "commit"));
+    for (let index = 0; index < MAX_QUEUED_APPROVALS_PER_RUN; index += 1) {
+      await f.orchestrator.ingest(deliveryPermission(`delivery-${String(index + 2)}`, "commit"));
+    }
+    const overflow = `delivery-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2)}`;
+    expect(await f.orchestrator.ingest(deliveryPermission(overflow, "commit"))).toMatchObject({
+      ok: true,
+    });
+
+    expect(f.manager.declineApproval).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: overflow,
+      actionKind: "commit",
+      cause: "queue-full",
+    });
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: overflow,
+      decision: "denied",
+    });
+  });
+
   it("fails closed with a closed code when the overflow denial cannot be settled", async () => {
     const f = fixture();
     await f.orchestrator.start(start);
