@@ -885,7 +885,7 @@ async function readCommitCleanupConfig(ctx: RunContext): Promise<CommitCleanupCo
         "config",
         "--null",
         "--get-regexp",
-        "^(commit\\.cleanup|core\\.comment(char|string))$",
+        String.raw`^(commit\.cleanup|core\.comment(char|string))$`,
       ],
       cwd: undefined,
       timeoutMs: ctx.timeoutMs,
