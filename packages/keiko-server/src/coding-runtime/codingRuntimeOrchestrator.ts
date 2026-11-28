@@ -1430,6 +1430,34 @@ function recordStartScopeGap(
   });
 }
 
+// A root the filesystem cannot be asked about (a permission or path error) is not proven the same
+// folder: the start is refused as a selection mismatch and the cause is logged body-free with the
+// request's correlation id, never surfaced as an opaque server error.
+function rootsAreSameFolderOrReport(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  expectedRoot: string,
+  activeRoot: string,
+): boolean {
+  try {
+    return repositoryRootsAreSameFolder(expectedRoot, activeRoot);
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId:
+        correlationId !== undefined && isValidCorrelationId(correlationId)
+          ? correlationId
+          : UNKNOWN_CORRELATION_ID,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.start",
+      source: "coding-runtime-orchestrator.start",
+      ...describeError(error),
+      message: "runtime-start-failed",
+      code: "stage=start-scope:reason=root-lookup-failed",
+    });
+    return false;
+  }
+}
+
 function recordRuntimeLifecycleFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -4887,7 +4915,12 @@ export class CodingRuntimeOrchestrator {
     // The run starts in the repository the person sees or not at all: the request states the root
     // the Workbench shows, and the server's global pointer is not allowed to differ from it.
     if (
-      !repositoryRootsAreSameFolder(request.expectedWorkspace.root, active.instance.repositoryRoot)
+      !rootsAreSameFolderOrReport(
+        this.deps.diagnostics,
+        correlationId,
+        request.expectedWorkspace.root,
+        active.instance.repositoryRoot,
+      )
     ) {
       return {
         gap: "workspace-selection-mismatch",

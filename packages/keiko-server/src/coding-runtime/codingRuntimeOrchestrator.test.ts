@@ -4,7 +4,7 @@ import {
   createCodingSessionContinuity,
   type CodingSessionContinuity,
 } from "./codingSessionContinuity.js";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3606,6 +3606,36 @@ describe("CodingRuntimeOrchestrator", () => {
       (await f.orchestrator.start({ ...start, expectedWorkspace: { root: respelled } })).ok,
     ).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "refuses a root the filesystem cannot be asked about and logs it with the correlation id",
+    async () => {
+      const captured = captureDiagnostics();
+      const f = fixtureFrom({ diagnostics: captured.diagnostics });
+      // A folder without search permission fails the lookup with EACCES, which is not "missing":
+      // it must end as a refusal, not an unhandled throw.
+      const locked = mkdtempSync(join(tmpdir(), "keiko-root-locked-"));
+      chmodSync(locked, 0o000);
+      try {
+        expect(
+          await f.orchestrator.start(
+            { ...start, expectedWorkspace: { root: join(locked, "repository") } },
+            "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13",
+          ),
+        ).toEqual({ ok: false, failureCode: "workspace-selection-mismatch" });
+      } finally {
+        chmodSync(locked, 0o700);
+        rmSync(locked, { recursive: true, force: true });
+      }
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13",
+          operation: "coding-runtime.start",
+          code: "stage=start-scope:reason=root-lookup-failed",
+        }),
+      );
+    },
+  );
 
   it.runIf(process.platform === "linux")(
     "refuses a root that differs only in case on a case-sensitive filesystem",
