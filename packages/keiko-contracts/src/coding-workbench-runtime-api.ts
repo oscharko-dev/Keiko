@@ -1431,6 +1431,8 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
       /** Required only on native-retry-changed; null reports the native producer's clear. */
       readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
+      /** Required only on native-subagents-changed (U-52): the run's active subagent sessions. */
+      readonly activeSubagentCount?: number | undefined;
     };
 
 // The text of a request. A slash command takes its arguments from it, and a command such as

@@ -269,6 +269,7 @@ export type CodingWorkbenchRuntimeEventKind =
   | "task-submitted"
   | "observation-streamed"
   | "native-retry-changed"
+  | "native-subagents-changed"
   | "permission-requested"
   | "diff-summarized"
   | "verification-summarized"
@@ -288,6 +289,7 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "task-submitted",
     "observation-streamed",
     "native-retry-changed",
+    "native-subagents-changed",
     "permission-requested",
     "diff-summarized",
     "verification-summarized",
@@ -786,6 +788,11 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly kind: CodingWorkbenchRuntimeEventKind;
   /** Required only on native-retry-changed; null is the native history's explicit clear. */
   readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
+  /**
+   * Required only on native-subagents-changed: how many of the run's subagent sessions work while
+   * the run's own session is idle (U-52). A count, never a name or text; 0 clears.
+   */
+  readonly activeSubagentCount?: number | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly requestedMode?: CodingWorkbenchMode | undefined;

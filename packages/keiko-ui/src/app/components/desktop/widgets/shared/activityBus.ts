@@ -45,6 +45,7 @@ const RUNTIME_EVENT_PRESENTATION: Record<
   "task-submitted": { type: "run", labelKey: "activity.event.taskSubmitted" },
   "observation-streamed": { type: "step", labelKey: "activity.event.observationStreamed" },
   "native-retry-changed": { type: "step", labelKey: "activity.event.observationStreamed" },
+  "native-subagents-changed": { type: "step", labelKey: "activity.event.observationStreamed" },
   "permission-requested": { type: "approval", labelKey: "activity.event.permissionRequested" },
   "diff-summarized": { type: "step", labelKey: "activity.event.diffSummarized" },
   "verification-summarized": {

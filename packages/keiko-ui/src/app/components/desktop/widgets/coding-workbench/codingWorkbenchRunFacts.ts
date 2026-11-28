@@ -16,7 +16,8 @@ import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
  * retried (#3873 review: an outage rides on for minutes, and "Waiting for the model" read the same
  * as a slow generation).
  */
-export type CodingWorkbenchRunPhase = "decision" | "gateway" | "verifier" | "tool" | "model";
+export type CodingWorkbenchRunPhase =
+  "decision" | "gateway" | "verifier" | "tool" | "subagents" | "model";
 
 export interface CodingWorkbenchRunPhaseInput {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | null;
@@ -94,6 +95,25 @@ export function nativeRunRetry(
 }
 
 /**
+ * How many of the run's subagents work while its own session is idle (U-52): the newest
+ * `native-subagents-changed` fact of the running run, zero without one. A background subagent keeps
+ * working after its parent went idle, so the run is not waiting for the model then.
+ */
+export function activeSubagentCount(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): number {
+  if (snapshot?.state !== "running" || snapshot.runId === undefined) return 0;
+  const fact = events.findLast(
+    (event) =>
+      event.runId === snapshot.runId &&
+      event.kind === "runtime-event" &&
+      event.eventKind === "native-subagents-changed",
+  );
+  return fact?.kind === "runtime-event" ? (fact.activeSubagentCount ?? 0) : 0;
+}
+
+/**
  * True for a Build run that settled successfully although the model never used a tool: the feed of
  * the run is whole and holds no tool call and no plan, so no file was edited and no command ran. A
  * display fact over counts the run already has, never a change to its outcome. The agent is the
@@ -123,7 +143,9 @@ export function runPhase(input: CodingWorkbenchRunPhaseInput): CodingWorkbenchRu
   if (input.snapshot?.state !== "running") return null;
   if (modelGatewayRetrying(input.events, input.snapshot.runId)) return "gateway";
   const tool = unsettledTool(input);
-  if (tool === undefined) return "model";
+  if (tool === undefined) {
+    return activeSubagentCount(input.snapshot, input.events) > 0 ? "subagents" : "model";
+  }
   return tool === VERIFIER_TOOL ? "verifier" : "tool";
 }
 

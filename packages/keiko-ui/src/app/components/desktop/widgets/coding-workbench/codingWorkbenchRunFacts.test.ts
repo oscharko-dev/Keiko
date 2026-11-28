@@ -13,6 +13,7 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
+  activeSubagentCount,
   answeredWithoutTools,
   formatRunDuration,
   modelGatewayRetrying,
@@ -430,5 +431,53 @@ describe("answeredWithoutTools", () => {
         availability: "unavailable",
       } as never),
     ).toBe(false);
+  });
+});
+
+// U-52: a background subagent keeps working after its parent went idle, so "Waiting for the model"
+// was wrong for as long as the children ran. The server publishes the active count when it changes.
+function subagentFact(
+  sequence: number,
+  activeSubagentCount: number,
+  runId = "run-1",
+): CodingWorkbenchRuntimeSseEvent {
+  return {
+    schemaVersion: "1",
+    cursor: `${runId}:${String(sequence)}`,
+    sequence,
+    occurredAt: STARTED,
+    kind: "runtime-event",
+    runId,
+    state: "running",
+    revision: 4,
+    eventKind: "native-subagents-changed",
+    activeSubagentCount,
+  };
+}
+
+describe("subagent waiting phase (U-52)", () => {
+  const input = { snapshot: snapshot(), feed: null, pendingDecision: false };
+
+  it("counts the newest fact of the run and nothing from another run or a settled one", () => {
+    expect(activeSubagentCount(snapshot(), [subagentFact(1, 3), subagentFact(2, 2)])).toBe(2);
+    expect(activeSubagentCount(snapshot(), [subagentFact(1, 3, "run-2")])).toBe(0);
+    expect(activeSubagentCount(snapshot({ state: "succeeded" }), [subagentFact(1, 3)])).toBe(0);
+    expect(activeSubagentCount(null, [subagentFact(1, 3)])).toBe(0);
+  });
+
+  it("names the phase while subagents work and returns to the model when they finish", () => {
+    expect(runPhase({ ...input, events: [subagentFact(1, 2)] })).toBe("subagents");
+    expect(runPhase({ ...input, events: [subagentFact(1, 2), subagentFact(2, 0)] })).toBe("model");
+  });
+
+  it("lets a running tool and a gateway outage speak first", () => {
+    const running = feed([[tool("shell", "running")]]);
+    expect(runPhase({ ...input, feed: running, events: [subagentFact(1, 2)] })).toBe("tool");
+    expect(
+      runPhase({
+        ...input,
+        events: [subagentFact(1, 2), gatewayFact(2, "model-gateway-retrying")],
+      }),
+    ).toBe("gateway");
   });
 });

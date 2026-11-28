@@ -268,6 +268,7 @@ import {
   projectNativeParentHistory,
   interruptNativeTree,
   type NativeSessionTreeRun,
+  type NativeTreeStatusDeps,
 } from "./opencodeNativeSessionTree.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import {
@@ -756,6 +757,8 @@ export interface OpenCodeRuntimeCompositionInput {
             }) => void)
           | undefined;
         readonly clear: () => void;
+        /** The run's active subagent count while its own session is idle (U-52). */
+        readonly observeSubagents?: ((count: number) => void) | undefined;
         readonly ingest: (
           signal: import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
         ) => boolean;
@@ -2950,6 +2953,7 @@ async function handshake(
           client,
           tree: (sessionId) => nativeSessionTree(run, sessionId),
           activityLog: input.activityLog,
+          onActiveSubagents: subagentCountSink(input),
         }),
       },
       safety: {
@@ -3011,6 +3015,13 @@ async function closeFailedHandshakeAdapter(
   } catch (error) {
     recordCompositionDisposalFailure(diagnostics, runId, "handshake-adapter-close", error);
   }
+}
+
+// The run's native session tree reports its active subagent count to the run's observer (U-52).
+function subagentCountSink(
+  input: OpenCodeRuntimeCompositionInput,
+): NativeTreeStatusDeps["onActiveSubagents"] {
+  return input.safeActivity?.observeSubagents;
 }
 
 // eslint-disable-next-line max-lines-per-function -- ordered V2 readiness ports bind one attested child.

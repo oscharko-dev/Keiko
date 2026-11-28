@@ -683,3 +683,31 @@ describe("silent native children", () => {
     ).rejects.toThrow("read failed");
   });
 });
+
+// U-52: a background subagent keeps working after the primary went idle; the status port tells the
+// run's observer how many children work then, once per change and never per poll.
+describe("the run's active subagent count (U-52)", () => {
+  it("reports the count while the primary is idle, on change only, and zero when they end", async () => {
+    const runtime = fakeRuntime([session("ses_a", PRIMARY), session("ses_b", PRIMARY)], [PRIMARY]);
+    const counts: number[] = [];
+    const status = createNativeTreeStatusPort({
+      runId: "run-tree",
+      client: runtime.client,
+      tree: () => tree(),
+      activityLog: undefined,
+      onActiveSubagents: (count) => counts.push(count),
+    });
+    const signal = new AbortController().signal;
+    await status(PRIMARY, signal);
+    runtime.active = [["ses_a", "ses_b"]];
+    await status(PRIMARY, signal);
+    await status(PRIMARY, signal);
+    runtime.active = [["ses_b"]];
+    await status(PRIMARY, signal);
+    runtime.active = [[PRIMARY, "ses_b"]];
+    await status(PRIMARY, signal);
+    runtime.active = [[]];
+    await status(PRIMARY, signal);
+    expect(counts).toEqual([2, 1, 0]);
+  });
+});

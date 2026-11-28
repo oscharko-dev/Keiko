@@ -1718,6 +1718,25 @@ describe("production native retry projection", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("publishes the active subagent count as a valid body-free runtime event (U-52)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-subagents-"));
+    try {
+      const f = retryActivityFixture(root);
+      f.activity.arm();
+      f.activity.observeSubagents?.(2);
+      f.activity.observeSubagents?.(0);
+      expect(f.events).toMatchObject([
+        { kind: "native-subagents-changed", activeSubagentCount: 2 },
+        { kind: "native-subagents-changed", activeSubagentCount: 0 },
+      ]);
+      expect(new Set(f.events.map((event) => event.eventId)).size).toBe(2);
+      expect(f.events.every((event) => validateCodingWorkbenchRuntimeEvent(event).ok)).toBe(true);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 interface ChildFixturePlugin {

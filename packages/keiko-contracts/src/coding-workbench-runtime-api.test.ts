@@ -2705,3 +2705,36 @@ describe("explicit Coding Jira administrative connector scope", () => {
     ).toMatchObject({ ok: false });
   });
 });
+
+describe("the native subagent count fact (U-52)", () => {
+  const fact = {
+    schemaVersion: "1",
+    cursor: "run-1:3",
+    sequence: 3,
+    occurredAt: "2026-11-28T05:00:00.000Z",
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-subagents-changed",
+    activeSubagentCount: 2,
+  };
+
+  it("admits a count on its own kind only", () => {
+    expect(validateCodingWorkbenchRuntimeSseEvent(fact).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, activeSubagentCount: 0 }).ok).toBe(
+      true,
+    );
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, activeSubagentCount: -1 }).ok).toBe(
+      false,
+    );
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, activeSubagentCount: "2" }).ok).toBe(
+      false,
+    );
+    const { activeSubagentCount: _count, ...withoutCount } = fact;
+    expect(validateCodingWorkbenchRuntimeSseEvent(withoutCount).ok).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind: "runtime-health" }).ok,
+    ).toBe(false);
+  });
+});

@@ -90,6 +90,7 @@ export function sseEventKeys(kind: unknown): readonly string[] {
         "contentTrust",
         "verificationSummary",
         "nativeRetry",
+        "activeSubagentCount",
       ]
     : [...common, "verificationGap"];
 }
@@ -115,6 +116,16 @@ export function validateSseEventFields(
   validateSseVerificationGap(value, errors);
   validateSseVerificationSummary(value, errors);
   validateSseNativeRetry(value, errors);
+  validateSseSubagentCount(value, errors);
+}
+
+function validateSseSubagentCount(value: Record<string, unknown>, errors: string[]): void {
+  const carries = value.kind === "runtime-event" && value.eventKind === "native-subagents-changed";
+  if (carries)
+    validateNonNegativeSafeInteger(value.activeSubagentCount, "activeSubagentCount", errors);
+  else if (value.activeSubagentCount !== undefined) {
+    errors.push("activeSubagentCount is only admissible on native-subagents-changed");
+  }
 }
 
 export function isCodingWorkbenchVerificationSummary(

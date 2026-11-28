@@ -1063,6 +1063,7 @@ function safeActivityController(
     beginTool: (input): void => {
       if (tools.armed) rememberAdmittedChild(tools, input);
     },
+    observeSubagents: subagentObserver(runId, () => tools.armed, onRuntimeEvent),
     clear: (): void => {
       tools.armed = false;
       tools.binding = undefined;
@@ -1275,6 +1276,27 @@ function nativeRetryObserver(
     clear: (): void => {
       current = undefined;
     },
+  };
+}
+
+// The count of the run's subagent sessions that work while its own session is idle (U-52): a count
+// alone, published as the run's event each time the tree reports a change, only while armed.
+function subagentObserver(
+  runId: string,
+  isArmed: () => boolean,
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
+): (count: number) => void {
+  let sequence = 0;
+  return (count) => {
+    if (!isArmed()) return;
+    onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `event-child-status-${String(++sequence)}`,
+      runId,
+      occurredAt: new Date().toISOString(),
+      kind: "native-subagents-changed",
+      activeSubagentCount: count,
+    });
   };
 }
 

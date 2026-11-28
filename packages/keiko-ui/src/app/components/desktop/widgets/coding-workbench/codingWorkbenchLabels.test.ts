@@ -556,6 +556,7 @@ describe("runStatusAnnouncement run phase", () => {
     gateway: true,
     verifier: true,
     tool: true,
+    subagents: true,
     model: true,
   } as const satisfies Record<CodingWorkbenchRunPhase, true>;
   const running: CodingWorkbenchRuntimeState = {

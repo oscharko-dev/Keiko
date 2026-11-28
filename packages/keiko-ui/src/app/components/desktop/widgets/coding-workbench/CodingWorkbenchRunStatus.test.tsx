@@ -665,3 +665,36 @@ describe("CodingWorkbenchRunStatus unchanged failing check", () => {
     expect(screen.queryByTestId("coding-runtime-verification-gap-detail")).not.toBeInTheDocument();
   });
 });
+
+it.each([
+  ["en", 1, "Waiting for 1 subagent"],
+  ["en", 3, "Waiting for 3 subagents"],
+  ["de", 1, "Wartet auf 1 Unteragenten"],
+  ["de", 3, "Wartet auf 3 Unteragenten"],
+] as const)("says it waits for subagents in %s (%i, U-52)", async (locale, count, text) => {
+  await loadLocaleMessages(locale);
+  window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+  const fact: CodingWorkbenchRuntimeSseEvent = {
+    schemaVersion: "1",
+    cursor: "run-1:2",
+    sequence: 2,
+    occurredAt: NOW,
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-subagents-changed",
+    activeSubagentCount: count,
+  };
+  render(
+    <I18nProvider>
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("running"), [...RUNNING.events, fact])}
+        researchGrant={null}
+        phase="subagents"
+      />
+    </I18nProvider>,
+  );
+  expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(text);
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});

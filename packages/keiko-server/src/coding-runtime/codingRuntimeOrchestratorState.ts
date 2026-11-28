@@ -23,6 +23,7 @@ export interface AuxiliaryEventFacts {
   readonly contentTrust?: CodingWorkbenchRuntimeEvent["contentTrust"];
   readonly verificationSummary?: CodingWorkbenchRuntimeEvent["verificationSummary"];
   readonly nativeRetry?: CodingWorkbenchRuntimeEvent["nativeRetry"];
+  readonly activeSubagentCount?: CodingWorkbenchRuntimeEvent["activeSubagentCount"];
 }
 
 /** Projects the forwardable auxiliary facts off an ingested runtime event. */
@@ -33,6 +34,9 @@ export function auxiliaryEventFacts(event: CodingWorkbenchRuntimeEvent): Auxilia
 function forwardedAuxiliaryEventFacts(event: AuxiliaryEventFacts = {}): AuxiliaryEventFacts {
   return {
     ...(event.nativeRetry === undefined ? {} : { nativeRetry: event.nativeRetry }),
+    ...(event.activeSubagentCount === undefined
+      ? {}
+      : { activeSubagentCount: event.activeSubagentCount }),
     ...(event.auxiliaryOutcome === undefined ? {} : { auxiliaryOutcome: event.auxiliaryOutcome }),
     ...(event.contentTrust === undefined ? {} : { contentTrust: event.contentTrust }),
     ...(event.verificationSummary === undefined

@@ -712,6 +712,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
   "task-submitted": runtimeEventAllowedKeys("taskRef", "requestedMode", "effectiveMode"),
   "observation-streamed": runtimeEventAllowedKeys("channel", "sequence", "byteCount", "truncated"),
   "native-retry-changed": runtimeEventAllowedKeys("nativeRetry"),
+  "native-subagents-changed": runtimeEventAllowedKeys("activeSubagentCount"),
   "permission-requested": runtimeEventAllowedKeys("permissionRequest"),
   "diff-summarized": runtimeEventAllowedKeys("fileCount", "addedLines", "deletedLines"),
   "verification-summarized": runtimeEventAllowedKeys(
@@ -1327,6 +1328,13 @@ function validateNativeRetryEventFields(value: Record<string, unknown>, errors: 
   }
 }
 
+function validateNativeSubagentsEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  validateRequiredSafeIntegerField(value, "activeSubagentCount", "event", errors);
+}
+
 const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   Record<
     CodingWorkbenchRuntimeEventKind,
@@ -1339,6 +1347,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "task-submitted": validateTaskSubmittedEventFields,
   "observation-streamed": validateObservationEventFields,
   "native-retry-changed": validateNativeRetryEventFields,
+  "native-subagents-changed": validateNativeSubagentsEventFields,
   "permission-requested": validatePermissionRequestedEventFields,
   "diff-summarized": validateDiffSummarizedEventFields,
   "verification-summarized": validateVerificationSummarizedEventFields,

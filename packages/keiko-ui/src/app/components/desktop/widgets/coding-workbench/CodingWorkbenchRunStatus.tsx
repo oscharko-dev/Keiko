@@ -20,6 +20,7 @@ import {
   runStatusAnnouncement,
 } from "./codingWorkbenchLabels";
 import {
+  activeSubagentCount,
   formatRunDuration,
   nativeRunRetry,
   runSettledAt,
@@ -91,17 +92,28 @@ function ElapsedTime({
 // time beside it: the sentence is the visible text as well as the announcement.
 function RunPhase({
   phase,
+  state,
   t,
 }: {
   readonly phase: CodingWorkbenchRunPhase | null;
+  readonly state: CodingWorkbenchRuntimeState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (phase === null || runPhaseIsAnnounced(phase)) return null;
   return (
     <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-phase">
-      {t(`codingWorkbench.runStatus.phase.${phase}`)}
+      {phase === "subagents"
+        ? subagentsLabel(activeSubagentCount(state.run.value, state.events), t)
+        : t(`codingWorkbench.runStatus.phase.${phase}`)}
     </span>
   );
+}
+
+// "Waiting for 1 subagent" / "Waiting for N subagents": plural-aware like the failed-command count.
+function subagentsLabel(count: number, t: CodingWorkbenchTranslate): string {
+  return count === 1
+    ? t("codingWorkbench.runStatus.phase.subagents.one")
+    : t("codingWorkbench.runStatus.phase.subagents", { count });
 }
 
 function FailedCommands({
@@ -269,7 +281,7 @@ export function CodingWorkbenchRunStatus({
         </span>
         <ElapsedTime elapsed={elapsed} t={t} />
         <ActiveAgent state={state} t={t} />
-        <RunPhase phase={phase} t={t} />
+        <RunPhase phase={phase} state={state} t={t} />
         <FailedCommands count={failedCommandCount} t={t} />
         <NativeRetry state={state} t={t} />
       </p>
