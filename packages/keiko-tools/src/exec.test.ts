@@ -1710,6 +1710,123 @@ describe("runCommand — retain-head-tail output (output volume never ends healt
     );
   });
 
+  describe("an unconfigured private key cut by the retention", () => {
+    const body = (tag: string, count: number): string =>
+      Array.from(
+        { length: count },
+        (_unused, index) =>
+          `${tag}${String(index).padStart(2, "0")}${"QUJDREVGR0hJSktM".repeat(3)}`,
+      )
+        .map((line) => `${line}\n`)
+        .join("");
+    const begin = (kind: string): string => `-----BEGIN ${kind}PRIVATE KEY-----\n`;
+    const end = (kind: string): string => `-----END ${kind}PRIVATE KEY-----\n`;
+    const filler = "ordinary build output line\n".repeat(30);
+
+    async function retained(chunks: readonly string[]): Promise<string> {
+      const spawn = recordingSpawn();
+      const base = retainDeps(spawn);
+      const deps = { ...base, policy: { ...base.policy, maxOutputBytes: 400 } };
+      const promise = runCommand({ ...input, signal: controller().signal }, deps);
+      for (const chunk of chunks) spawn.child.stdout.emit("data", Buffer.from(chunk));
+      spawn.child.emit("close", 0, null);
+      return (await promise).stdout;
+    }
+
+    it("withholds the body when the BEGIN line was dropped and no END arrives", async () => {
+      const stdout = await retained([`prefix\n${filler}${begin("")}${body("KEYA", 10)}`]);
+      expect(stdout).toContain("bytes of output omitted");
+      expect(stdout).not.toContain("KEYA");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("keeps what follows the END line when the END arrives inside the tail", async () => {
+      const stdout = await retained([
+        `prefix\n${filler}${begin("RSA ")}${body("KEYB", 8)}${end("RSA ")}after-key line\n`,
+      ]);
+      expect(stdout).not.toContain("KEYB");
+      expect(stdout).toContain("after-key line");
+    });
+
+    it("withholds a body whose BEGIN is in the head and whose lines are cut", async () => {
+      const stdout = await retained([`${begin("EC ")}${body("KEYC", 10)}${filler}`]);
+      expect(stdout).not.toContain("KEYC");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("handles several blocks and the OPENSSH variant", async () => {
+      const stdout = await retained([
+        `${filler}${begin("")}${body("KEYD", 6)}${end("")}${filler}`,
+        `${begin("OPENSSH ")}${body("KEYE", 10)}`,
+      ]);
+      expect(stdout).not.toContain("KEYD");
+      expect(stdout).not.toContain("KEYE");
+    });
+
+    it("finds a BEGIN marker split across two stream chunks", async () => {
+      const text = `${filler}${begin("")}${body("KEYF", 10)}`;
+      const at = text.indexOf("-----BEGIN") + 9;
+      const stdout = await retained([text.slice(0, at), text.slice(at)]);
+      expect(stdout).not.toContain("KEYF");
+    });
+
+    it("withholds a CRLF-delimited body whose BEGIN line was dropped", async () => {
+      const crlf = (text: string): string => text.replaceAll("\n", "\r\n");
+      const stdout = await retained([crlf(`${filler}${begin("")}${body("KEYG", 10)}`)]);
+      expect(stdout).not.toContain("KEYG");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("withholds a body whose BEGIN marker is split exactly at the head budget", async () => {
+      // The head keeps 100 bytes: the marker starts at byte 95, so its first dashes close the head.
+      const stdout = await retained([`${"x".repeat(94)}\n${begin("")}${body("KEYH", 12)}`]);
+      expect(stdout).not.toContain("KEYH");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("withholds a body whose marker is split at any tail-drop cut", async () => {
+      for (let lead = 0; lead < 40; lead += 1) {
+        const text = `${"x".repeat(lead)}\n${filler}${begin("")}${body("KEYI", 10)}`;
+        const chunks = text.match(/[\s\S]{1,13}/gu) ?? [];
+        const stdout = await retained(chunks);
+        expect(stdout).not.toContain("KEYI");
+      }
+    });
+
+    it("withholds the tail that starts inside a second block after END and BEGIN were dropped", async () => {
+      const stdout = await retained([
+        `${filler}${begin("")}${body("KEYJ", 3)}${end("")}${begin("EC ")}${body("KEYK", 14)}`,
+      ]);
+      expect(stdout).not.toContain("KEYJ");
+      expect(stdout).not.toContain("KEYK");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("finds a marker whose label outgrows any fixed carry when it is split across chunks", async () => {
+      const marker = `-----BEGIN ${"A".repeat(200)} PRIVATE KEY-----\n`;
+      const text = `${filler}${marker}${body("KEYL", 10)}`;
+      const at = text.indexOf("-----BEGIN") + 11 + 190;
+      const stdout = await retained([text.slice(0, at), text.slice(at)]);
+      expect(stdout).not.toContain("KEYL");
+    });
+
+    it("fails closed when a pending marker label outgrows the scan's bound", async () => {
+      const stdout = await retained([
+        `${filler}-----BEGIN ${"A".repeat(5_000)}`,
+        `\n${body("KEYM", 10)}`,
+      ]);
+      expect(stdout).not.toContain("KEYM");
+    });
+
+    it("leaves an output without a key byte for byte unchanged", async () => {
+      const lines = Array.from({ length: 60 }, (_unused, index) => `plain line ${String(index)}\n`);
+      const stdout = await retained([lines.join("")]);
+      expect(stdout.startsWith(lines[0] ?? "")).toBe(true);
+      expect(stdout.endsWith(lines[59] ?? "")).toBe(true);
+      expect(stdout).toContain("bytes of output omitted");
+    });
+  });
+
   it("never leaves a prefix or suffix of a multi-line configured secret at a head or tail cut", async () => {
     const secret = "alpha-secret-line-one\nbeta-secret-line-two\ngamma-secret-line-three";
     for (let lead = 0; lead < 18; lead += 1) {

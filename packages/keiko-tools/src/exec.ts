@@ -57,6 +57,13 @@ import {
   isCommandAllowed,
 } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
+import {
+  feedPemScan,
+  newPemScan,
+  withholdOpenKeyHead,
+  withholdOpenKeyTail,
+  type PemScan,
+} from "./pem-boundary-scan.js";
 import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-shell.js";
 import {
   windowsStepFrames,
@@ -834,6 +841,8 @@ export interface StreamWindow {
   dropped: number;
   // The last byte dropped from the tail's front: a newline there means the tail starts on a line.
   lastDropped: number | undefined;
+  // Whether a private-key block is open across the head, the dropped middle and the tail start.
+  readonly keyScan: PemScan;
 }
 
 export function newStreamWindow(budget: number): StreamWindow {
@@ -846,6 +855,7 @@ export function newStreamWindow(budget: number): StreamWindow {
     tailBytes: 0,
     dropped: 0,
     lastDropped: undefined,
+    keyScan: newPemScan(),
   };
 }
 
@@ -861,6 +871,7 @@ export function appendWindow(window: StreamWindow, chunk: Buffer): void {
   if (window.headBytes < window.budget) {
     const take = Math.min(window.budget - window.headBytes, rest.length);
     window.head.push(rest.subarray(0, take));
+    feedPemScan(window.keyScan, rest.subarray(0, take));
     window.headBytes += take;
     rest = rest.subarray(take);
   }
@@ -881,6 +892,7 @@ export function appendWindow(window: StreamWindow, chunk: Buffer): void {
       window.tail[window.tailFirst] = first.subarray(cut);
     }
     window.lastDropped = first[cut - 1];
+    feedPemScan(window.keyScan, first.subarray(0, cut));
     window.tailBytes -= cut;
     window.dropped += cut;
     excess -= cut;
@@ -920,14 +932,24 @@ function windowParts(
   const multiLine = secrets
     .filter((secret) => secret.includes("\n"))
     .map((secret) => secret.split("\n").map(stripCarriageReturn));
-  const keptHead = head.subarray(0, headEnd);
-  const keptTail = keepsTail ? tail.subarray(tailStart) : Buffer.alloc(0);
+  const keptHead = withholdOpenKeyHead(head.subarray(0, headEnd));
+  const keptTail = keepsTail ? withheldTail(window, tail, tailStart) : Buffer.alloc(0);
   if (multiLine.length === 0) return { head: keptHead, tail: keptTail };
   const needles = secretLineNeedles(multiLine);
   return {
     head: dropSecretLines(dropStraddlingSecretHead(keptHead, multiLine), needles, false),
     tail: dropSecretLines(dropStraddlingSecretTail(keptTail, multiLine), needles, true),
   };
+}
+
+// An UNCONFIGURED private key whose BEGIN line was dropped (or lies in the head) must not leave its
+// body at the start of the tail: the redactor needs the boundary it can no longer see. The scan
+// state at the tail's first line decides; the body is withheld up to its END line, or whole.
+function withheldTail(window: StreamWindow, tail: Buffer, tailStart: number): Buffer {
+  const scan: PemScan = { ...window.keyScan };
+  feedPemScan(scan, tail.subarray(0, tailStart));
+  const kept = tail.subarray(tailStart);
+  return scan.open ? withholdOpenKeyTail(kept) : kept;
 }
 
 const MIN_SECRET_LINE_CHARS = 8;
