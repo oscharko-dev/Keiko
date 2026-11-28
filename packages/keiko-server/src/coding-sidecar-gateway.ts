@@ -4216,7 +4216,7 @@ async function requestBufferedWithTextualRecovery(
       state.outcome = "retry-exhausted";
       return recovered;
     }
-    foldDiscardedAttempt(state.discarded, response.usage);
+    foldDiscardedAttempt(state.discarded, response);
     state.retries += 1;
   }
 }
@@ -4741,7 +4741,7 @@ async function startTextualToolCallRetry(
 ): Promise<void> {
   const { recovery, metrics } = session;
   const { state } = recovery;
-  foldDiscardedAttempt(state.discarded, response.usage);
+  foldDiscardedAttempt(state.discarded, response);
   state.retries += 1;
   recovery.proseForwarded = false;
   recovery.hold.restart(state.retries < TEXTUAL_TOOL_CALL_MAX_RETRIES);

@@ -29,6 +29,18 @@ const TOOLS = toolIndex(REAL_TOOLS);
 // The answer observed live (M-1, Gemma 4 31B): a plan written as `<todo>` elements, then the call.
 const OBSERVED_ANSWER = `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> <todo content="Commit the fix" status="pending"/> </todo>\n<shell command="npm test | tail -n 1" />`;
 
+describe("an element with attributes that no tool parameter carries", () => {
+  it("is ordinary XML, not a tool call", () => {
+    const tools = toolIndex([
+      { name: "task", parameters: { type: "object", properties: { description: {} } } },
+    ]);
+    expect(
+      detectTextualToolCall('<task id="delivery">Quarterly planning</task>', tools),
+    ).toBeUndefined();
+    expect(detectTextualToolCall('<task description="Quarterly planning" />', tools)).toBeDefined();
+  });
+});
+
 describe("detectTextualToolCall", () => {
   it.each([
     ["an XML element named after a tool (the live Gemma turn)", OBSERVED_ANSWER, "named-element"],
@@ -228,8 +240,8 @@ describe("withDiscardedAttempts", () => {
   it("counts the discarded attempts beside the answer's own", () => {
     const tally = { attemptCount: 0, promptTokens: 0, completionTokens: 0 };
     expect(withDiscardedAttempts(response, tally)).toBe(response);
-    foldDiscardedAttempt(tally, usage);
-    foldDiscardedAttempt(tally, usage);
+    foldDiscardedAttempt(tally, response);
+    foldDiscardedAttempt(tally, response);
     expect(
       withDiscardedAttempts(
         {
@@ -239,6 +251,25 @@ describe("withDiscardedAttempts", () => {
         tally,
       ).discardedAttemptUsage,
     ).toEqual({ attemptCount: 3, promptTokens: 25, completionTokens: 9 });
+  });
+});
+
+describe("a discarded response that already carries discarded attempts", () => {
+  it("folds its nested attempts into the recovery tally", () => {
+    const usage = {
+      requestId: "fixture",
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+      latencyMs: 1,
+      costClass: "low" as const,
+    };
+    const tally = { attemptCount: 0, promptTokens: 0, completionTokens: 0 };
+    foldDiscardedAttempt(tally, {
+      usage,
+      discardedAttemptUsage: { attemptCount: 2, promptTokens: 7, completionTokens: 3 },
+    });
+    expect(tally).toEqual({ attemptCount: 3, promptTokens: 17, completionTokens: 5 });
   });
 });
 

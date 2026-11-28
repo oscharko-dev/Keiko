@@ -135,7 +135,14 @@ function elementSpan(
   return { start, end: closeAt >= opened ? closeAt + closing.length : opened, form };
 }
 
-// A named element has a tool call's shape when its opening tag carries an attribute, or its body
+// The attribute names of an opening tag, read outside the quoted values.
+function attributeNames(opening: string): string[] {
+  const bare = opening.replace(/"[^"]*"|'[^']*'/gu, '""');
+  return [...bare.matchAll(/(?:^|\s)([a-z_][a-z0-9_:.-]*)\s*=/gu)].map((found) => found[1] ?? "");
+}
+
+// A named element has a tool call's shape when its opening tag carries an attribute naming one of
+// the tool's parameters (any other attribute is ordinary XML, such as `<task id="x">`), or its body
 // names one of the tool's parameters (or holds an element of the same name); a bare `<read>` or
 // `<task>text</task>` is a word in a sentence or a prompt template, not a call.
 function hasToolCallShape(
@@ -146,7 +153,7 @@ function hasToolCallShape(
   params: ReadonlySet<string>,
 ): boolean {
   const opening = lower.slice(start + tag.length + 1, opened);
-  if (opening.includes("=")) return true;
+  if (attributeNames(opening).some((name) => params.has(name))) return true;
   const closeAt = lower.lastIndexOf(`</${tag}>`);
   if (closeAt < opened) return false;
   const body = lower.slice(opened, closeAt);
@@ -435,11 +442,13 @@ export interface DiscardedAttempts {
 
 export function foldDiscardedAttempt(
   tally: DiscardedAttempts,
-  usage: NormalizedResponse["usage"],
+  response: Pick<NormalizedResponse, "usage" | "discardedAttemptUsage">,
 ): void {
-  tally.attemptCount += 1;
-  tally.promptTokens += usage.promptTokens;
-  tally.completionTokens += usage.completionTokens;
+  // A discarded response may itself carry the attempts a shared-gateway repair already discarded.
+  const nested = response.discardedAttemptUsage;
+  tally.attemptCount += 1 + (nested?.attemptCount ?? 0);
+  tally.promptTokens += response.usage.promptTokens + (nested?.promptTokens ?? 0);
+  tally.completionTokens += response.usage.completionTokens + (nested?.completionTokens ?? 0);
 }
 
 /** The answer with the usage of the attempts the recovery discarded counted beside its own. */
