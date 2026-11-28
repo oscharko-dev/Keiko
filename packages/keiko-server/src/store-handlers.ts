@@ -434,7 +434,7 @@ export async function handleListProjects(
     deps.managedTaskWorkspaceRoot,
   );
   const projects = putPreferredProjectFirst(
-    await projectsWithWorkspaceAvailability(deps.store, visibleProjects, ctx.correlationId),
+    await projectsWithWorkspaceAvailability(deps.store, visibleProjects, ctx),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -493,7 +493,7 @@ function withAvailability(
   ctx: RouteContext,
   project: Project,
 ): Promise<ProjectWithAvailability> {
-  return projectWithWorkspaceAvailability(deps.store, project, ctx.correlationId);
+  return projectWithWorkspaceAvailability(deps.store, project, ctx);
 }
 
 export async function handleCreateProject(
@@ -583,7 +583,7 @@ async function reconnectExistingProject(
     const project = await projectWithWorkspaceAvailability(
       deps.store,
       deps.store.reconnectProject(targetPath),
-      ctx.correlationId,
+      ctx,
     );
     processServerLogSink().write(
       activityLogEvent(

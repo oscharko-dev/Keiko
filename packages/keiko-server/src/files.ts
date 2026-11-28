@@ -58,7 +58,7 @@ import {
   reKeyEditorLocalHistorySafely,
 } from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
-import { correlationIdOrUnknown } from "./correlation.js";
+import { UNKNOWN_CORRELATION_ID, correlationIdOrUnknown } from "./correlation.js";
 import { recordFilesCopyRefusal, type FilesCopyRefusalStage } from "./files-copy-log.js";
 import {
   DENIED_MESSAGE,
@@ -445,7 +445,7 @@ export async function resolveRoot(
   store: UiStore,
   rootInput: string | null,
   redactor: FilesMetadataRedactor,
-  correlationId?: string,
+  correlationId: string | undefined,
 ): Promise<ResolvedProjectRoot> {
   if (rootInput === null || rootInput.trim().length === 0) {
     throw new FilesError(400, "BAD_REQUEST", "The root query parameter is required.");
@@ -558,6 +558,17 @@ function assertAdmittedIdentityCurrent(target: ResolvedTarget): void {
   assertAdmittedPathCurrent(target, "The requested path is outside the selected root.");
 }
 
+// A root resolved here has no request behind it: every route handler resolves its root through
+// `resolveRequestRoot` and passes it on, so this fallback only serves a programmatic caller that
+// supplied none. Its denial line therefore carries the sanctioned UNKNOWN_CORRELATION_ID.
+function resolveUnscopedRoot(
+  store: UiStore,
+  rootInput: string | null,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedProjectRoot> {
+  return resolveRoot(store, rootInput, redactor, UNKNOWN_CORRELATION_ID);
+}
+
 async function resolveInsideRoot(
   store: UiStore,
   rootInput: string | null,
@@ -565,7 +576,7 @@ async function resolveInsideRoot(
   redactor: FilesMetadataRedactor,
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ResolvedTarget> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   // Deny check runs BEFORE realpath so existence of a denied path is not
@@ -1240,6 +1251,8 @@ async function nearestGitRoot(
   }
 }
 
+// A denied nested Git root is left out of the file-search results: an ordinary eligibility
+// exclusion, not a refusal of the request, so it is deliberately not recorded on the denial line.
 async function canExposeFileSearchGitRoot(
   selectedRoot: ResolvedProjectRoot,
   gitRoot: string,
@@ -1493,7 +1506,7 @@ export async function searchFiles(
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<FilesSearchResponse> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const query = normalizeSearchQuery(queryInput);
   const limit = Math.min(
     Math.max(limitInput ?? DEFAULT_FILE_SEARCH_LIMIT, 1),
@@ -2034,7 +2047,7 @@ export async function resolveContainedEditorFilePath(
   // resolveRoot syscall for the same rootInput within one request.
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ContainedEditorFilePath> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   if (relativePath.length === 0) {
@@ -2390,7 +2403,7 @@ async function resolveCreationTarget(
   redactor: FilesMetadataRedactor,
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ResolvedCreationTarget> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   if (relativePath.length === 0) {
     throw new FilesError(400, "BAD_PATH", "A new entry needs a name inside the selected root.");

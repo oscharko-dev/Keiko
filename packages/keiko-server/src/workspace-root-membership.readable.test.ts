@@ -10,13 +10,13 @@ function project(path: string): Project {
 // never offers it as the starting project.
 describe("projectReadable", () => {
   it("marks a folder inside a tool's own state area as not readable", async () => {
-    await expect(projectReadable(project("/work/tool/.claude/worktrees/keiko"))).resolves.toBe(
+    await expect(projectReadable(project("/work/tool/.claude/worktrees/keiko"), {})).resolves.toBe(
       false,
     );
-    await expect(projectReadable(project("/home/me/.config/repo"))).resolves.toBe(false);
+    await expect(projectReadable(project("/home/me/.config/repo"), {})).resolves.toBe(false);
   });
 
   it("keeps an ordinary folder readable", async () => {
-    await expect(projectReadable(project("/work/customer-repo"))).resolves.toBe(true);
+    await expect(projectReadable(project("/work/customer-repo"), {})).resolves.toBe(true);
   });
 });

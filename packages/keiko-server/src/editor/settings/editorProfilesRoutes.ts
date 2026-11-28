@@ -417,16 +417,19 @@ export async function handleApplyEditorProfileImport(
   if (body === undefined || key === undefined || precondition !== body.expectedRevision) {
     return invalidRequest();
   }
-  return runFilesHandler(async () => applyResolvedImport(deps, body, key));
+  return runFilesHandler(async () => applyResolvedImport(ctx, deps, body, key));
 }
 
 async function applyResolvedImport(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   body: ParsedImportApply,
   idempotency: string,
 ): Promise<RouteResult> {
   const resolved =
-    body.root === undefined ? undefined : await resolveRoot(deps.store, body.root, deps.redactor);
+    body.root === undefined
+      ? undefined
+      : await resolveRoot(deps.store, body.root, deps.redactor, ctx.correlationId);
   const mutation: EditorProfileImportControlMutation = {
     ...body,
     idempotencyKey: idempotency,
@@ -450,13 +453,15 @@ async function applyResolvedImport(
 }
 
 async function mutateResolvedProfile(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   body: ParsedProfileMutation,
   idempotency: string,
 ): Promise<RouteResult> {
   const resolved =
-    body.root === undefined ? undefined : await resolveRoot(deps.store, body.root, deps.redactor);
+    body.root === undefined
+      ? undefined
+      : await resolveRoot(deps.store, body.root, deps.redactor, ctx.correlationId);
   const mutation: EditorProfilesControlMutation = {
     ...body,
     idempotencyKey: idempotency,

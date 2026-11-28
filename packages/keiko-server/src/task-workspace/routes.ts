@@ -289,7 +289,7 @@ async function resolveProvisionBody(
     );
   }
   const root = requireSafeField(body.root, "root");
-  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  const resolved = await resolveRoot(deps.store, root, deps.redactor, correlationId);
   const baseBranch = await issueProvisioningBase(
     deps,
     resolved.realRoot,
@@ -297,6 +297,21 @@ async function resolveProvisionBody(
     correlationId,
   );
   return parseProvisionBody({ ...body, root, baseBranch });
+}
+
+async function provisionRequestFor(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: ReturnType<typeof parseProvisionBody>,
+): Promise<WorkspaceProvisionRequest> {
+  const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor, ctx.correlationId);
+  return {
+    repositoryRequestPath: resolvedRoot.realRoot,
+    taskId: parsed.taskId,
+    baseBranch: parsed.baseBranch,
+    requestedBy: parsed.requestedBy,
+    correlationId: ctx.correlationId,
+  };
 }
 
 // POST /api/task-workspaces — provision (create or resume) a managed task workspace.
@@ -329,14 +344,7 @@ export async function handleProvisionTaskWorkspace(
         };
       }
       const parsed = await resolveProvisionBody(deps, body, ctx.correlationId);
-      const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor);
-      const request: WorkspaceProvisionRequest = {
-        repositoryRequestPath: resolvedRoot.realRoot,
-        taskId: parsed.taskId,
-        baseBranch: parsed.baseBranch,
-        requestedBy: parsed.requestedBy,
-        correlationId: ctx.correlationId,
-      };
+      const request = await provisionRequestFor(ctx, deps, parsed);
       const result = await guard.provision(request);
       return {
         status: result.created ? 201 : 200,
@@ -390,7 +398,7 @@ export async function handleListTaskWorkspaces(
     if (rootInput === null || rootInput.trim().length === 0) {
       return { status: 200, body: redacted(deps, { instances: guard.listAll() }) };
     }
-    const resolvedRoot = await resolveRoot(deps.store, rootInput, deps.redactor);
+    const resolvedRoot = await resolveRoot(deps.store, rootInput, deps.redactor, ctx.correlationId);
     const instances = guard.list(resolvedRoot.realRoot);
     return { status: 200, body: redacted(deps, { instances }) };
   });
@@ -564,7 +572,7 @@ async function readInPlaceSelection(
   const body = await readJsonObject(ctx.req);
   const root = requireSafeField(body.root, "root");
   const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  const resolved = await resolveRoot(deps.store, root, deps.redactor, ctx.correlationId);
   const branch = withBranch ? requireSafeField(body.branch, "branch") : undefined;
   const current = alreadyActiveSelection(
     guard.getActive(ctx.correlationId),
@@ -734,9 +742,10 @@ export function handleHandoffTaskWorkspace(
 async function resolveOptionalRoot(
   deps: UiHandlerDeps,
   rootInput: string | null | undefined,
+  correlationId: string | undefined,
 ): Promise<string | undefined> {
   if (rootInput === null || rootInput === undefined || rootInput.length === 0) return undefined;
-  const resolved = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const resolved = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
   return resolved.realRoot;
 }
 
@@ -749,7 +758,11 @@ export async function handleGetTaskWorkspaceReconciliation(
   const guard = requireReconciliation(deps);
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
-    const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
+    const root = await resolveOptionalRoot(
+      deps,
+      ctx.url.searchParams.get("root"),
+      ctx.correlationId,
+    );
     const report = guard.report(root);
     return { status: 200, body: redacted(deps, { report }) };
   });
@@ -772,7 +785,11 @@ export async function handleReconcileTaskWorkspaces(
     },
     async () => {
       const body = await readJsonObject(ctx.req);
-      const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
+      const root = await resolveOptionalRoot(
+        deps,
+        optionalSafeField(body.root, "root"),
+        ctx.correlationId,
+      );
       const report = await guard.reconcile(root, ctx.correlationId);
       return { status: 200, body: redacted(deps, { report }) };
     },
@@ -842,7 +859,11 @@ export async function handleGetTaskWorkspaceHealth(
   const guard = requireHealth(deps);
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
-    const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
+    const root = await resolveOptionalRoot(
+      deps,
+      ctx.url.searchParams.get("root"),
+      ctx.correlationId,
+    );
     // The route's own correlation id, so the health probe's git spawns and any termination
     // evidence they emit land on this request's timeline (AGENTS.md §8).
     const report = await guard.report(root, ctx.correlationId);
@@ -915,7 +936,11 @@ export async function handleCleanupOrphanTaskWorkspaces(
     async () => {
       const body = await readJsonObject(ctx.req);
       const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-      const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
+      const root = await resolveOptionalRoot(
+        deps,
+        optionalSafeField(body.root, "root"),
+        ctx.correlationId,
+      );
       const result = await guard.cleanupOrphans({
         ...(root !== undefined ? { repositoryRoot: root } : {}),
         requestedBy,

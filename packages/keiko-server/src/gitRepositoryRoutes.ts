@@ -533,7 +533,7 @@ export function createCloneRepositoryHandler(
       return {
         status: 201,
         body: {
-          project: await projectWithWorkspaceAvailability(deps.store, project, ctx.correlationId),
+          project: await projectWithWorkspaceAvailability(deps.store, project, ctx),
         },
       };
     } catch (error) {

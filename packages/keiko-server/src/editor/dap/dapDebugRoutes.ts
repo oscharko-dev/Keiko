@@ -256,13 +256,14 @@ function deniedPath(): RouteResult {
 async function resolveDebugWorkspace(
   workspaceId: string,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): Promise<WorkspaceResolution> {
   const project = deps.store
     .listProjects()
     .find((candidate) => breakpointStoreWorkspaceFingerprint(candidate.path) === workspaceId);
   if (project === undefined) return { ok: false, result: workspaceNotFound() };
   const resolved = await runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, project.path, deps.redactor);
+    const root = await resolveRoot(deps.store, project.path, deps.redactor, correlationId);
     return { status: 200, body: root };
   });
   if (resolved.status !== 200) return { ok: false, result: resolved };
@@ -358,7 +359,7 @@ async function authorizeWorkspace(
   service: DapDebugRouteService,
   workspaceId: string,
 ): Promise<WorkspaceAuthorization> {
-  const resolved = await resolveDebugWorkspace(workspaceId, deps);
+  const resolved = await resolveDebugWorkspace(workspaceId, deps, ctx.correlationId);
   if (!resolved.ok) return resolved;
   const authorization = service.browserSessions.authorize(
     ctx.req.headers.cookie,
@@ -450,7 +451,7 @@ async function authorizeSession(
   const projection = service.manager.health(sessionId);
   if (binding === undefined || projection === undefined)
     return { ok: false, result: sessionNotFound() };
-  const resolved = await resolveDebugWorkspace(binding.workspaceId, deps);
+  const resolved = await resolveDebugWorkspace(binding.workspaceId, deps, ctx.correlationId);
   if (!resolved.ok || resolved.workspace.partition !== binding.workspacePartitionKey) {
     return {
       ok: false,
@@ -559,7 +560,7 @@ async function handleDebugBootstrap(ctx: RouteContext, deps: UiHandlerDeps): Pro
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseDebugBootstrapRequest);
   if (!parsed.ok) return parsed.result;
-  const resolved = await resolveDebugWorkspace(parsed.value.workspaceId, deps);
+  const resolved = await resolveDebugWorkspace(parsed.value.workspaceId, deps, ctx.correlationId);
   if (!resolved.ok) return resolved.result;
   const activationRevision = await activeActivationRevision(service, resolved.workspace.realRoot);
   if (activationRevision === undefined) {

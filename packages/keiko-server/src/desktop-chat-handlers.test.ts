@@ -537,6 +537,30 @@ describe("desktop chat routes", () => {
     expect(body.messages).toEqual([]);
   });
 
+  it("records a denied current project exactly once for one chat-create request", async () => {
+    const denied = join(tmp, ".ssh");
+    mkdirSync(denied);
+    store.createProject(denied, "denied");
+    const log = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: log, level: "info" }));
+    try {
+      const res = await fetch(`${base()}/api/desktop/chats`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({ projectPath: denied, modelId: CHAT_MODEL }),
+      });
+      expect(res.status).toBe(201);
+      const lines = log.events.filter((event) => event.op === "workspace.root.denied");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        extra: { reason: "denied-locus" },
+        correlationId: expect.not.stringMatching(/^unknown-correlation-id$/u) as string,
+      });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("shares one persisted chat for a creation intent submitted by independent clients", async () => {
     const body = JSON.stringify({
       projectPath: projectDir,

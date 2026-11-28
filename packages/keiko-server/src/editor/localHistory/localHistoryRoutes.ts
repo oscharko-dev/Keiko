@@ -70,8 +70,9 @@ async function runHistoryRoute(work: () => Promise<RouteResult>): Promise<RouteR
 async function rootScope(
   deps: UiHandlerDeps,
   rootInput: string | null,
+  correlationId: string | undefined,
 ): Promise<EditorLocalHistoryRootScope> {
-  const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
   return scopeFromRealRoot(deps, root.realRoot);
 }
 
@@ -149,7 +150,7 @@ async function authorizedEntry(
   // resolveContainedEditorFilePath. If the same rootInput ever resolves to a DIFFERENT
   // realRoot between the two calls (a race we already treat as identity drift), the mismatch
   // is caught by the scopeMatches check below.
-  const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, ctx.correlationId);
   const scope = scopeFromRealRoot(deps, root.realRoot);
   const store = historyStore(deps);
   const entry = store.entry(scope, ctx.params.entryRef ?? "");
@@ -192,7 +193,7 @@ export async function handleListEditorLocalHistory(
         },
       };
     }
-    const scope = await rootScope(deps, rootInput);
+    const scope = await rootScope(deps, rootInput, ctx.correlationId);
     return { status: 200, body: { session: "active", entries: historyStore(deps).list(scope) } };
   });
 }

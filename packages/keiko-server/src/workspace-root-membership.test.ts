@@ -154,7 +154,9 @@ describe("workspace root membership", (): void => {
       findWorkspaceManifestRecordByRoot: findRecord,
     };
 
-    expect(await projectsWithWorkspaceAvailability(countingStore, store.listProjects())).toEqual(
+    expect(
+      await projectsWithWorkspaceAvailability(countingStore, store.listProjects(), {}),
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: rootA, workspaceAvailable: true }),
         expect.objectContaining({ path: rootB, workspaceAvailable: true }),
@@ -172,11 +174,11 @@ describe("workspace root membership", (): void => {
       },
     };
 
-    expect(await projectsWithWorkspaceAvailability(unavailableStore, store.listProjects())).toEqual(
-      [
-        expect.objectContaining({ path: rootA, available: true, workspaceAvailable: false }),
-        expect.objectContaining({ path: rootB, available: true, workspaceAvailable: false }),
-      ],
-    );
+    expect(
+      await projectsWithWorkspaceAvailability(unavailableStore, store.listProjects(), {}),
+    ).toEqual([
+      expect.objectContaining({ path: rootA, available: true, workspaceAvailable: false }),
+      expect.objectContaining({ path: rootB, available: true, workspaceAvailable: false }),
+    ]);
   });
 });

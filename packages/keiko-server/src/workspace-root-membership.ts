@@ -158,19 +158,38 @@ export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: str
 }
 
 /** Whether the Files and Git routes would read this folder; the project is listed either way. */
-export async function projectReadable(project: Project, correlationId?: string): Promise<boolean> {
-  return !(await pathDeniedAsyncRecorded(project.path, correlationId));
+export interface ReadabilityScope {
+  readonly correlationId?: string | undefined;
+}
+
+// One request probes a folder once: the answer, and so the denial line it records, is kept for the
+// request's own scope object and dies with it, so a request that lists projects and then builds an
+// envelope for one of them leaves a single line per denied path.
+const readabilityByScope = new WeakMap<object, Map<string, Promise<boolean>>>();
+
+export function projectReadable(project: Project, scope: ReadabilityScope): Promise<boolean> {
+  let probed = readabilityByScope.get(scope);
+  if (probed === undefined) {
+    probed = new Map();
+    readabilityByScope.set(scope, probed);
+  }
+  let readable = probed.get(project.path);
+  if (readable === undefined) {
+    readable = pathDeniedAsyncRecorded(project.path, scope.correlationId).then((denied) => !denied);
+    probed.set(project.path, readable);
+  }
+  return readable;
 }
 
 export async function projectWithWorkspaceAvailability(
   store: UiStore,
   project: Project,
-  correlationId?: string,
+  scope: ReadabilityScope,
 ): Promise<ProjectWithAvailability> {
   return {
     ...project,
     available: isProjectAvailable(project),
-    readable: await projectReadable(project, correlationId),
+    readable: await projectReadable(project, scope),
     workspaceAvailable: hasCurrentWorkspaceRootMembership(store, project.path),
   };
 }
@@ -178,12 +197,10 @@ export async function projectWithWorkspaceAvailability(
 export async function projectsWithWorkspaceAvailability(
   store: UiStore,
   projects: readonly Project[],
-  correlationId?: string,
+  scope: ReadabilityScope,
 ): Promise<readonly ProjectWithAvailability[]> {
   // A folder whose readability cannot be settled is listed unreadable, never readable.
-  const readable = await Promise.all(
-    projects.map((project) => projectReadable(project, correlationId)),
-  );
+  const readable = await Promise.all(projects.map((project) => projectReadable(project, scope)));
   let snapshot: WorkspaceRootMembershipSnapshot;
   try {
     snapshot = membershipSnapshot(store);

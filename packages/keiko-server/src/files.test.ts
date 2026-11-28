@@ -197,13 +197,17 @@ describe("desktop files browser", () => {
   it("resolves a registered project root and keeps deny-listed roots out", async () => {
     await mkdir(join(root, ".git"), { recursive: true });
 
-    await expect(resolveRoot(store, root, buildRedactor({}))).resolves.toMatchObject({
+    await expect(
+      resolveRoot(store, root, buildRedactor({}), "test-correlation"),
+    ).resolves.toMatchObject({
       root,
       realRoot: root,
     });
 
     store.createProject(join(root, ".git"), "git-dir");
-    await expect(resolveRoot(store, join(root, ".git"), buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, join(root, ".git"), buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -215,7 +219,9 @@ describe("desktop files browser", () => {
     await mkdir(join(arbitrary, "reports"));
     await writeFile(join(arbitrary, "notes.txt"), "hello world", "utf8");
 
-    await expect(resolveRoot(store, arbitrary, buildRedactor({}))).resolves.toMatchObject({
+    await expect(
+      resolveRoot(store, arbitrary, buildRedactor({}), "test-correlation"),
+    ).resolves.toMatchObject({
       root: arbitrary,
       realRoot: arbitrary,
     });
@@ -231,7 +237,9 @@ describe("desktop files browser", () => {
   });
 
   it("rejects a relative (non-absolute) arbitrary root", async () => {
-    await expect(resolveRoot(store, "relative/dir", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, "relative/dir", buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 400,
       code: "BAD_ROOT",
     });
@@ -264,12 +272,14 @@ describe("desktop files browser", () => {
     await mkdir(join(base, ".aws"));
     await mkdir(join(base, ".aws", "sub"));
 
-    await expect(resolveRoot(store, join(base, ".aws"), buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, join(base, ".aws"), buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
     await expect(
-      resolveRoot(store, join(base, ".aws", "sub"), buildRedactor({})),
+      resolveRoot(store, join(base, ".aws", "sub"), buildRedactor({}), "test-correlation"),
     ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
@@ -285,7 +295,9 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "safe-dir", `${tokenSegment}.txt`), "hidden\n", "utf8");
     await writeFile(join(root, "safe-dir", "visible.txt"), "hello\n", "utf8");
 
-    await expect(resolveRoot(store, sensitiveRoot, buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, sensitiveRoot, buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -326,7 +338,9 @@ describe("desktop files browser", () => {
     await mkdir(sensitiveProject, { recursive: true });
     store.createProject(sensitiveProject, "sensitive-project");
 
-    await expect(resolveRoot(store, sensitiveProject, buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, sensitiveProject, buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -341,7 +355,9 @@ describe("desktop files browser", () => {
     await mkdir(nestedProject, { recursive: true });
     store.createProject(nestedProject, "nested-project");
 
-    await expect(resolveRoot(store, nestedProject, buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, nestedProject, buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });

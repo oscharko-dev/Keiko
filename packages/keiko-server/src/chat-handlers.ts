@@ -296,7 +296,11 @@ import {
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
-import { projectReadable, userFacingProjects } from "./workspace-root-membership.js";
+import {
+  projectReadable,
+  userFacingProjects,
+  type ReadabilityScope,
+} from "./workspace-root-membership.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
@@ -436,7 +440,7 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
 async function pickProjectPath(
   body: Record<string, unknown>,
   deps: UiHandlerDeps,
-  correlationId: string | undefined,
+  scope: ReadabilityScope,
 ): Promise<string> {
   const supplied =
     typeof body.projectPath === "string" && body.projectPath.length > 0
@@ -447,9 +451,7 @@ async function pickProjectPath(
   }
   // A program-files row is only ever kept as a fallback for a folderless Chat, never a default pick.
   const listed = deps.store.listProjects();
-  const readable = await Promise.all(
-    listed.map((project) => projectReadable(project, correlationId)),
-  );
+  const readable = await Promise.all(listed.map((project) => projectReadable(project, scope)));
   const projects = listed.filter((_project, index) => readable[index] === true);
   const preferred = projects.find(
     (project) => project.path === deps.preferredProjectPath && isProjectAvailable(project),
@@ -471,12 +473,13 @@ async function pickProjectPath(
 async function pickRegisteredProjectPath(
   body: Record<string, unknown>,
   deps: UiHandlerDeps,
-  correlationId: string | undefined,
+  scope: ReadabilityScope,
 ): Promise<string> {
+  const correlationId = scope.correlationId;
   try {
     return resolveRegisteredWorkspaceProjectPath(
       deps.store,
-      await pickProjectPath(body, deps, correlationId),
+      await pickProjectPath(body, deps, scope),
       {
         preserveLegacyProjectIdentity: true,
       },
@@ -511,14 +514,14 @@ async function chatEnvelope(
   deps: UiHandlerDeps,
   project: Project,
   chat: Chat,
-  correlationId: string | undefined,
+  scope: ReadabilityScope,
 ): Promise<Record<string, unknown>> {
   const projects = await Promise.all(
     userFacingProjects(deps.store.listProjects(), deps.managedTaskWorkspaceRoot).map(
       async (item) => ({
         ...item,
         available: isProjectAvailable(item),
-        readable: await projectReadable(item, correlationId),
+        readable: await projectReadable(item, scope),
       }),
     ),
   );
@@ -530,7 +533,7 @@ async function chatEnvelope(
     project: {
       ...project,
       available: isProjectAvailable(project),
-      readable: await projectReadable(project, correlationId),
+      readable: await projectReadable(project, scope),
     },
     chat,
     messages: browserChatMessages(messages),
@@ -3527,7 +3530,7 @@ async function persistDesktopChat(
   modelId: string,
 ): Promise<RouteResult> {
   try {
-    const projectPath = await pickRegisteredProjectPath(body, deps, ctx.correlationId);
+    const projectPath = await pickRegisteredProjectPath(body, deps, ctx);
     const project = ensureProject(deps, projectPath, ctx.correlationId);
     const title = desktopChatCreationTitle(body);
     const chat = deps.store.createChat(project.path, title, modelId, {
@@ -3539,7 +3542,7 @@ async function persistDesktopChat(
           }
         : {}),
     });
-    const envelope = await chatEnvelope(deps, project, chat, ctx.correlationId);
+    const envelope = await chatEnvelope(deps, project, chat, ctx);
     logChatCreationOpenedEvent(
       ctx.correlationId,
       readinessObservationOf(deps, chat.selectedModel) ?? "ready",
@@ -3571,7 +3574,7 @@ async function replayDesktopChat(
 ): Promise<RouteResult | undefined> {
   if (typeof body.creationRequestId !== "string") return undefined;
   try {
-    const projectPath = await pickRegisteredProjectPath(body, deps, ctx.correlationId);
+    const projectPath = await pickRegisteredProjectPath(body, deps, ctx);
     const chat = deps.store.replayChatCreation({
       requestId: body.creationRequestId,
       projectPath,
@@ -3583,7 +3586,7 @@ async function replayDesktopChat(
     if (chat === undefined) return undefined;
     const project = deps.store.listProjects().find((item) => item.path === projectPath);
     if (project === undefined) throw new UiStoreError("NOT_FOUND", "Project not found.", 404);
-    return { status: 201, body: await chatEnvelope(deps, project, chat, ctx.correlationId) };
+    return { status: 201, body: await chatEnvelope(deps, project, chat, ctx) };
   } catch (error) {
     if (error instanceof UiStoreError) {
       return {

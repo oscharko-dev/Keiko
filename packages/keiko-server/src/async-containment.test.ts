@@ -81,7 +81,7 @@ describe("Files root selection", () => {
     const root = await tempDir();
     const store = createInMemoryUiStore();
     armed.on = true;
-    const resolved = await resolveRoot(store, root, buildRedactor({}));
+    const resolved = await resolveRoot(store, root, buildRedactor({}), "test-correlation");
     expect(resolved.realRoot).toBe(root);
   });
 
@@ -90,7 +90,7 @@ describe("Files root selection", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "ordinary");
     armed.on = true;
-    const resolved = await resolveRoot(store, root, buildRedactor({}));
+    const resolved = await resolveRoot(store, root, buildRedactor({}), "test-correlation");
     expect(resolved.realRoot).toBe(root);
   });
 
@@ -98,7 +98,12 @@ describe("Files root selection", () => {
     const root = await tempDir();
     armed.on = true;
     await expect(
-      resolveRoot(createInMemoryUiStore(), join(root, ".ssh"), buildRedactor({})),
+      resolveRoot(
+        createInMemoryUiStore(),
+        join(root, ".ssh"),
+        buildRedactor({}),
+        "test-correlation",
+      ),
     ).rejects.toMatchObject({ code: "DENIED" });
   });
 });
@@ -109,8 +114,8 @@ describe("the project listing", () => {
     const store = createInMemoryUiStore();
     const project = store.createProject(root, "ordinary");
     armed.on = true;
-    await expect(projectReadable(project)).resolves.toBe(true);
-    const listed = await projectsWithWorkspaceAvailability(store, store.listProjects());
+    await expect(projectReadable(project, {})).resolves.toBe(true);
+    const listed = await projectsWithWorkspaceAvailability(store, store.listProjects(), {});
     expect(listed).toEqual([expect.objectContaining({ path: root, readable: true })]);
   });
 
@@ -118,7 +123,7 @@ describe("the project listing", () => {
     const store = createInMemoryUiStore();
     const project = store.createProject(await tempDir(), "ordinary");
     armed.on = true;
-    await expect(projectReadable({ ...project, path: "/home/me/.config/repo" })).resolves.toBe(
+    await expect(projectReadable({ ...project, path: "/home/me/.config/repo" }, {})).resolves.toBe(
       false,
     );
   });
