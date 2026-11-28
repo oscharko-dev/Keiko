@@ -35,6 +35,40 @@ export function reserveInteractiveBrowserStreamCapacity(): () => void {
   };
 }
 
+// A browser allows six HTTP/1.1 connections per origin. Persistent streams may hold four of them;
+// the other two stay free so a finite read (a run status read, readiness, a snapshot) never queues
+// behind streams until its own deadline expires (U-37).
+export const PERSISTENT_STREAM_CONNECTION_CEILING = 4;
+// What the shared pool may hold when nothing else is open.
+const SHARED_STREAM_CONNECTIONS = 3;
+let unbudgetedStreams = 0;
+
+/**
+ * Account for a long-lived stream that opens its own connection outside the shared stream pool (the
+ * run event stream, the authenticated activity stream, the editor agent bridge). The shared pool
+ * gives up one connection per such stream, so all persistent streams together stay within
+ * {@link PERSISTENT_STREAM_CONNECTION_CEILING}. The returned release callback is idempotent.
+ */
+export function holdUnbudgetedBrowserStream(): () => void {
+  unbudgetedStreams += 1;
+  notifyCapacityChange();
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    unbudgetedStreams = Math.max(0, unbudgetedStreams - 1);
+    notifyCapacityChange();
+  };
+}
+
+/** How many connections the shared stream pool may hold now; at least one stays available. */
+export function sharedStreamConnectionBudget(): number {
+  return Math.max(
+    1,
+    Math.min(SHARED_STREAM_CONNECTIONS, PERSISTENT_STREAM_CONNECTION_CEILING - unbudgetedStreams),
+  );
+}
+
 export function subscribeBrowserStreamCapacity(listener: CapacityListener): () => void {
   listeners.add(listener);
   return (): void => {
@@ -44,6 +78,7 @@ export function subscribeBrowserStreamCapacity(listener: CapacityListener): () =
 
 export function resetBrowserStreamCapacityForTests(): void {
   interactiveReservations = 0;
+  unbudgetedStreams = 0;
   listeners.clear();
   nextPersistentSlot = 0;
   unsupportedCapacityReported = false;

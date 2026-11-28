@@ -5,6 +5,9 @@ import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client
 import {
   acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
+  holdUnbudgetedBrowserStream,
+  PERSISTENT_STREAM_CONNECTION_CEILING,
+  sharedStreamConnectionBudget,
   reserveInteractiveBrowserStreamCapacity,
   resetBrowserStreamCapacityForTests,
   subscribeBrowserStreamCapacity,
@@ -169,4 +172,30 @@ it("records a failed contention query once without dropping a healthy connection
   );
   expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer query failure");
   stop();
+});
+
+// U-37: three unshared streams (run events, activity stream, editor agent) plus three shared ones
+// filled all six HTTP/1.1 connections of the origin, so a run status read queued until its 10 s
+// deadline. The shared pool now yields one connection per unshared stream.
+describe("persistent stream connection ceiling", () => {
+  it("leaves two of six origin connections free for finite reads", () => {
+    expect(sharedStreamConnectionBudget()).toBe(3);
+    const releases = [1, 2, 3].map(() => holdUnbudgetedBrowserStream());
+    const [first, ...rest] = releases;
+    expect(sharedStreamConnectionBudget() + releases.length).toBeLessThanOrEqual(
+      PERSISTENT_STREAM_CONNECTION_CEILING,
+    );
+    expect(sharedStreamConnectionBudget()).toBe(1);
+    first?.();
+    first?.();
+    expect(sharedStreamConnectionBudget()).toBe(2);
+    rest.forEach((release) => release());
+    expect(sharedStreamConnectionBudget()).toBe(3);
+  });
+
+  it("keeps one shared connection even when many unshared streams are open", () => {
+    const releases = Array.from({ length: 6 }, () => holdUnbudgetedBrowserStream());
+    expect(sharedStreamConnectionBudget()).toBe(1);
+    releases.forEach((release) => release());
+  });
 });

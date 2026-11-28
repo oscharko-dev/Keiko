@@ -25,6 +25,7 @@ import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
 } from "./coding-app-session-channel-api";
+import { holdUnbudgetedBrowserStream } from "./browser-stream-capacity";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import {
@@ -239,7 +240,15 @@ async function connectActivity(
   // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
   // subscription here turns a later server restart into an error on an already finished task.
   if (controller.signal.aborted || endedBeforeRead) return;
-  await streamCodingAppSessionChannelSnapshots({ signal: controller.signal, onSnapshot: enqueue });
+  const release = holdUnbudgetedBrowserStream();
+  try {
+    await streamCodingAppSessionChannelSnapshots({
+      signal: controller.signal,
+      onSnapshot: enqueue,
+    });
+  } finally {
+    release();
+  }
 }
 
 function markDisconnected(

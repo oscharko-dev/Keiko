@@ -129,6 +129,14 @@ No caller may widen authority by passing a higher requested mode than the enviro
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.
 
+**Amendment, 2026-11-28 (live run posture in readiness, U-37, #4491):** while a live run holds its
+minted Authority Envelope, the readiness read confirms that run's own ceiling-clamped posture, in
+either direction, and marks the answer `liveRunAnchored: true`. A reloaded window that selects a
+narrower mode than its live run is thus told what the run actually holds. The browser contract check
+accepts an effective mode wider than the request only for an answer so marked, and never wider than
+the deployment ceiling; every other readiness answer keeps the minimum of request and ceiling. A
+failed readiness read is re-read with bounded backoff instead of staying on screen.
+
 ### D3 — Every governed coding run carries an Authority Envelope
 
 The Authority Envelope is the single shared contract for a governed coding run. It must include:

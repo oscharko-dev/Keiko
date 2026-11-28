@@ -29,6 +29,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { postEditorAgentActionResult } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
 import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
@@ -685,6 +686,8 @@ function handleEditorAgentFrame(event: Event): void {
   }
 }
 
+let releaseEditorAgentStream: (() => void) | null = null;
+
 function closeEditorAgentEventSource(): void {
   if (editorAgentEventSource === null) return;
   if (editorAgentActionListener !== null) {
@@ -694,6 +697,8 @@ function closeEditorAgentEventSource(): void {
     editorAgentEventSource.removeEventListener("editor-agent:result", editorAgentResultListener);
   }
   editorAgentEventSource.close();
+  releaseEditorAgentStream?.();
+  releaseEditorAgentStream = null;
   editorAgentEventSource = null;
   editorAgentActionListener = null;
   editorAgentResultListener = null;
@@ -729,6 +734,7 @@ function reconcileEditorAgentEventSource(): void {
   source.addEventListener("editor-agent:action", editorAgentActionListener);
   source.addEventListener("editor-agent:result", editorAgentResultListener);
   editorAgentEventSource = source;
+  releaseEditorAgentStream = holdUnbudgetedBrowserStream();
   editorAgentConnectedSessionKey = nextKey;
 }
 

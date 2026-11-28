@@ -9,7 +9,10 @@ import {
   createCodingWorkbenchRuntimeEventSource,
   parseCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-runtime-api";
-import { reserveInteractiveBrowserStreamCapacity } from "./browser-stream-capacity";
+import {
+  holdUnbudgetedBrowserStream,
+  reserveInteractiveBrowserStreamCapacity,
+} from "./browser-stream-capacity";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
 
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
@@ -297,7 +300,12 @@ export function useCodingWorkbenchRuntimeEventStream(
   handlersRef.current = handlers;
   useEffect(() => {
     if (runId === undefined) return;
-    const releaseCapacity = reserveInteractiveBrowserStreamCapacity();
+    const releaseInteractive = reserveInteractiveBrowserStreamCapacity();
+    const releaseStream = holdUnbudgetedBrowserStream();
+    const releaseCapacity = (): void => {
+      releaseStream();
+      releaseInteractive();
+    };
     let session: CodingWorkbenchRuntimeStreamSession;
     try {
       session = createCodingWorkbenchRuntimeStreamSession(

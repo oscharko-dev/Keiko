@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOriginLocksFixture } from "@/test-utils/origin-locks-fixture";
 import {
   acquirePersistentBrowserStreamCapacity,
+  holdUnbudgetedBrowserStream,
   resetBrowserStreamCapacityForTests,
 } from "@/lib/browser-stream-capacity";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -55,6 +56,18 @@ afterEach(() => {
 });
 
 describe("shared EventSource with actual origin leases", () => {
+  // U-37: the shared pool shrinks by one connection per unshared stream, and grows back.
+  it("holds fewer shared connections while unshared streams are open", async () => {
+    const releaseHeld = [1, 2].map(() => holdUnbudgetedBrowserStream());
+    const releases = Array.from({ length: 3 }, (_, index) => subscribeRoot(index));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(CapacityEventSource.instances.filter((source) => !source.closed)).toHaveLength(2);
+    releaseHeld.forEach((release) => release());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(CapacityEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+    releases.forEach((release) => release());
+  });
+
   it("reopens a yielded stream after another tab's waiter releases, preserving its cursor", async () => {
     const releases = Array.from({ length: 3 }, (_, index) => subscribeRoot(index));
     await vi.advanceTimersByTimeAsync(0);

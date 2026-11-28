@@ -7,6 +7,7 @@ import {
 import {
   acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
+  sharedStreamConnectionBudget,
   subscribeBrowserStreamCapacity,
 } from "../../../../../lib/browser-stream-capacity";
 import { secureRandomInt } from "../../../../../lib/secure-random";
@@ -60,8 +61,6 @@ const RECONNECT_JITTER_MS = 500;
 let visibilityListenerInstalled = false;
 let capacityUnsubscribe: (() => void) | undefined;
 let nextSourceGeneration = 0;
-// Leave connections for finite reads, diagnostics, the run stream and development HMR.
-const MAX_SHARED_CONNECTIONS = 3;
 const STREAM_LEASE_MS = 5_000;
 let budgetTimer: number | undefined;
 const budgetCursors = { essential: 0, background: 0 };
@@ -332,14 +331,14 @@ function selectBudgetEntries(
     (entry) => entry.essentialRefCount > 0 && !pinned.includes(entry),
   );
   const background = entries.filter((entry) => entry.essentialRefCount === 0);
-  const essentialSlots = Math.min(MAX_SHARED_CONNECTIONS - pinned.length, essential.length);
-  const backgroundSlots = MAX_SHARED_CONNECTIONS - pinned.length - essentialSlots;
+  const essentialSlots = Math.min(sharedStreamConnectionBudget() - pinned.length, essential.length);
+  const backgroundSlots = sharedStreamConnectionBudget() - pinned.length - essentialSlots;
   return new Set(
     [
       ...pinned,
       ...order(essential, essentialSlots, "essential"),
       ...order(background, backgroundSlots, "background"),
-    ].slice(0, MAX_SHARED_CONNECTIONS),
+    ].slice(0, sharedStreamConnectionBudget()),
   );
 }
 
@@ -355,7 +354,7 @@ function refreshStreamBudget(mode: "retain" | "rotate" = "retain"): void {
     if (!selected.has(entry) && hasLease(entry)) suspendEntry(entry);
   }
   for (const entry of selected) openEntrySource(entry);
-  if (entries.length <= MAX_SHARED_CONNECTIONS) {
+  if (entries.length <= sharedStreamConnectionBudget()) {
     clearBudgetTimer();
     return;
   }
