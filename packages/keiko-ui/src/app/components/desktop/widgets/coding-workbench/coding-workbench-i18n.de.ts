@@ -1421,9 +1421,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.native-agent-models-refused":
     "Agenten-Modelleinstellungen nicht verwendet",
   "codingWorkbench.event.agentModelsRefused":
-    "{count} Agenten-Modelleinstellungen in der Konfiguration wurden nicht verwendet: Sie nennen ein Modell, das das Keiko-Gateway nicht bereitstellt. Diese Agenten behalten das Modell, das eine andere Einstellung oder der Lauf ihnen gibt.",
+    "{count} Agenten-Modelleinstellungen in der Konfiguration wurden nicht verwendet, weil sie ein Modell nennen, das das Keiko-Gateway nicht bereitstellt. Diese Agenten behalten das Modell, das eine andere Einstellung oder der Lauf ihnen gibt.",
   "codingWorkbench.event.agentModelsRefused.one":
-    "1 Agenten-Modelleinstellung in der Konfiguration wurde nicht verwendet: Sie nennt ein Modell, das das Keiko-Gateway nicht bereitstellt. Dieser Agent behält das Modell, das eine andere Einstellung oder der Lauf ihm gibt.",
+    "1 Agenten-Modelleinstellung in der Konfiguration wurde nicht verwendet, weil sie ein Modell nennt, das das Keiko-Gateway nicht bereitstellt. Dieser Agent behält das Modell, das eine andere Einstellung oder der Lauf ihm gibt.",
   "codingWorkbench.event.model-gateway-retrying": "Modell-Gateway nicht erreichbar, neuer Versuch",
   "codingWorkbench.event.model-gateway-recovered": "Modell-Gateway antwortet wieder",
   "codingWorkbench.event.model-gateway-retry-stopped": "Wiederholung beim Modell-Gateway beendet",
