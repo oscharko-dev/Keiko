@@ -493,6 +493,20 @@ interface SideSources {
   readonly index: ReadonlyMap<string, SideEntry>;
   readonly head: ReadonlyMap<string, SideEntry>;
   readonly blobs: ReadonlyMap<string, string | undefined>;
+  // The repository's object-id length: what a path the index does not hold is hashed with.
+  readonly hashLength: number;
+}
+
+// Every index entry carries the repository's object format in its id length; with no entry the
+// answer is HEAD's (a born commit id, or the unborn branch's own format), never a SHA-1 guess.
+async function repositoryHashLength(
+  deps: ReturnType<typeof runtimeGitReadDeps>,
+  entries: readonly SideEntry[],
+): Promise<number> {
+  const first = entries[0];
+  if (first !== undefined) return first.objectId.length;
+  const head = await readGitHeadState(deps);
+  return head.kind === "born" ? head.sha.length : head.objectIdLength;
 }
 
 async function readSideSources(
@@ -502,7 +516,9 @@ async function readSideSources(
   scope: GitEditorDiffScope,
 ): Promise<SideSources> {
   const deps = runtimeGitReadDeps(context, execution);
-  const index = new Map((await readGitIndexEntries(deps)).map((entry) => [entry.path, entry]));
+  const indexEntries = await readGitIndexEntries(deps);
+  const index = new Map(indexEntries.map((entry) => [entry.path, entry]));
+  const hashLength = await repositoryHashLength(deps, indexEntries);
   const headState = scope === "staged" ? await readGitHeadState(deps) : undefined;
   const head = new Map(
     headState === undefined || headState.kind === "unborn"
@@ -518,7 +534,7 @@ async function readSideSources(
     wanted.filter((id): id is string => id !== undefined),
     RUNTIME_GIT_SIDE_MAX_BYTES,
   );
-  return { index, head, blobs };
+  return { index, head, blobs, hashLength };
 }
 
 async function readSides(
@@ -534,7 +550,7 @@ async function readSides(
   const after =
     scope === "staged"
       ? objectSide(sources.blobs, index)
-      : await workingSide(context, path, index?.objectId.length ?? 40, conversions);
+      : await workingSide(context, path, index?.objectId.length ?? sources.hashLength, conversions);
   return {
     path,
     before: before.text,
@@ -688,6 +704,7 @@ async function conversionCandidates(
   context: VerifiedCommitRunContext,
   paths: readonly string[],
   hashLengths: ReadonlyMap<string, number>,
+  repositoryLength: number,
 ): Promise<readonly ConversionCandidate[]> {
   const candidates: ConversionCandidate[] = [];
   // Authority and cancellation are checked again before each path is read.
@@ -702,7 +719,7 @@ async function conversionCandidates(
     if (isGitStageLargeFile(file)) return;
     const bytes = file.bytes;
     if (file.mode === "0" || !crTextBytes(bytes)) return;
-    const length = hashLengths.get(path) ?? 40;
+    const length = hashLengths.get(path) ?? repositoryLength;
     const converted = Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
     candidates.push({
       path,
@@ -763,7 +780,8 @@ async function settleWorkingConversions(
   const deps = runtimeGitReadDeps(context, execution);
   const entries = await readGitIndexEntries(deps);
   const lengths = new Map(entries.map((entry) => [entry.path, entry.objectId.length]));
-  const candidates = await conversionCandidates(context, paths, lengths);
+  const repositoryLength = await repositoryHashLength(deps, entries);
+  const candidates = await conversionCandidates(context, paths, lengths, repositoryLength);
   if (candidates.length === 0) return NO_WORKING_CONVERSIONS;
   const stats = {
     attributeSplitCount: 0,

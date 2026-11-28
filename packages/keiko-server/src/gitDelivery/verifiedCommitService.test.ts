@@ -3244,6 +3244,31 @@ describe("productive runtime status/diff/stage lane", () => {
       await expect(reviewed(path)).resolves.toMatchObject({ ...expected });
     }
 
+    // A path the index does not hold (a new file) is hashed with the repository's own object format:
+    // a SHA-1 default made Git's 64-character answer match neither content and withheld the counts.
+    it("counts a new CRLF file of a SHA-256 repository, never withholding its counts", async () => {
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(["init", "-qb", "dev", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories.
+      }
+      git(["config", "user.name", "Keiko Test"]);
+      git(["config", "user.email", "keiko@example.test"]);
+      git(["config", "core.autocrlf", "true"]);
+      git(["config", "commit.gpgsign", "false"]);
+      writeFileSync(join(root, "base.txt"), "base\n");
+      git(["add", "base.txt"]);
+      git(["commit", "-qm", "base"]);
+      git(["checkout", "-qb", "codex/task"]);
+      writeCrlf("fresh.txt", lines);
+      expect(git(["rev-parse", "--show-object-format"]).trim()).toBe("sha256");
+      const execution = options.execution ?? {};
+      const selection = await admitStageSelection(context(), execution, ["fresh.txt"]);
+      const review = await reviewStageSelection(context(), execution, selection ?? []);
+      expect(review).toEqual({ fileCount: 1, addedLines: 10, deletedLines: 0 });
+    });
+
     it("counts a file that mixes CRLF and LF lines as Git does", async () => {
       git(["config", "core.autocrlf", "true"]);
       commitLf("mixed.txt");
