@@ -15047,6 +15047,12 @@
               "required": false
             },
             {
+              "name": "toolKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "worktree",
               "type": "string",
               "dataClass": "closed-enum",
@@ -31246,6 +31252,7 @@
       "lifecycleOperations": {
         "start": ["gateway.readiness.automatic.started", "gateway.readiness.started"],
         "state": [
+          "gateway.activation.persistence",
           "gateway.conversation.admission",
           "gateway.readiness.automatic.joined",
           "gateway.readiness.automatic.withheld",
@@ -31259,6 +31266,10 @@
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "gateway.activation.persistence",
+          "mode": "correlation"
+        },
         {
           "op": "gateway.conversation.admission",
           "mode": "correlation"
@@ -31306,6 +31317,7 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "gateway.activation.persistence",
         "gateway.conversation.admission",
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
@@ -31320,6 +31332,42 @@
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "gateway.activation.persistence",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "change",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "count",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.activation.persistence.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "gateway.conversation.admission",
           "owner": "keiko-server",

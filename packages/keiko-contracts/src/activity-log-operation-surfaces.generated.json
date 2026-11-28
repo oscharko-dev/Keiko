@@ -334,6 +334,7 @@
   "files.search.completed": "bff",
   "folder.files.operation": "memory-knowledge",
   "folder.files.turn-selected": "memory-knowledge",
+  "gateway.activation.persistence": "model-gateway",
   "gateway.catalog.automatic.completed": "model-gateway",
   "gateway.catalog.metadata.wait": "model-gateway",
   "gateway.chat.completed": "model-gateway",

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4663f4cc14033acd4052df28301a7c7db627581a03f200d19255c584364e9099"
+    "catalogDigest": "d03771c549ab00ee908610c8d38a5088c206ea08be9d7c73301260c3f244db1c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 741,
-    "proofCount": 767,
-    "resolvedProofCount": 767,
+    "operationCount": 742,
+    "proofCount": 768,
+    "resolvedProofCount": 768,
     "failureClassCount": 420,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -284,6 +284,7 @@
         "embedding.scalar-ladder.deadline-expired",
         "embedding.scalar-ladder.item-completed",
         "embedding.scalar-ladder.item-failed",
+        "gateway.activation.persistence",
         "gateway.catalog.automatic.completed",
         "gateway.catalog.metadata.wait",
         "gateway.chat.completed",
@@ -2409,6 +2410,9 @@
     "folder.files.operation.line": ["packages/keiko-server/src/connectedFolderTool.test.ts"],
     "folder.files.turn-selected.line": [
       "packages/keiko-server/src/connected-folder-chat-turn.test.ts"
+    ],
+    "gateway.activation.persistence.line": [
+      "packages/keiko-server/src/gateway-activation-restart.test.ts"
     ],
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
