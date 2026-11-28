@@ -52,6 +52,34 @@ describe("durable repository delivery in the Code task", () => {
     resetClientDiagnosticWriter();
   });
 
+  // U-50 (real macOS run, 2026-11-28): a local repository without any remote showed "Draft blocked -
+  // Automatic draft generation is not available yet." after every run. That reason only says
+  // generation cannot happen here: there is nothing to act on, so no card is shown at all.
+  it("shows no description card where generation is simply unavailable", () => {
+    render(
+      <CodingWorkbenchDraftDelivery
+        snapshot={descriptionStatusSnapshot({ state: "blocked", reason: "generation-unavailable" })}
+      />,
+    );
+
+    expect(screen.queryByTestId("cwb-description-status")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Pull request description draft" })).toBeNull();
+    expect(document.body).not.toHaveTextContent("not available yet");
+  });
+
+  it.each(["model-egress-denied", "budget-exhausted", "interrupted"] as const)(
+    "keeps the card for the blocked reason %s, which a person can act on",
+    (reason) => {
+      render(
+        <CodingWorkbenchDraftDelivery
+          snapshot={descriptionStatusSnapshot({ state: "blocked", reason })}
+        />,
+      );
+
+      expect(screen.getByTestId("cwb-description-status")).toHaveAttribute("data-reason", reason);
+    },
+  );
+
   // #3390: a lapsed retention used to leave the operator with a false sentence ("the change moved")
   // and NO control at all -- the automatic draft simply vanished about a minute after the run
   // ended, with no way back. The card must now say what actually happened and still open the

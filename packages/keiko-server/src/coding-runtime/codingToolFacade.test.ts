@@ -2918,7 +2918,7 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     [{ kind: "pull", status: "not-fast-forward" }, "not-done"],
     [{ kind: "fetch", status: "auth-failed" }, "not-done"],
   ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
-    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
+    expect(codingToolGitPresentation(completedWith("git", git))).toMatchObject({ gitOutcome });
   });
 
   // Lab 2026-11-27 (Full access): the policy authorized the commit proposal, no decision was ever
@@ -2936,10 +2936,24 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     });
   });
 
+  // U-49: stage and unstage share the `keiko_git_stage` tool name, so the row learns which one it
+  // was from the result's own kind; a proposal answered ready carries no outcome, only its action.
+  it.each([
+    [{ kind: "unstage", status: "ready", reason: "none" }, { gitAction: "unstage" }],
+    [{ kind: "stage", status: "ready", reason: "none" }, { gitAction: "stage" }],
+    [
+      { kind: "unstage", status: "succeeded", reason: "none" },
+      { gitOutcome: "completed", gitAction: "unstage" },
+    ],
+    [{ kind: "branch", status: "succeeded", reason: "none" }, { gitOutcome: "completed" }],
+  ] as const)("presents the index step %j as %j", (git, presentation) => {
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual(presentation);
+  });
+
   it("fails closed to not done for a Git or commit status it does not know", () => {
     expect(
       codingToolGitPresentation(completedWith("git", { kind: "stage", status: "unexpected" })),
-    ).toEqual({ gitOutcome: "not-done" });
+    ).toEqual({ gitOutcome: "not-done", gitAction: "stage" });
     expect(
       codingToolGitPresentation(
         completedWith("verifiedCommit", { status: "unexpected", reason: "unexpected" }),
@@ -2947,14 +2961,14 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     ).toEqual({ gitOutcome: "not-done" });
   });
 
-  it("presents nothing for reads, an unprepared proposal, other results and other statuses", () => {
+  it("presents no outcome for reads, an unprepared proposal, other results and other statuses", () => {
     expect(codingToolGitPresentation(completedWith("git", { kind: "status" }))).toEqual({});
     expect(codingToolGitPresentation(completedWith("git", { kind: "diff" }))).toEqual({});
     expect(
       codingToolGitPresentation(
         completedWith("git", { kind: "stage", status: "ready", reason: "none" }),
       ),
-    ).toEqual({});
+    ).toEqual({ gitAction: "stage" });
     expect(
       codingToolGitPresentation({
         status: "completed",

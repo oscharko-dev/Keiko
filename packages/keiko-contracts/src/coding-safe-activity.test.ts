@@ -4,6 +4,7 @@ import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
   codingSafeActivityStateFailureOrigin,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
+  CODING_SAFE_ACTIVITY_GIT_ACTIONS,
   CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
@@ -156,6 +157,15 @@ describe("coding safe-activity contract", () => {
     }
     for (const gitOutcome of ["committed", "failed", "", null, 1, ["blocked"], "Blocked"]) {
       expect(isCodingSafeActivityToolPresentation({ gitOutcome })).toBe(false);
+    }
+  });
+
+  it("admits only a closed stage or unstage as the Git action of a tool presentation", () => {
+    for (const gitAction of CODING_SAFE_ACTIVITY_GIT_ACTIONS) {
+      expect(isCodingSafeActivityToolPresentation({ gitAction })).toBe(true);
+    }
+    for (const gitAction of ["commit", "Unstage", "", null, 1, ["stage"]]) {
+      expect(isCodingSafeActivityToolPresentation({ gitAction })).toBe(false);
     }
   });
 

@@ -45,6 +45,7 @@ import type {
 import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityGitAction,
   type CodingSafeActivityGitOutcome,
   type CodingSafeActivityToolPresentation,
   type CodingSafeActivityVerificationOutcome,
@@ -535,16 +536,31 @@ export function codingToolGitPresentation(
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (result.status !== "completed") return {};
-  let gitOutcome: CodingSafeActivityGitOutcome | undefined;
+  const gitOutcome = gitStepOutcomeOf(result);
+  // Stage and unstage share the `keiko_git_stage` tool name: the row names which one it was (U-49).
+  const gitAction = "git" in result ? gitIndexAction(result.git) : undefined;
+  if (gitOutcome === undefined && gitAction === undefined) return {};
+  return Object.freeze({
+    ...(gitOutcome === undefined ? {} : { gitOutcome }),
+    ...(gitAction === undefined ? {} : { gitAction }),
+  });
+}
+
+function gitStepOutcomeOf(result: CodingToolResult): CodingSafeActivityGitOutcome | undefined {
   if ("verifiedCommit" in result) {
-    gitOutcome = commitOutcome(result.verifiedCommit);
+    const outcome = commitOutcome(result.verifiedCommit);
     // A proposal answered with `approvalDisposition: "ready"` needs no decision: policy authorized
     // it or the person already approved it, and only its execute step is left. It must not claim
     // to wait for a human (lab 2026-11-27, Full access).
-    if (gitOutcome === "waiting-for-approval" && result.approvalDisposition === "ready")
-      gitOutcome = "prepared";
-  } else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
-  return gitOutcome === undefined ? {} : Object.freeze({ gitOutcome });
+    return outcome === "waiting-for-approval" && result.approvalDisposition === "ready"
+      ? "prepared"
+      : outcome;
+  }
+  return "git" in result ? gitResultOutcome(result.git) : undefined;
+}
+
+function gitIndexAction(git: CodingRuntimeGitResult): CodingSafeActivityGitAction | undefined {
+  return git.kind === "stage" || git.kind === "unstage" ? git.kind : undefined;
 }
 
 async function executeAdmitted(

@@ -167,6 +167,14 @@ export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
 export type CodingSafeActivityGitOutcome = (typeof CODING_SAFE_ACTIVITY_GIT_OUTCOMES)[number];
 
 /**
+ * Which index change a `keiko_git_stage` call asked for. Both directions travel through the one tool
+ * name, so a row cannot tell a stage from an unstage by the name alone (U-49). Closed vocabulary,
+ * derived from the governed result's own kind, never from prose.
+ */
+export const CODING_SAFE_ACTIVITY_GIT_ACTIONS = ["stage", "unstage"] as const;
+export type CodingSafeActivityGitAction = (typeof CODING_SAFE_ACTIVITY_GIT_ACTIONS)[number];
+
+/**
  * Where a tool call that did not succeed failed, so a person sees at a glance whether Keiko caused
  * it: `keiko-refused` Keiko's governance (a policy rule, a refused step or a declined approval)
  * blocked the call; `command-failed` a command ran and ended with a non-zero exit status;
@@ -238,6 +246,8 @@ export interface CodingSafeActivityToolPresentation {
   readonly verificationOutcome?: CodingSafeActivityVerificationOutcome;
   /** How a governed Git step really ended; present on `keiko_git` and commit calls only. */
   readonly gitOutcome?: CodingSafeActivityGitOutcome;
+  /** Whether a governed index step staged or unstaged; present on `keiko_git_stage` calls only. */
+  readonly gitAction?: CodingSafeActivityGitAction;
   /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
   readonly bridgeDurationMs?: number;
   /** A finished native shell call's own exit status, as the runtime reported it. */
@@ -969,6 +979,7 @@ export function isCodingSafeActivityToolPresentation(
     "refusalReason",
     "verificationOutcome",
     "gitOutcome",
+    "gitAction",
     "bridgeDurationMs",
     "exitCode",
     "failureOrigin",
@@ -1012,6 +1023,13 @@ function isOutputShortened(value: unknown): boolean {
 }
 
 function validPresentationVocabulary(value: Record<string, unknown>): boolean {
+  return (
+    (value.gitAction === undefined || isOneOf(value.gitAction, CODING_SAFE_ACTIVITY_GIT_ACTIONS)) &&
+    validPresentationOutcomeVocabulary(value)
+  );
+}
+
+function validPresentationOutcomeVocabulary(value: Record<string, unknown>): boolean {
   return (
     (value.refusalReason === undefined ||
       isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)) &&

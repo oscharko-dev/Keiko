@@ -700,6 +700,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.child_agent": "Child agent",
   "codingWorkbench.timeline.tool.git_diff": "Git diff",
   "codingWorkbench.timeline.tool.git_stage": "Git stage",
+  "codingWorkbench.timeline.tool.git_unstage": "Git unstage",
   "codingWorkbench.timeline.tool.git_commit": "Git commit",
   "codingWorkbench.timeline.tool.git_push": "Git push",
   "codingWorkbench.timeline.tool.pull_request": "Pull request",
@@ -1060,8 +1061,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model was not authorized for this attempt.",
   "codingWorkbench.descriptionStatus.reason.budget-exhausted":
     "Too many description drafts are in progress right now.",
-  "codingWorkbench.descriptionStatus.reason.generation-unavailable":
-    "Automatic draft generation is not available yet.",
   "codingWorkbench.descriptionStatus.reason.interrupted":
     "Generation was interrupted and must be retried on the next change.",
   "codingWorkbench.descriptionStatus.reason.provider-failed":

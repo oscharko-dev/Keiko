@@ -882,6 +882,93 @@ describe("CodingWorkbenchTimeline", () => {
     expect(bothRedeemed.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
   });
 
+  // U-49 (real macOS Full-access run, 2026-11-28): an unstage proposal read "Git stage" and every
+  // execute read "Git operation", so the run's Git rows could not be told apart.
+  describe("names the Git action a row stands for (U-49)", () => {
+    const titles = (tools: readonly CodingSafeActivityTool[]): string[] => {
+      const { container, unmount } = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike({
+            ...feedWithRepeatedTools(),
+            turns: [{ turnId: "turn-git", messages: [], tools: [...tools], truncated: false }],
+          })}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      // Completed steps fold into a closed "N steps" group that mounts its rows when opened.
+      for (const summary of container.querySelectorAll("[data-timeline-kind='group'] summary")) {
+        fireEvent.click(summary);
+      }
+      const found = [...container.querySelectorAll("p[title^='keiko_git']")].map(
+        (node) => node.textContent ?? "",
+      );
+      unmount();
+      return found;
+    };
+    const proposal = (
+      callId: string,
+      tool: string,
+      presentation: NonNullable<CodingSafeActivityTool["presentation"]>,
+    ): CodingSafeActivityTool => ({
+      callId,
+      tool,
+      state: "succeeded",
+      occurredAt: AT,
+      presentation,
+    });
+    const execute = (
+      callId: string,
+      gitOutcome: "completed" | "not-done",
+    ): CodingSafeActivityTool =>
+      proposal(callId, "keiko_git_execute", { gitOutcome, bridgeDurationMs: 9 });
+
+    it("reads an unstage proposal as an unstage and a stage proposal as a stage", () => {
+      expect(
+        titles([
+          proposal("unstage", "keiko_git_stage", { gitAction: "unstage" }),
+          proposal("stage", "keiko_git_stage", { gitAction: "stage" }),
+          proposal("legacy", "keiko_git_stage", { bridgeDurationMs: 9 }),
+        ]),
+      ).toEqual(["Git unstage", "Git stage", "Git stage"]);
+    });
+
+    it.each([
+      ["a commit", "keiko_git_commit", { gitOutcome: "prepared" }, "Git commit"],
+      ["a stage", "keiko_git_stage", { gitAction: "stage" }, "Git stage"],
+      ["an unstage", "keiko_git_stage", { gitAction: "unstage" }, "Git unstage"],
+    ] as const)(
+      "names the execute after the one open proposal, %s",
+      (_case, tool, shown, label) => {
+        expect(titles([proposal("only", tool, shown), execute("exec", "completed")])).toEqual([
+          label,
+          label,
+        ]);
+      },
+    );
+
+    it("names a refused execute after its one open proposal too", () => {
+      expect(
+        titles([
+          proposal("commit", "keiko_git_commit", { gitOutcome: "prepared" }),
+          execute("refused", "not-done"),
+        ]),
+      ).toEqual(["Git commit", "Git commit"]);
+    });
+
+    it("keeps the generic label with no open proposal or with several", () => {
+      expect(titles([execute("alone", "completed")])).toEqual(["Git operation"]);
+      expect(
+        titles([
+          proposal("a", "keiko_git_commit", { gitOutcome: "prepared" }),
+          proposal("b", "keiko_git_stage", { gitAction: "stage" }),
+          execute("which", "completed"),
+        ]),
+      ).toEqual(["Git commit", "Git stage", "Git operation"]);
+    });
+  });
+
   // Lab T37 audit (#4271): a refused Git step between succeeded calls must not fold into the
   // collapsed "N steps" group, where its reason would hide behind a success summary.
   it("keeps a refused Git step out of the group of succeeded steps", () => {

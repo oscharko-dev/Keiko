@@ -178,6 +178,11 @@ type TimelineItem =
        * went on: a later step took it up, so it no longer waits for anyone (#4491).
        */
       readonly superseded?: boolean;
+      /**
+       * The single Git proposal this `keiko_git_execute` redeemed, as that proposal's own label: a
+       * commit, stage or unstage reads as such instead of as a generic operation (U-49).
+       */
+      readonly redeemedLabel?: CodingWorkbenchMessageKey;
     }
   | {
       readonly kind: "plan";
@@ -639,7 +644,9 @@ function timelineItems(
   }
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
-  const compacted = compactToolItems(markSupersededGitProposals(orderedItems));
+  const compacted = compactToolItems(
+    markRedeemedGitProposals(markSupersededGitProposals(orderedItems)),
+  );
   return feed?.plan === undefined
     ? compacted
     : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
@@ -733,11 +740,55 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
   return marked;
 }
 
-// A proposal waits for a person's decision or, once policy or the person authorized it, only for its
-// execute step: both are redeemed by the same completed execute (Full access, #4491).
+// A proposal row that may still be redeemed, by the same predicate family as
+// markSupersededGitProposals: any non-execute call answered as waiting for approval or prepared,
+// and a stage-class proposal answered ready, which carries no outcome (Full access).
 function isOpenGitProposal(tool: CodingSafeActivityTool): boolean {
+  if (tool.tool === "keiko_git_execute" || tool.state !== "succeeded") return false;
   const outcome = tool.presentation?.gitOutcome;
+  if (outcome === undefined) return tool.tool === "keiko_git_stage";
   return outcome === "waiting-for-approval" || outcome === "prepared";
+}
+
+/**
+ * An execute names what it carried out when exactly one proposal was open before it. The wire row
+ * of an execute carries no proposal id, so with none or several open it keeps the generic label.
+ * Open proposals are cleared by the same rule as {@link markSupersededGitProposals}: once as many
+ * completed executes as proposals followed.
+ */
+function markRedeemedGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const marked = [...items];
+  let open: CodingSafeActivityTool[] = [];
+  let redeemed = 0;
+  marked.forEach((item, index) => {
+    if (item.kind !== "tool") return;
+    if (item.tool.tool === "keiko_git_execute") {
+      const label = redeemedLabelKey(open);
+      if (label !== undefined) marked[index] = { ...item, redeemedLabel: label };
+      if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
+    } else if (isOpenGitProposal(item.tool)) {
+      open.push(item.tool);
+    }
+    if (open.length > 0 && redeemed >= open.length) {
+      open = [];
+      redeemed = 0;
+    }
+  });
+  return marked;
+}
+
+function redeemedLabelKey(
+  open: readonly CodingSafeActivityTool[],
+): CodingWorkbenchMessageKey | undefined {
+  const only = open.length === 1 ? open[0] : undefined;
+  return only === undefined ? undefined : proposalLabelKey(only);
+}
+
+/** A Git proposal's own label; an unstage reads as one, though it shares the stage tool's name. */
+function proposalLabelKey(tool: CodingSafeActivityTool): CodingWorkbenchMessageKey | undefined {
+  if (tool.tool === "keiko_git_stage" && tool.presentation?.gitAction === "unstage")
+    return "codingWorkbench.timeline.tool.git_unstage";
+  return toolLabelKey(tool.tool);
 }
 
 function markSuperseded(marked: TimelineItem[], indexes: readonly number[]): void {
@@ -1641,7 +1692,7 @@ function ToolRow({
           onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
         >
           <span className={styles.toolIcon} aria-hidden="true" />
-          <ToolRowTitle tool={tool} t={t} />
+          <ToolRowTitle tool={tool} label={item.redeemedLabel} t={t} />
           {item.count > 1 ? (
             <span className={styles.toolCount}>
               {t("codingWorkbench.activity.toolCount", { count: item.count })}
@@ -1658,15 +1709,17 @@ function ToolRow({
 // The row's name in words, with the raw tool id only as a tooltip, and what it is about.
 function ToolRowTitle({
   tool,
+  label,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
+  readonly label: CodingWorkbenchMessageKey | undefined;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <div className={styles.toolMeta}>
       <p className={styles.timelineTitle} title={tool.tool}>
-        {humanizeToolName(tool.tool, t)}
+        {humanizeToolName(tool, label, t)}
       </p>
       <ToolSubject tool={tool} />
     </div>
@@ -2109,8 +2162,13 @@ export function toolLabelKey(tool: string): CodingWorkbenchMessageKey | undefine
 
 // A tool Keiko has no name for (an MCP server's, a newer runtime's) is a "Tool"; its raw id stays
 // in the row's tooltip, never in the row's text.
-function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
-  return t(toolLabelKey(tool) ?? "codingWorkbench.timeline.tool.unknown");
+function humanizeToolName(
+  tool: CodingSafeActivityTool,
+  redeemed: CodingWorkbenchMessageKey | undefined,
+  t: CodingWorkbenchTranslate,
+): string {
+  const key = redeemed ?? proposalLabelKey(tool);
+  return t(key ?? "codingWorkbench.timeline.tool.unknown");
 }
 
 function PlanRow({

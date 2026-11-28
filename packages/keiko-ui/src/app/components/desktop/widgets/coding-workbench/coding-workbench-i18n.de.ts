@@ -731,6 +731,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.child_agent": "Untergeordneter Agent",
   "codingWorkbench.timeline.tool.git_diff": "Git-Diff",
   "codingWorkbench.timeline.tool.git_stage": "Git-Staging",
+  "codingWorkbench.timeline.tool.git_unstage": "Git-Staging aufheben",
   "codingWorkbench.timeline.tool.git_commit": "Git-Commit",
   "codingWorkbench.timeline.tool.git_push": "Git-Push",
   "codingWorkbench.timeline.tool.pull_request": "Pull Request",
@@ -1096,8 +1097,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell war für diesen Versuch nicht autorisiert.",
   "codingWorkbench.descriptionStatus.reason.budget-exhausted":
     "Derzeit laufen zu viele Entwurfserstellungen gleichzeitig.",
-  "codingWorkbench.descriptionStatus.reason.generation-unavailable":
-    "Die automatische Entwurfserstellung ist noch nicht verfügbar.",
   "codingWorkbench.descriptionStatus.reason.interrupted":
     "Die Erstellung wurde unterbrochen und muss bei der nächsten Änderung wiederholt werden.",
   "codingWorkbench.descriptionStatus.reason.provider-failed":
