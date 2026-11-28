@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { RECONNECT_TIMEOUT_MS } from "./useRepositoryReconnect";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectWithAvailability } from "@/lib/types";
@@ -92,7 +93,7 @@ describe("CodingWorkbenchRepositorySelector reconnect action", () => {
       .mockResolvedValueOnce([project(true, false)])
       .mockResolvedValue([project(true, true)]);
     listBranches.mockResolvedValue(branchList());
-    reconnectProject.mockResolvedValue({});
+    reconnectProject.mockResolvedValue({ project: { workspaceAvailable: true } });
     const onReconnected = vi.fn();
     renderSelector(onReconnected);
     await user.click(await screen.findByRole("button", { name: "Reconnect repository" }));
@@ -117,6 +118,41 @@ describe("CodingWorkbenchRepositorySelector reconnect action", () => {
       "[keiko] coding workbench repository reconnect failed",
       expect.objectContaining({ kind: "other" }),
     );
+  });
+
+  it("shows the failure notice when the server answers but the workspace stays unavailable", async () => {
+    const user = userEvent.setup();
+    selectableRepositories.mockResolvedValue([project(true, false)]);
+    listBranches.mockResolvedValue(branchList());
+    reconnectProject.mockResolvedValue({ project: { workspaceAvailable: false } });
+    const onReconnected = vi.fn();
+    renderSelector(onReconnected);
+    await user.click(await screen.findByRole("button", { name: "Reconnect repository" }));
+    expect(await screen.findByText(/could not reconnect this repository/u)).toBeInTheDocument();
+    expect(onReconnected).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench repository reconnect failed",
+      expect.objectContaining({ errorKind: "conflict", correlationId: expect.any(String) }),
+    );
+  });
+
+  it("ends a hung reconnect at the deadline with the failure notice", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      selectableRepositories.mockResolvedValue([project(true, false)]);
+      listBranches.mockResolvedValue(branchList());
+      reconnectProject.mockReturnValue(new Promise(() => undefined));
+      renderSelector(vi.fn());
+      await user.click(await screen.findByRole("button", { name: "Reconnect repository" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECONNECT_TIMEOUT_MS);
+      });
+      expect(await screen.findByText(/could not reconnect this repository/u)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Reconnect repository" })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers no Reconnect for a repository that is gone from disk", async () => {

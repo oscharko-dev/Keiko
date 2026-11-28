@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
-import { reconnectProject } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
@@ -581,6 +580,8 @@ interface RepositorySelectorState {
   // U-16: choosing a changed folder reconnects it first; the failure stays visible.
   readonly choose: (root: string) => void;
   readonly reconnectFailed: boolean;
+  // The Reconnect button: reconnects the selected folder and tells the window, never re-selects it.
+  readonly reconnectSelected: (root: string) => void;
   // U-44: a reconnect is running; the repository field stays locked until it lands.
   readonly reconnecting: boolean;
 }
@@ -596,9 +597,15 @@ function useRepositorySelectorState(
     catalogRefreshKey,
   }: Pick<CodingWorkbenchRepositorySelectorProps, "offeredLocations" | "catalogRefreshKey">,
   onSelect: (root: string) => void,
+  onReconnected: (() => void) | undefined,
 ): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog(catalogRefreshKey);
-  const reconnect = useRepositoryReconnect(catalog.repositories, catalog.reload, onSelect);
+  const reconnect = useRepositoryReconnect(
+    catalog.repositories,
+    catalog.reload,
+    onSelect,
+    onReconnected,
+  );
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
@@ -617,6 +624,7 @@ function useRepositorySelectorState(
     folderUnsupported,
     reconnectable: repositoryReconnectable(root, catalog),
     choose: reconnect.choose,
+    reconnectSelected: reconnect.reconnectSelected,
     reconnectFailed: reconnect.failed,
     reconnecting: reconnect.reconnecting,
   };
@@ -701,64 +709,30 @@ function BranchSelectorField({
   );
 }
 
-function reportReconnectFailure(error: unknown): void {
-  const correlationId = correlationIdOf(error);
-  reportClientDiagnostic("[keiko] coding workbench repository reconnect failed", {
-    kind: "other",
-    errorKind: bffRequestErrorKind(error),
-    errorEvidence: clientErrorEvidence(error),
-    ...(correlationId === undefined ? {} : { correlationId }),
-  });
-}
-
-// One click re-connects the registered folder through the same route the Git window uses; the
-// connection is proven afresh by the server, never assumed. A refusal says so in plain words.
+// One click re-connects the registered folder through the shared reconnect hook (the same route the
+// Git window uses): the connection is proven afresh by the server, never assumed. The hook owns the
+// deadline, the diagnostics and the failure notice; a refusal says so in plain words.
 function ReconnectAction({
   root,
-  reload,
-  onReconnected,
+  state,
   t,
 }: {
   readonly root: string;
-  readonly reload: () => void;
-  readonly onReconnected: (() => void) | undefined;
+  readonly state: RepositorySelectorState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const reconnect = (): void => {
-    setBusy(true);
-    setFailed(false);
-    void reconnectProject(root)
-      .then(() => {
-        reload();
-        onReconnected?.();
-      })
-      .catch((error: unknown) => {
-        setFailed(true);
-        reportReconnectFailure(error);
-      })
-      .finally(() => {
-        setBusy(false);
-      });
-  };
   return (
-    <>
-      <button
-        type="button"
-        className={styles.cmpRepositorySelectorGit}
-        disabled={busy}
-        onClick={reconnect}
-        data-testid="coding-workbench-reconnect"
-      >
-        {t("codingWorkbench.repository.reconnect")}
-      </button>
-      {failed ? (
-        <p className={styles.cmpRepositorySelectorNotice} role="alert">
-          {t("codingWorkbench.repository.reconnectFailed")}
-        </p>
-      ) : null}
-    </>
+    <button
+      type="button"
+      className={styles.cmpRepositorySelectorGit}
+      disabled={state.reconnecting}
+      onClick={() => {
+        state.reconnectSelected(root);
+      }}
+      data-testid="coding-workbench-reconnect"
+    >
+      {t("codingWorkbench.repository.reconnect")}
+    </button>
   );
 }
 
@@ -767,14 +741,12 @@ function SelectorRecoveryForState({
   state,
   placement,
   onOpenGit,
-  onReconnected,
   t,
 }: {
   readonly root: string | null;
   readonly state: RepositorySelectorState;
   readonly placement: SelectorPlacement;
   readonly onOpenGit: () => void;
-  readonly onReconnected: (() => void) | undefined;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
@@ -787,14 +759,14 @@ function SelectorRecoveryForState({
         t={t}
       />
       {root !== null && state.reconnectable ? (
-        <ReconnectAction
-          root={root}
-          reload={state.catalog.reload}
-          onReconnected={onReconnected}
-          t={t}
-        />
+        <ReconnectAction root={root} state={state} t={t} />
       ) : null}
-      <ReconnectNotice failed={state.reconnectFailed} reconnecting={state.reconnecting} t={t} />
+      <ReconnectNotice
+        failed={state.reconnectFailed}
+        reconnecting={state.reconnecting}
+        reconnectable={state.reconnectable}
+        t={t}
+      />
     </>
   );
 }
@@ -862,10 +834,13 @@ function RepositorySelectorField({
 function ReconnectNotice({
   failed,
   reconnecting,
+  reconnectable,
   t,
 }: {
   readonly failed: boolean;
   readonly reconnecting: boolean;
+  // The selected folder offers the Reconnect button: its failure names the Git route.
+  readonly reconnectable: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   // The status region stays mounted and empty, so a screen reader announces the text swapped in.
@@ -876,7 +851,11 @@ function ReconnectNotice({
       </output>
       {failed ? (
         <p className={styles.cmpRepositorySelectorNotice} role="alert">
-          {t("codingWorkbench.repository.reconnectChoiceFailed")}
+          {t(
+            reconnectable
+              ? "codingWorkbench.repository.reconnectFailed"
+              : "codingWorkbench.repository.reconnectChoiceFailed",
+          )}
         </p>
       ) : null}
     </>
@@ -903,7 +882,7 @@ export function CodingWorkbenchRepositorySelector({
   ...work
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const state = useRepositorySelectorState(root, locked, work, onSelect);
+  const state = useRepositorySelectorState(root, locked, work, onSelect, work.onReconnected);
   return (
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField
@@ -936,7 +915,6 @@ export function CodingWorkbenchRepositorySelector({
         root={root}
         state={state}
         onOpenGit={onOpenGit}
-        onReconnected={work.onReconnected}
         t={t}
       />
     </div>

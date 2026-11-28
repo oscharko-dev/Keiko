@@ -14,6 +14,8 @@ import { needsReconnect } from "./codingWorkbenchRepositoryAvailability";
 export interface RepositoryReconnect {
   /** The picker's selection handler: reconnects a changed folder, selects any other directly. */
   readonly choose: (path: string) => void;
+  /** Reconnects the folder that is already selected; on success it tells the caller, never selects. */
+  readonly reconnectSelected: (path: string) => void;
   readonly failed: boolean;
   /** A reconnect is running: the picker stays locked so no choice can be dropped or replaced. */
   readonly reconnecting: boolean;
@@ -102,13 +104,14 @@ export function useRepositoryReconnect(
   repositories: readonly ProjectWithAvailability[],
   reload: () => void,
   onSelect: (root: string) => void,
+  onReconnected?: (() => void) | undefined,
 ): RepositoryReconnect {
   const { failed, setFailed, reconnecting, setReconnecting } = useReconnectStatus();
   const mounted = useMounted();
   const latest = useRef<string | null>(null);
   const inFlight = useRef(new Set<string>());
   const settle = useCallback(
-    (path: string, failure: ReconnectFailure): void => {
+    (path: string, failure: ReconnectFailure, apply: (path: string) => void): void => {
       inFlight.current.delete(path);
       if (mounted.current) setReconnecting(inFlight.current.size > 0);
       const outcome = reconnectOutcome(mounted.current, latest.current === path);
@@ -120,20 +123,24 @@ export function useRepositoryReconnect(
       // The catalog is read again for every successful reconnect, even a superseded one, so the
       // folder stops reading as changed.
       if (outcome !== "selector-gone") reload();
-      if (outcome === "selected") onSelect(path);
+      if (outcome === "selected") apply(path);
       reportReconnected(outcome);
     },
-    [mounted, onSelect, reload, setFailed, setReconnecting],
+    [mounted, reload, setFailed, setReconnecting],
   );
   const reconnect = useCallback(
-    (path: string): void => {
+    (path: string, apply: (path: string) => void): void => {
       if (inFlight.current.has(path)) return;
       inFlight.current.add(path);
       setReconnecting(true);
       void withReconnectDeadline(DEFAULT_GIT_CLIENT.reconnectRepository(path)).then(
         (response): void =>
-          settle(path, response.project.workspaceAvailable === true ? null : { error: undefined }),
-        (error: unknown): void => settle(path, { error }),
+          settle(
+            path,
+            response.project.workspaceAvailable === true ? null : { error: undefined },
+            apply,
+          ),
+        (error: unknown): void => settle(path, { error }, apply),
       );
     },
     [settle, setReconnecting],
@@ -143,10 +150,18 @@ export function useRepositoryReconnect(
       latest.current = path;
       setFailed(false);
       const project = repositories.find((entry) => entry.path === path);
-      if (project !== undefined && needsReconnect(project)) reconnect(path);
+      if (project !== undefined && needsReconnect(project)) reconnect(path, onSelect);
       else onSelect(path);
     },
     [onSelect, reconnect, repositories, setFailed],
   );
-  return { choose, failed, reconnecting };
+  const reconnectSelected = useCallback(
+    (path: string): void => {
+      latest.current = path;
+      setFailed(false);
+      reconnect(path, () => onReconnected?.());
+    },
+    [onReconnected, reconnect, setFailed],
+  );
+  return { choose, reconnectSelected, failed, reconnecting };
 }
