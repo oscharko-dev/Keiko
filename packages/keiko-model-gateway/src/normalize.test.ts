@@ -82,11 +82,28 @@ describe("normalizeChatResponse prompt-cache usage", () => {
     ).toBeUndefined();
   });
 
-  it("cannot tell an excluded cache that is the smaller part from an included one (known limit)", () => {
-    // Anthropic-style input 5000 with cache_read 3000 reads as already included: no total.
-    expect(
-      total({ prompt_tokens: 5_000, completion_tokens: 5, cache_read_input_tokens: 3_000 }),
-    ).toBe(undefined);
+  it("flags Anthropic-style cache fields inside prompt_tokens as an ambiguous layout", () => {
+    // Input 5000 with cache_read 3000 is 8000 if exclusive and 5000 if inclusive: never guessed.
+    const usage = normalizeChatResponse(
+      chatPayload({
+        usage: { prompt_tokens: 5_000, completion_tokens: 5, cache_read_input_tokens: 3_000 },
+      }),
+      "m",
+      BASE_USAGE,
+    ).usage;
+    expect(usage.totalPromptTokens).toBeUndefined();
+    expect(usage.promptCacheLayoutAmbiguous).toBe(true);
+  });
+
+  it("does not flag an OpenAI-style cached_tokens subset or a usage without cache fields", () => {
+    for (const usage of [
+      { prompt_tokens: 5_000, prompt_tokens_details: { cached_tokens: 3_000 } },
+      { prompt_tokens: 5_000 },
+    ]) {
+      const normalized = normalizeChatResponse(chatPayload({ usage }), "m", BASE_USAGE).usage;
+      expect(normalized.promptCacheLayoutAmbiguous).toBeUndefined();
+      expect(normalized.totalPromptTokens).toBeUndefined();
+    }
   });
 
   it("reports no total for a usage without cache fields", () => {

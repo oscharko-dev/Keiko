@@ -36,6 +36,7 @@ import type {
   GatewayOutputRepairOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
+  calibrationLayout,
   calibrationPromptTokens,
   GatewayPromptAdmission,
   ProviderPromptCounter,
@@ -1724,7 +1725,10 @@ export class Gateway {
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.settleCompletedCall(attempt.state, request, route.provider, result);
-    attempt.promptAdmission.recordUsage(calibrationPromptTokens(result.usage));
+    attempt.promptAdmission.recordUsage(
+      calibrationPromptTokens(result.usage),
+      calibrationLayout(result.usage),
+    );
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -2510,7 +2514,10 @@ export class Gateway {
       for await (const chunk of stream) {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
-          state.promptAdmission.recordUsage(calibrationPromptTokens(usage));
+          state.promptAdmission.recordUsage(
+            calibrationPromptTokens(usage),
+            calibrationLayout(usage),
+          );
           received = true;
           terminal = chunk;
           break;

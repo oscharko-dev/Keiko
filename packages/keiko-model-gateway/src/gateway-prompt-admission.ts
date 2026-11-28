@@ -72,7 +72,7 @@ const USAGE_REJECTED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["implausibly-low", "implausibly-high"],
+      values: ["implausibly-low", "implausibly-high", "ambiguous-cache-layout"],
     },
     reportedPromptTokens: { type: "integer", dataClass: "count", required: true },
     localPromptTokens: { type: "integer", dataClass: "count", required: true },
@@ -85,6 +85,7 @@ const USAGE_REJECTED = defineActivityLogOperation({
   proofIds: [
     "gateway.prompt.usage-rejected.implausibly-low",
     "gateway.prompt.usage-rejected.implausibly-high",
+    "gateway.prompt.usage-rejected.ambiguous-cache-layout",
   ],
   releaseImpact: "patch",
 });
@@ -192,6 +193,11 @@ export function calibrationPromptTokens(usage: UsageMetadata): number {
   return usage.totalPromptTokens ?? usage.promptTokens;
 }
 
+/** Whether the usage's cache layout allows the figure above to be trusted as the prompt's size. */
+export function calibrationLayout(usage: UsageMetadata): "known" | "ambiguous" {
+  return usage.promptCacheLayoutAmbiguous === true ? "ambiguous" : "known";
+}
+
 /** One logical call, including corrective retries. Retains the measured floor if counting degrades. */
 export class GatewayPromptAdmission {
   private previous: { estimated: number; measured: number } | undefined;
@@ -286,13 +292,23 @@ export class GatewayPromptAdmission {
   }
 
   /** Records the provider's real prompt usage of the last admitted prompt for later calibration. */
-  recordUsage(providerPromptTokens: number): void {
+  recordUsage(providerPromptTokens: number, layout: "known" | "ambiguous" = "known"): void {
     const mark = this.pending;
     this.pending = undefined;
     if (mark === undefined) return;
-    const outcome = this.options.calibration?.record(mark, providerPromptTokens);
-    if (outcome !== "implausibly-low" && outcome !== "implausibly-high") return;
-    // Counts and a digest only: the provider's figure is outside the plausible band (#4491).
+    // An ambiguous cache layout cannot say whether the figure is the prompt's size or only its
+    // uncached part, so it is never offered to the ledger: later prompts keep the local estimate.
+    const outcome =
+      layout === "ambiguous"
+        ? "ambiguous-cache-layout"
+        : this.options.calibration?.record(mark, providerPromptTokens);
+    if (
+      outcome !== "implausibly-low" &&
+      outcome !== "implausibly-high" &&
+      outcome !== "ambiguous-cache-layout"
+    )
+      return;
+    // Counts and a digest only: the provider's figure is unusable for calibration (#4491).
     this.log.write(
       activityLogEvent(
         USAGE_REJECTED,

@@ -205,6 +205,28 @@ describe("usage-calibrated prompt admission", () => {
     },
   );
 
+  it("never calibrates from a report whose cache layout is ambiguous and says so", async () => {
+    const ledger = new PromptCalibrationLedger();
+    const first = conversation(20_000);
+    // A figure well inside the plausibility band: only the layout makes it unusable.
+    const reported = Math.round(localTokens(first) * 0.7);
+    const events: ModelGatewayLogEvent[] = [];
+    const admission = admissionFor(ledger, events);
+    await admission.admit({ modelId: provider.modelId, messages: first }, 10_000);
+    admission.recordUsage(reported, "ambiguous");
+    const rejected = events.find((event) => event.op === "gateway.prompt.usage-rejected");
+    if (rejected === undefined) throw new Error("Expected the rejected-usage line");
+    expect(
+      expectActivityLogProof(
+        "gateway.prompt.usage-rejected.ambiguous-cache-layout",
+        formatActivityLogProofLine(rejected),
+      ),
+    ).toMatchObject({ reason: "ambiguous-cache-layout", reportedPromptTokens: reported });
+    const next: ModelGatewayLogEvent[] = [];
+    await turn(ledger, extended(first, 1_000), undefined, next);
+    expect(lastAdmission(next)).not.toHaveProperty("calibratedPromptTokens");
+  });
+
   it("logs an inflated report as implausibly-high and admits the next prompt locally", async () => {
     const ledger = new PromptCalibrationLedger();
     const first = conversation(20_000);

@@ -56,33 +56,46 @@ function reportedReasoningTokens(usage: Record<string, unknown>): number | undef
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-// Prompt-cache tokens the provider reports: OpenAI-style `prompt_tokens_details.cached_tokens`
-// (included in `prompt_tokens` by OpenAI, but not by every OpenAI-compatible backend) and
-// Anthropic-style `cache_read_input_tokens` / `cache_creation_input_tokens` (excluded from the
-// input count of the native API). A figure is cache-exclusive when it exceeds `prompt_tokens`, so
-// the prompt's size is then the two added; a `prompt_tokens` that already covers the cached tokens
-// is left alone, so a provider that includes them is never counted twice. Known limit: the two
-// layouts cannot be told apart when the cache is the smaller part (Anthropic-style input 5000 with
-// cache_read 3000 is read as already included), which under-counts; the ledger's plausibility
-// floor is the backstop.
-function reportedTotalPromptTokens(usage: Record<string, unknown>): number | undefined {
+// Prompt-cache tokens the provider reports, and which layout carries them. OpenAI's
+// `prompt_tokens_details.cached_tokens` is a subset of `prompt_tokens` (inclusive); Anthropic's
+// `cache_read_input_tokens` / `cache_creation_input_tokens` are counted beside the input (exclusive)
+// in the native API, but LiteLLM re-exposes them next to an already-summed `prompt_tokens`. The
+// layout is therefore decided from what can be proven:
+// - cached tokens above `prompt_tokens` cannot be a subset of it, so they are exclusive and the
+//   prompt's size is the two added;
+// - the OpenAI-shaped `cached_tokens` within `prompt_tokens` is inclusive (LiteLLM also sends the
+//   top-level fields beside it): `prompt_tokens` is
+//   already the size, no total is needed;
+// - top-level cache fields alone within `prompt_tokens` could be either layout (Anthropic-style input
+//   5000 with cache_read 3000 is 8000 exclusive, 5000 inclusive). The report is then flagged
+//   ambiguous and the gateway does not calibrate from it, so admission stays on the local estimate.
+interface PromptLayout {
+  readonly totalPromptTokens?: number;
+  readonly ambiguous?: true;
+}
+
+function reportedPromptLayout(usage: Record<string, unknown>): PromptLayout {
   const promptTokens = asCount(usage.prompt_tokens);
   const details = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {};
-  const cached = Math.max(
-    asCount(details.cached_tokens),
-    asCount(usage.cache_read_input_tokens) + asCount(usage.cache_creation_input_tokens),
-  );
-  return cached > promptTokens ? promptTokens + cached : undefined;
+  const openAiCached = asCount(details.cached_tokens);
+  const anthropicCached =
+    asCount(usage.cache_read_input_tokens) + asCount(usage.cache_creation_input_tokens);
+  const cached = Math.max(openAiCached, anthropicCached);
+  if (cached > promptTokens) return { totalPromptTokens: promptTokens + cached };
+  return openAiCached === 0 && anthropicCached > 0 ? { ambiguous: true } : {};
 }
 
 function buildUsage(payload: Record<string, unknown>, seed: UsageSeed): UsageMetadata {
   const usage = isRecord(payload.usage) ? payload.usage : {};
   const reasoningTokens = reportedReasoningTokens(usage);
-  const totalPromptTokens = reportedTotalPromptTokens(usage);
+  const layout = reportedPromptLayout(usage);
   return {
     requestId: seed.requestId,
     promptTokens: asCount(usage.prompt_tokens),
-    ...(totalPromptTokens === undefined ? {} : { totalPromptTokens }),
+    ...(layout.totalPromptTokens === undefined
+      ? {}
+      : { totalPromptTokens: layout.totalPromptTokens }),
+    ...(layout.ambiguous === true ? { promptCacheLayoutAmbiguous: true as const } : {}),
     completionTokens: asCount(usage.completion_tokens),
     latencyMs: seed.latencyMs,
     costClass: seed.costClass,

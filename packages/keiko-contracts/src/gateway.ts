@@ -929,6 +929,12 @@ export interface UsageMetadata {
    * smaller figure that leaves the cached prefix out.
    */
   readonly totalPromptTokens?: number | undefined;
+  /**
+   * True when the provider reported top-level prompt-cache tokens that fit inside `prompt_tokens`,
+   * so it cannot be told whether `prompt_tokens` includes them. The gateway does not calibrate
+   * from such a report.
+   */
+  readonly promptCacheLayoutAmbiguous?: true | undefined;
 }
 
 // ─── Normalised response ──────────────────────────────────────────────────────
