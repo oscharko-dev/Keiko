@@ -82,10 +82,10 @@ describe("V81 supervisor-refusal causes", () => {
     const db = v80Database();
     const before = db.prepare("SELECT * FROM coding_runtime_snapshots").all();
     runMigrations(db);
-    // The one column a later migration appended (v83 `verification_gap`, #4491) reads NULL for a
-    // row that predates it; every other value carries through unchanged.
+    // The columns later migrations appended (v83 `verification_gap`, #4491; v85 `stop_cause`, U-31)
+    // read NULL for a row that predates them; every other value carries through unchanged.
     expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(
-      before.map((row) => ({ ...row, verification_gap: null })),
+      before.map((row) => ({ ...row, verification_gap: null, stop_cause: null })),
     );
     expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
     expect(
@@ -115,20 +115,21 @@ describe("V81 supervisor-refusal causes", () => {
       columns: db
         .prepare("PRAGMA table_info(coding_runtime_snapshots)")
         .all()
-        .filter((column) => column.name !== LATER_COLUMN),
+        .filter((column) => !LATER_COLUMNS.includes(column.name as string)),
       foreignKeys: db.prepare("PRAGMA foreign_key_list(coding_runtime_snapshots)").all(),
       definition: tableDefinition(db),
     });
     const before = shape();
     runMigrations(db);
-    // A column a later migration appended (v83, #4491) is the only addition the shape may show.
+    // The columns later migrations appended (v83, #4491; v85, U-31) are the only additions the shape
+    // may show.
     expect(shape()).toEqual(before);
     expect(
       db
         .prepare("PRAGMA table_info(coding_runtime_snapshots)")
         .all()
-        .some((column) => column.name === LATER_COLUMN),
-    ).toBe(true);
+        .filter((column) => LATER_COLUMNS.includes(column.name as string)),
+    ).toHaveLength(LATER_COLUMNS.length);
   });
 
   // A store may carry an orphan from before a constraint was enforced. It is not the rebuild's
@@ -180,7 +181,10 @@ describe("V84 Windows session and path causes (#4495)", () => {
     }
     const before = db.prepare("SELECT * FROM coding_runtime_snapshots").all();
     runMigrations(db);
-    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(before);
+    // v85 appended `stop_cause` (U-31): NULL on the row that predates it, every other value kept.
+    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(
+      before.map((row) => ({ ...row, stop_cause: null })),
+    );
     for (const cause of [...WINDOWS_CAUSES, ...CAUSES, "output-limit-reached"]) settle(db, cause);
     expect(() => {
       settle(db, "runtime-supervisor-invented");
@@ -211,13 +215,35 @@ describe("V84 Windows session and path causes (#4495)", () => {
         .all();
     const before = { columns: columns(), indexes: indexes() };
     runMigrations(db);
-    expect({ columns: columns(), indexes: indexes() }).toEqual(before);
+    // The one column v85 appended (U-31) is the only change to the v83 table.
+    expect({ columns: columns(), indexes: indexes() }).toEqual({
+      columns: [...(before.columns as string[]), "stop_cause"].sort(),
+      indexes: before.indexes,
+    });
+  });
+});
+
+describe("V85 stop cause (U-31)", () => {
+  it("adds the column as NULL on a run that predates it and admits only the closed words", () => {
+    const db = databaseAtVersion(84);
+    runMigrations(db);
+    const cause = (): unknown =>
+      db.prepare("SELECT stop_cause FROM coding_runtime_snapshots WHERE run_id = 'run-1'").get();
+    expect(cause()).toEqual({ stop_cause: null });
+    for (const word of ["server-shutdown-waiting", "server-shutdown-working"]) {
+      db.exec(`UPDATE coding_runtime_snapshots SET stop_cause = '${word}' WHERE run_id = 'run-1'`);
+      expect(cause()).toEqual({ stop_cause: word });
+    }
+    expect(() => {
+      db.exec("UPDATE coding_runtime_snapshots SET stop_cause = 'invented' WHERE run_id = 'run-1'");
+    }).toThrow(/CHECK constraint failed/u);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
 
 // The stored CREATE TABLE text with the one part V81 is allowed to change taken out.
-// The column v83 appended to the table; the V81 and V82 rebuilds are judged without it.
-const LATER_COLUMN = "verification_gap";
+// The columns v83 and v85 appended to the table; the V81 and V82 rebuilds are judged without it.
+const LATER_COLUMNS = ["verification_gap", "stop_cause"];
 
 function tableDefinition(db: DatabaseSync): string {
   const row = db
@@ -232,5 +258,6 @@ function tableDefinition(db: DatabaseSync): string {
     .replace(
       /, verification_gap TEXT CHECK \(verification_gap IS NULL OR verification_gap IN \([^)]*\)\)/u,
       "",
-    );
+    )
+    .replace(/, stop_cause TEXT CHECK \(stop_cause IS NULL OR stop_cause IN \([^)]*\)\)/u, "");
 }

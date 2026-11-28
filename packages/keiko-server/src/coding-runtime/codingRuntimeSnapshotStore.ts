@@ -10,9 +10,13 @@ import type {
   CodingWorkbenchRuntimeResult,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchStopCause,
   CodingWorkbenchVerificationGap,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_WORKBENCH_VERIFICATION_GAPS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   validateCodingWorkbenchIssueBinding,
@@ -114,6 +118,12 @@ export interface CodingRuntimeSnapshot {
    * settlement and on a run settled before the column existed.
    */
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+  /**
+   * Why a `cancelled` run ended without the person pressing Stop: Keiko was closed (U-31). Durable
+   * so the restarted Workbench can say so instead of a bare "Stopped". Absent on a person's own
+   * Stop and on a run settled before the column existed.
+   */
+  readonly stopCause?: CodingWorkbenchStopCause | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly terminalAt?: string | undefined;
@@ -148,6 +158,8 @@ export interface CodingRuntimeSnapshotTransition {
   readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   // Written on every transition, so a settlement that is not a verification gap never keeps one.
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+  // Written on every transition, so only the cancellation that Keiko's shutdown made keeps a cause.
+  readonly stopCause?: CodingWorkbenchStopCause | undefined;
   readonly terminalAt?: string | undefined;
   readonly patchByteCount?: number | undefined;
   readonly modelRequestCount?: number | undefined;
@@ -225,6 +237,7 @@ interface Row {
   readonly failure_code: CodingWorkbenchRuntimeFailureCode | null;
   readonly pause_reason: CodingWorkbenchOperatorDecision | null;
   readonly verification_gap: CodingWorkbenchVerificationGap | null;
+  readonly stop_cause: CodingWorkbenchStopCause | null;
   readonly created_at: string;
   readonly updated_at: string;
   readonly terminal_at: string | null;
@@ -260,7 +273,7 @@ interface Row {
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, issue_purpose, verification_gap";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, issue_purpose, verification_gap, stop_cause";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
@@ -279,7 +292,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       .join(", ")})`,
   );
   const update = db.prepare(
-    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, verification_gap=?, terminal_at=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
+    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, verification_gap=?, stop_cause=?, terminal_at=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
   );
   // Acknowledgement is itself an observable lifecycle event on the row (the operator's attestation
   // that ADR-0137 D5 reconciliation may treat the predecessor as reaped), so it advances `revision`
@@ -359,6 +372,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         // which a spread of `current` would otherwise carry into every later state.
         pauseReason: transition.pauseReason,
         verificationGap: transition.verificationGap,
+        stopCause: transition.stopCause,
         terminalAt: SETTLED.has(transition.state)
           ? (transition.terminalAt ?? transition.updatedAt)
           : undefined,
@@ -375,6 +389,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         next.failureCode ?? null,
         next.pauseReason ?? null,
         next.verificationGap ?? null,
+        next.stopCause ?? null,
         next.terminalAt ?? null,
         next.patchByteCount,
         next.modelRequestCount,
@@ -413,7 +428,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
           // operator decision that the process restart interrupts must not keep naming a wait
           // nobody is holding — and `assertSnapshot` would otherwise refuse the row on the very
           // next read, which is `startupReconcileNow`'s own `listRecentActive` (owner review).
-          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', pause_reason=NULL, verification_gap=NULL, revision=?, updated_at=? WHERE run_id=?",
+          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', pause_reason=NULL, verification_gap=NULL, stop_cause=NULL, revision=?, updated_at=? WHERE run_id=?",
         );
         for (const row of active) statement.run(row.revision + 1, updatedAt, row.run_id);
         db.exec("COMMIT");
@@ -478,6 +493,14 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
   };
 }
 
+// The columns that say why a run settled: the verification gap (#4491) and the stop cause (U-31).
+function settlementReasons(row: Row): Pick<CodingRuntimeSnapshot, "verificationGap" | "stopCause"> {
+  return {
+    ...(row.verification_gap ? { verificationGap: row.verification_gap } : {}),
+    ...(row.stop_cause ? { stopCause: row.stop_cause } : {}),
+  };
+}
+
 function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
   if (!row) return undefined;
   const value: CodingRuntimeSnapshot = {
@@ -500,7 +523,7 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     modelRequestCount: row.model_request_count,
     ...(row.failure_code ? { failureCode: row.failure_code } : {}),
     ...(row.pause_reason ? { pauseReason: row.pause_reason } : {}),
-    ...(row.verification_gap ? { verificationGap: row.verification_gap } : {}),
+    ...settlementReasons(row),
     ...(row.terminal_at ? { terminalAt: row.terminal_at } : {}),
     ...(row.recovery_acknowledged_at
       ? { recoveryAcknowledgedAt: row.recovery_acknowledged_at }
@@ -671,12 +694,13 @@ function values(v: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
   ];
 }
 
-// The two columns that close the row: its issue purpose and, when the run settled without a passing
-// check, the concrete gap (#4491).
+// The columns that close the row: its issue purpose, the concrete gap when the run settled without a
+// passing check (#4491), and the stop cause when Keiko's shutdown cancelled it (U-31).
 function closingValues(snapshot: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
   return [
     snapshot.issueContextBinding === undefined ? "delivery" : "context",
     snapshot.verificationGap ?? null,
+    snapshot.stopCause ?? null,
   ];
 }
 
@@ -735,6 +759,7 @@ function assertSnapshot(v: CodingRuntimeSnapshot): void {
   assertOptionalDraftDelivery(v);
   assertPauseReason(v);
   assertVerificationGap(v);
+  assertStopCause(v);
 }
 
 function assertSnapshotIssue(v: CodingRuntimeSnapshot): void {
@@ -761,6 +786,14 @@ function assertVerificationGap(v: CodingRuntimeSnapshot): void {
     throw new Error("invalid verificationGap");
   if (v.failureCode !== "verification-not-evidenced")
     throw new Error("verificationGap is only valid with verification-not-evidenced");
+}
+
+// A stop cause explains a cancellation; on any other row it would describe an ending the run did not
+// have, so the store refuses it instead of persisting a contradiction.
+function assertStopCause(v: CodingRuntimeSnapshot): void {
+  if (v.stopCause === undefined) return;
+  if (!CODING_WORKBENCH_STOP_CAUSES.includes(v.stopCause)) throw new Error("invalid stopCause");
+  if (v.state !== "cancelled") throw new Error("stopCause is only valid on a cancelled run");
 }
 
 function assertOptionalDraftDelivery(snapshot: CodingRuntimeSnapshot): void {

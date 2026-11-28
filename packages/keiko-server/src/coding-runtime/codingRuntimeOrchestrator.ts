@@ -27,6 +27,7 @@ import type {
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchStopCause,
   CodingWorkbenchVerificationGap,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
@@ -959,6 +960,18 @@ const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation
   proofIds: ["coding-runtime.run.delivery-unevidenced.emitted-line"],
   releaseImpact: "patch",
 });
+
+/**
+ * What Keiko's shutdown interrupted (U-31): a run held for a decision only the person can make had
+ * no action in flight, any other live run may have had one. Chosen from the state alone, so the
+ * Workbench never claims more than the server knew.
+ */
+function shutdownStopCause(current: CodingRuntimeSnapshot): CodingWorkbenchStopCause {
+  const waiting =
+    current.state === "awaiting-approval" ||
+    (current.state === "paused" && current.pauseReason !== undefined);
+  return waiting ? "server-shutdown-waiting" : "server-shutdown-working";
+}
 
 const CODING_RUNTIME_RUN_SHUTDOWN_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -4376,6 +4389,8 @@ export class CodingRuntimeOrchestrator {
       this.deps.safeActivityProjection?.purgeAll("shutdown", correlationId);
       return { ok: true, snapshot: this.projection.idle() };
     }
+    // Named before the end so the settlement this stop produces carries it, whichever path settles.
+    this.shutdownStopCause = { runId: current.runId, cause: shutdownStopCause(current) };
     const result = await this.end("stop", current.runId, { requestId: current.runId });
     this.deps.activityLog?.write(
       activityLogEvent(
@@ -4437,6 +4452,10 @@ export class CodingRuntimeOrchestrator {
   // Set only while a scheduled wake starts in the serial lane (`startScheduledWake`).
   private startOrigin: CodingRuntimeTurnOrigin | undefined;
   private shuttingDown = false;
+  // The cause Keiko's own shutdown gives the cancellation of the live run it ends (U-31). A person's
+  // Stop never sets it, so that cancellation stays without one.
+  private shutdownStopCause:
+    { readonly runId: string; readonly cause: CodingWorkbenchStopCause } | undefined;
   private scheduledWakes: { readonly stop: () => void } | undefined;
 
   /**
@@ -5504,8 +5523,17 @@ export class CodingRuntimeOrchestrator {
       ...(failureCode ? { failureCode } : {}),
       ...(pauseReason === undefined ? {} : { pauseReason }),
       ...(verificationGap === undefined ? {} : { verificationGap }),
+      ...this.stopCauseFor(current.runId, state),
       ...(result === undefined ? {} : { result }),
     });
+  }
+
+  private stopCauseFor(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+  ): { readonly stopCause?: CodingWorkbenchStopCause } {
+    const named = this.shutdownStopCause;
+    return state === "cancelled" && named?.runId === runId ? { stopCause: named.cause } : {};
   }
 
   private publishTransition(next: CodingRuntimeSnapshot): boolean {

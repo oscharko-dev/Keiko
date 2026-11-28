@@ -8,6 +8,7 @@ import {
   CODING_WORKBENCH_COMMAND_DESCRIPTION_MAX_CHARS,
   CODING_WORKBENCH_COMMANDS_MAX,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_STOP_CAUSES,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_PROMPT_DELIVERIES,
@@ -935,6 +936,35 @@ describe("Coding Workbench runtime API contracts", () => {
     });
     expect(
       validateCodingWorkbenchRuntimeSnapshot({ ...paused, pauseReason: "operator-override" }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // U-31: why Keiko's shutdown cancelled a run belongs to a cancelled snapshot only.
+  it("binds the stop cause to a cancelled snapshot only", () => {
+    const cancelled = {
+      schemaVersion: "1",
+      state: "cancelled",
+      revision: 5,
+      updatedAt: AT,
+      runId: "run-1",
+    };
+    for (const stopCause of CODING_WORKBENCH_STOP_CAUSES) {
+      const snapshot = { ...cancelled, stopCause };
+      expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({
+        ok: true,
+        value: snapshot,
+      });
+    }
+    expect(validateCodingWorkbenchRuntimeSnapshot(cancelled)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...cancelled, stopCause: "operator-stop" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...cancelled,
+        state: "failed",
+        stopCause: "server-shutdown-working",
+      }),
     ).toMatchObject({ ok: false });
   });
 

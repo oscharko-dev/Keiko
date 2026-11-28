@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 84;
+export const SCHEMA_VERSION = 85;
 
 interface Migration {
   readonly version: number;
@@ -1669,6 +1669,15 @@ const V84_SQL = V82_SQL.replaceAll("coding_runtime_snapshots_v82", "coding_runti
     "  pause_reason, issue_purpose\nFROM",
     "  pause_reason, issue_purpose, verification_gap\nFROM",
   );
+
+// V85 (U-31): `coding_runtime_snapshots.stop_cause` — why a `cancelled` run ended when the person did
+// not press Stop: Keiko was closed. Durable so a restart can say so instead of a bare "Stopped". A
+// plain ADD COLUMN: NULL on every existing row is the correct reading of history, which carries no
+// recorded cause and shows the plain sentence.
+const V85_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stop_cause TEXT
+  CHECK (stop_cause IS NULL OR stop_cause IN ('server-shutdown-waiting','server-shutdown-working'));
+`;
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
@@ -3655,6 +3664,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 82, sql: V82_SQL, rebuildsReferencedTable: true },
   { version: 83, sql: V83_SQL },
   { version: 84, sql: V84_SQL, rebuildsReferencedTable: true },
+  { version: 85, sql: V85_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

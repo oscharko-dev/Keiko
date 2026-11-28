@@ -228,6 +228,20 @@ export const CODING_WORKBENCH_VERIFICATION_GAPS = [
 
 export type CodingWorkbenchVerificationGap = (typeof CODING_WORKBENCH_VERIFICATION_GAPS)[number];
 
+/**
+ * Why a `cancelled` run ended when the person did not press Stop (U-31): Keiko itself was closed.
+ * `server-shutdown-waiting`: the run was held for a decision only the person can make, so no action
+ * was in flight. `server-shutdown-working`: the run was doing work, so what it had started is not
+ * known to be complete. Absent on a person's own Stop and on a run settled by an older Keiko. A
+ * closed word, never inferred from text.
+ */
+export const CODING_WORKBENCH_STOP_CAUSES = [
+  "server-shutdown-waiting",
+  "server-shutdown-working",
+] as const;
+
+export type CodingWorkbenchStopCause = (typeof CODING_WORKBENCH_STOP_CAUSES)[number];
+
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
     "runtime-unavailable",

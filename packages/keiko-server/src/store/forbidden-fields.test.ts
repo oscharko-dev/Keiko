@@ -176,6 +176,8 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   // V83 (#4491): one of four closed words naming why a run that changed code ended without a
   // passing check. No path, command, output or model text.
   "verification_gap",
+  // V85 (U-31): one of two closed words naming why Keiko's shutdown cancelled a run. No text.
+  "stop_cause",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque

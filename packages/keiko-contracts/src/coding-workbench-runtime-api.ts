@@ -40,8 +40,10 @@ import {
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 import {
+  CODING_WORKBENCH_STOP_CAUSES,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
+  type CodingWorkbenchStopCause,
   type CodingWorkbenchTurnFailureCode,
   type CodingWorkbenchVerificationGap,
 } from "./coding-workbench-runtime-constants.js";
@@ -50,8 +52,10 @@ import { isChatJiraPodId } from "./bff-wire.js";
 import { isMcpServerName, MCP_SERVER_MAX } from "./mcp-servers.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_STOP_CAUSES,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
+  type CodingWorkbenchStopCause,
   type CodingWorkbenchTurnFailureCode,
   type CodingWorkbenchVerificationGap,
 } from "./coding-workbench-runtime-constants.js";
@@ -1272,6 +1276,12 @@ export interface CodingWorkbenchRuntimeSnapshot {
    * concrete gap (#4491); absent on a run settled by an older Keiko, which reads as a generic gap.
    */
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+  /**
+   * Present only on a `cancelled` run that Keiko's own shutdown ended (U-31): the person did not
+   * press Stop, so the Workbench says Keiko was closed and whether work was in flight. Absent on a
+   * person's own Stop and on a run settled by an older Keiko.
+   */
+  readonly stopCause?: CodingWorkbenchStopCause | undefined;
   /** Honest runtime/provider accounting; unavailable never implies a guessed model limit. */
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
   /** Present only when durable server truth records acknowledgement for a recovery-required run. */
@@ -1782,6 +1792,7 @@ const CODING_WORKBENCH_RUNTIME_SNAPSHOT_KEYS = [
   "agent",
   "failureCode",
   "verificationGap",
+  "stopCause",
   "contextUsage",
   "recoveryAcknowledged",
   "pendingPermission",
@@ -2311,6 +2322,7 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateOptionalSnapshotFields(value, errors);
   validateFailureCode(value.failureCode, errors);
   validateVerificationGap(value, errors);
+  validateStopCause(value, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
   validatePauseReason(value, errors);
@@ -2408,6 +2420,17 @@ function validateVerificationGap(value: Record<string, unknown>, errors: string[
   if (value.failureCode !== "verification-not-evidenced") {
     errors.push("verificationGap is only allowed with failureCode verification-not-evidenced");
   }
+}
+
+// A stop cause explains a cancellation; on any other state it would describe an ending the run did
+// not have.
+function validateStopCause(value: Record<string, unknown>, errors: string[]): void {
+  if (value.stopCause === undefined) return;
+  if (!isOneOf(value.stopCause, CODING_WORKBENCH_STOP_CAUSES)) {
+    errors.push("stopCause is invalid");
+    return;
+  }
+  if (value.state !== "cancelled") errors.push("stopCause is only allowed on a cancelled run");
 }
 
 function validateFailureCode(value: unknown, errors: string[]): void {

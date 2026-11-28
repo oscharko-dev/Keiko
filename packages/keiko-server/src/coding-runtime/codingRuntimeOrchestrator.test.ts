@@ -1917,6 +1917,65 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
   });
 
+  // U-31: the cause of Keiko's own shutdown is recorded on the cancelled snapshot so a restarted
+  // Workbench can tell it from the person's own Stop; the person's Stop records none.
+  describe("the stop cause on the cancelled snapshot", () => {
+    const permissionRequested = {
+      schemaVersion: "1",
+      eventId: "event-u31-consent",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-7",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "ci-observe",
+        commandLabel: "ci",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    } as const;
+
+    it("names a shutdown while the run waited for the person as waiting", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = await f.orchestrator.ingest(permissionRequested);
+      expect(successfulSnapshot(waiting).state).toBe("awaiting-approval");
+
+      await f.orchestrator.shutdown();
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "cancelled",
+        stopCause: "server-shutdown-waiting",
+      });
+    });
+
+    it("names a shutdown while the run worked as working", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+
+      await f.orchestrator.shutdown();
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "cancelled",
+        stopCause: "server-shutdown-working",
+      });
+    });
+
+    it("records no cause for the person's own Stop, even while the run waited", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest(permissionRequested);
+
+      await f.orchestrator.stop("run-1", { requestId: "run-1" });
+
+      const settled = f.orchestrator.getSnapshot("run-1");
+      expect(settled?.state).toBe("cancelled");
+      expect(settled?.stopCause).toBeUndefined();
+    });
+  });
+
   // Owner review, PR #3452: the cause line used to be written BEFORE the attempt, so a shutdown that
   // could not end the run left behind a cause for an ending that never happened — and the
   // troubleshooting entry tells the operator to read that line as confirmation of the outcome. A run
