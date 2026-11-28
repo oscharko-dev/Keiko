@@ -144,6 +144,11 @@ const REGEX_PRECEDING_KEYWORDS: ReadonlySet<string> = new Set([
 // The head of a parenthesis after which a statement, and so a pattern, may start: `if (x) /re/.test(y)`.
 const CONTROL_PAREN_KEYWORDS: ReadonlySet<string> = new Set(["if", "while", "for", "with"]);
 
+// Every ECMAScript WhiteSpace and LineTerminator (NBSP, U+FEFF, U+2028 and U+2029 among them) ends
+// a word, even though the word class below takes the rest of the non-ASCII range.
+const PROGRAM_SEPARATOR = /\s/u;
+const PROGRAM_LINE_TERMINATOR = /[\n\r\u2028\u2029]/u;
+
 const PROGRAM_WORD_CHAR = /[\w$\u0080-￿]/u;
 
 type LastToken = "start" | "operand" | "regex-ahead" | "brace";
@@ -183,16 +188,29 @@ class ProgramTokens {
     return this.last !== "operand";
   }
 
+  // `++` / `--` after an operand is postfix and leaves an operand; anywhere else (after an operator,
+  // a keyword, at the start) it is prefix and an operand, such as a pattern, is still to come.
+  private incrementOrDecrement(): void {
+    if (this.lastIsWord ? this.slashStartsPattern() : this.last !== "operand") {
+      this.last = "regex-ahead";
+      this.lastIsWord = false;
+      this.adjacent = false;
+      this.afterDot = false;
+    } else {
+      this.operand();
+    }
+  }
+
   /** Feeds the character (or `++` / `--`) at `i`; returns how many characters it took. */
   public feed(code: string, i: number): number {
     const ch = code.charAt(i);
-    if (PROGRAM_WORD_CHAR.test(ch)) return this.feedWord(ch);
-    if (ch.trim() === "") {
+    if (PROGRAM_SEPARATOR.test(ch)) {
       this.gap();
       return 1;
     }
+    if (PROGRAM_WORD_CHAR.test(ch)) return this.feedWord(ch);
     if ((ch === "+" || ch === "-") && code.charAt(i + 1) === ch) {
-      this.operand();
+      this.incrementOrDecrement();
       return 2;
     }
     this.feedPunctuation(ch);
@@ -278,8 +296,7 @@ function slashSpan(code: string, i: number, tokens: ProgramTokens): ProgramScan 
   const next = code.charAt(i + 1);
   if (next === "/") {
     tokens.gap();
-    const eol = code.indexOf("\n", i);
-    return { out: " ", end: eol === -1 ? code.length : eol };
+    return { out: " ", end: lineEnd(code, i) };
   }
   if (next === "*") {
     tokens.gap();
@@ -292,6 +309,13 @@ function slashSpan(code: string, i: number, tokens: ProgramTokens): ProgramScan 
   return span;
 }
 
+// The index of the first ECMAScript LineTerminator at or after `from`, or the end of the code.
+function lineEnd(code: string, from: number): number {
+  let i = from;
+  while (i < code.length && !PROGRAM_LINE_TERMINATOR.test(code.charAt(i))) i += 1;
+  return i;
+}
+
 // The literal from its opening slash to the end of its flags, as an operand; an unterminated one is
 // ambiguous.
 function regexSpan(code: string, open: number): ProgramScan {
@@ -299,7 +323,7 @@ function regexSpan(code: string, open: number): ProgramScan {
   let inClass = false;
   while (i < code.length) {
     const ch = code.charAt(i);
-    if (ch === "\n") throw new AmbiguousProgramError();
+    if (PROGRAM_LINE_TERMINATOR.test(ch)) throw new AmbiguousProgramError();
     if (ch === "\\") {
       i += 2;
       continue;

@@ -49,6 +49,11 @@ const LEADS = [
   { head: "x ? 1 : ", tail: ";" },
   { head: "typeof ", tail: ";" },
   { head: "if (ok) { run(); } else ", tail: ";" },
+  { head: "x = ++", tail: ";" },
+  { head: "x = --", tail: ";" },
+  { head: "return\u00a0", tail: ";" },
+  { head: "return\u2028", tail: ";" },
+  { head: "typeof\ufeff", tail: ";" },
 ] as const;
 const DIVIDED = ["a", "a++", "b--", "x.in", "x.return", "(a + b)", "arr[0]", "1.5", '"s"', "`t`"];
 
@@ -128,9 +133,25 @@ describe(`${MENTION_NAME} (property)`, () => {
         if (kind !== "command") throw new Error(`labelled ${String(kind)}: ${code}`);
       },
     };
-    await checkProperty(options);
+    const seen = { run: 0, postfix: 0 };
+    await checkProperty({
+      ...options,
+      property: (index) => {
+        seen.run += 1;
+        if (/\+\+|--/u.test(DIVIDED[index] ?? "")) seen.postfix += 1;
+        options.property(index);
+      },
+    });
     const { runs } = propertySettings(options);
-    expect(runs).toBeGreaterThanOrEqual(1);
+    // Every generated run reached the property, and the postfix operands were among them.
+    expect(seen.run).toBe(runs);
+    assertFrequencyFloor({
+      what: "a division after a postfix increment or decrement",
+      count: seen.postfix,
+      runs,
+      share: 0.05,
+      validatedRuns: 200,
+    });
   });
 });
 
@@ -141,6 +162,17 @@ describe("reading a program's code (property)", () => {
       (size: number): string => `return ${"x".repeat(size)} / 2;${"/ ".repeat(size)}`,
       (size: number): string => "(a) / b, ".repeat(size),
       (size: number): string => "/a/g, ".repeat(size),
+      (size: number): string => '"a\\"b" + '.repeat(size),
+      (size: number): string => "// c\n".repeat(size),
+      (size: number): string => "/* c */ a / ".repeat(size),
+      (size: number): string => "`a${b}c` + ".repeat(size),
+      (size: number): string =>
+        `${"`${".repeat(15)}x${"}`".repeat(15)};`.repeat(Math.ceil(size / 40)),
+      (size: number): string => "(".repeat(size),
+      (size: number): string => "`${".repeat(size),
+      (size: number): string => `"${"a".repeat(size)}`,
+      (size: number): string => "/*".repeat(size),
+      (size: number): string => "/a[".repeat(size),
     ]) {
       const scaling = measureScaling({
         size: 2_000,

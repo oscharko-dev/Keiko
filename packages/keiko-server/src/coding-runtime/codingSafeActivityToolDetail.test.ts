@@ -520,6 +520,17 @@ describe("what a Code Mode program does (U-56)", () => {
     "return (a + b) / 2 + /tools.shell(/.test(s);",
     "return arr[0] / 2 + /tools.shell(/.test(s);",
     "if (ok) { run(); } /tools.shell(/.test(s);",
+    "x = ++/tools.shell(/g.lastIndex, 2/3;",
+    "x = --/tools.shell(/g.lastIndex, 2/3;",
+    "x = a + ++/tools.shell(/g.lastIndex, 2/3;",
+    "return ++/tools.shell(/g.lastIndex, 2/3;",
+    "return\u00a0/tools.shell(/g.lastIndex, 2/3;",
+    "return\ufeff/tools.shell(/g.lastIndex, 2/3;",
+    "return\u2028/tools.shell(/g.lastIndex, 2/3;",
+    "return\u2029/tools.shell(/g.lastIndex, 2/3;",
+    "return\u3000/tools.shell(/g.lastIndex, 2/3;",
+    "return /x\u2028/.test(s); await tools.shell({});",
+    "return /x\r/.test(s); await tools.shell({});",
   ])("names no kind where the program only mentions a tool: %s", (code) => {
     expect(program(code).programKind).toBeUndefined();
   });
@@ -535,6 +546,11 @@ describe("what a Code Mode program does (U-56)", () => {
     ["command", "return (a + b) / tools.shell({}) / 2;"],
     ["command", "return arr[0] / tools.shell({}) / 2;"],
     ["command", "if (ok) /x/.test(s); await tools.shell({});"],
+    ["command", "// note\rawait tools.shell({});"],
+    ["command", "// note\u2028await tools.shell({});"],
+    ["command", "// note\u2029await tools.shell({});"],
+    ["command", "return a++ / tools.shell({}) / 2;"],
+    ["command", "x = ++a / tools.shell({}) / 2;"],
     ["command", "const half = total / 2; await tools.shell({}); return half / 3;"],
     ["command", "const re = /a\\/b[/]/g; await tools.shell({}); return re;"],
   ] as const)("still reads %s from a call beside literals", (kind, code) => {
