@@ -21950,7 +21950,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["available", "no-runtime", "no-pin", "pin-mismatch"],
+        values: ["available", "no-runtime", "no-pin", "pin-mismatch", "unreadable"],
       },
       readRootCount: {
         type: "integer",

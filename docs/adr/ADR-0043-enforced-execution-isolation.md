@@ -121,7 +121,13 @@ attempt), with the discovery failure line carrying the run's correlation id. A v
 steps execute: on the npm lane the discovery locates the supervisor and reads its size and digest once, asynchronously
 and streamed, and hashes the step Node.js on every use (never a cache keyed on metadata); the OpenCode payload tree is
 the sidecar's own launch attestation and is not hashed for a verification. The private step copy is removed
-asynchronously, awaited inside the exclusive workspace scope before the next execution. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
+asynchronously, awaited inside the exclusive workspace scope before the next execution. The packaged and dev-checkout
+lanes still go through their full payload attestation, because their discovery yields the activated runtime that the
+Coding activation shares and has no narrower form; only the npm lane, the one measured, was narrowed. On the npm lane a
+tampered OpenCode payload therefore no longer disables governed verification steps: the supervisor and the step Node.js
+are attested on their own against the digests compiled into this server, and the payload is attested on the sidecar's
+launch path, where a tampered one refuses the Coding run. A supervisor that cannot be read to attest it is the closed
+`unreadable` outcome with a diagnostic, never an exception out of the probe. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
 denies it as isolation unavailable instead of reporting a missing script.
 
 ## Context

@@ -63,7 +63,7 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["available", "no-runtime", "no-pin", "pin-mismatch"],
+      values: ["available", "no-runtime", "no-pin", "pin-mismatch", "unreadable"],
     },
     readRootCount: { type: "integer", dataClass: "count", required: true },
     // #4496: named toolchain homes left out, by reason: they are a drive root, hold or sit in the
@@ -423,7 +423,7 @@ interface SupervisorCandidate {
 
 type SupervisorBinary =
   | { readonly outcome: "available"; readonly helperPath: string; readonly pin: string }
-  | { readonly outcome: "no-runtime" | "no-pin" | "pin-mismatch" };
+  | { readonly outcome: "no-runtime" | "no-pin" | "pin-mismatch" | "unreadable" };
 
 type SupervisorSelection =
   { readonly candidate: SupervisorCandidate } | { readonly outcome: "no-runtime" | "no-pin" };
@@ -464,18 +464,49 @@ function attestedBinary(candidate: SupervisorCandidate, sha256: string): Supervi
 async function attestSupervisor(
   selection: SupervisorSelection,
   sha256: (path: string) => Promise<string>,
+  correlationId: string | undefined,
 ): Promise<SupervisorBinary> {
   if (!("candidate" in selection)) return { outcome: selection.outcome };
   const { candidate } = selection;
-  if (!candidateSizeMatches(candidate)) return { outcome: "pin-mismatch" };
-  return attestedBinary(candidate, await sha256(candidate.helperPath));
+  try {
+    if (!candidateSizeMatches(candidate)) return { outcome: "pin-mismatch" };
+    return attestedBinary(candidate, await sha256(candidate.helperPath));
+  } catch (error) {
+    return reportUnreadableSupervisor(error, correlationId);
+  }
 }
 
-function attestSupervisorSync(selection: SupervisorSelection): SupervisorBinary {
+function attestSupervisorSync(
+  selection: SupervisorSelection,
+  correlationId: string | undefined,
+): SupervisorBinary {
   if (!("candidate" in selection)) return { outcome: selection.outcome };
   const { candidate } = selection;
-  if (!candidateSizeMatches(candidate)) return { outcome: "pin-mismatch" };
-  return attestedBinary(candidate, sha256FileSync(candidate.helperPath));
+  try {
+    if (!candidateSizeMatches(candidate)) return { outcome: "pin-mismatch" };
+    return attestedBinary(candidate, sha256FileSync(candidate.helperPath));
+  } catch (error) {
+    return reportUnreadableSupervisor(error, correlationId);
+  }
+}
+
+// A supervisor that cannot be read to attest it (unreadable, or gone after it was found) is no
+// supervisor: the verification never aborts on it, and `unreadable` tells it from a pin mismatch.
+function reportUnreadableSupervisor(
+  error: unknown,
+  correlationId: string | undefined,
+): SupervisorBinary {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation: "editor.verification.windows-step-supervisor.unreadable",
+      source: "editor.verification.windows-step-supervisor",
+      error,
+      redact: () => "The Windows step supervisor could not be read to verify it.",
+    }),
+  );
+  return { outcome: "unreadable" };
 }
 
 // A copy that cannot be verified (its bytes miss the pin, or it cannot be written) is a supervisor
@@ -675,7 +706,7 @@ export async function attestWindowsStepSupervisor(
   const clock = input.now ?? Date.now;
   const plan = planResolution(input);
   const supervisorStart = clock();
-  const binary = await attestSupervisor(plan.selection, sha256FileAsync);
+  const binary = await attestSupervisor(plan.selection, sha256FileAsync, input.correlationId);
   const stepNodeStart = clock();
   // The runtime's patched Node.js, looked for only beside a verified supervisor (#4492).
   const stepNode = await resolveStepNodeAsync(stepNodeInput(binary, input));
@@ -702,6 +733,6 @@ export function resolveWindowsStepSupervisorSync(
 ): WindowsStepSupervisor | undefined {
   if ((input.platform ?? process.platform) !== "win32") return undefined;
   const plan = planResolution(input);
-  const binary = attestSupervisorSync(plan.selection);
+  const binary = attestSupervisorSync(plan.selection, input.correlationId);
   return finishResolution(input, plan, binary, resolveStepNode(stepNodeInput(binary, input)));
 }

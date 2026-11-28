@@ -20,12 +20,16 @@ interface ProbeState {
   approvals: Record<string, unknown>;
   hashedFiles: string[];
   treeAttestations: number;
+  failNextHash: boolean;
+  diagnostics: unknown[];
 }
 
 const state = vi.hoisted((): ProbeState => ({
   approvals: {},
   hashedFiles: [],
   treeAttestations: 0,
+  failNextHash: false,
+  diagnostics: [],
 }));
 
 vi.mock("../coding-runtime/npmLaneRuntimeApprovals.js", async (importOriginal) => {
@@ -50,7 +54,22 @@ vi.mock("../file-sha256.js", async (importOriginal) => {
     },
     sha256FileAsync: (path: string): Promise<string> => {
       state.hashedFiles.push(path);
+      if (state.failNextHash) {
+        state.failNextHash = false;
+        return Promise.reject(Object.assign(new Error("busy"), { code: "EBUSY" }));
+      }
       return actual.sha256FileAsync(path);
+    },
+  };
+});
+
+vi.mock("../diagnostics-log.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../diagnostics-log.js")>();
+  return {
+    ...actual,
+    emitServerDiagnostic: (...args: Parameters<typeof actual.emitServerDiagnostic>): void => {
+      state.diagnostics.push(args[1]);
+      actual.emitServerDiagnostic(...args);
     },
   };
 });
@@ -151,6 +170,8 @@ function supervisorOutcome(events: readonly ServerLogEvent[]): unknown {
 beforeEach(() => {
   state.hashedFiles = [];
   state.treeAttestations = 0;
+  state.failNextHash = false;
+  state.diagnostics = [];
   state.approvals = {
     "windows-x64": {
       packageName: PACKAGE,
@@ -275,6 +296,22 @@ describe("what a verification attests on the npm lane (#4491)", () => {
     } as never);
 
     expect(attestation).toEqual({ supervisorMs: 40, stepNodeMs: 25 });
+  });
+
+  it("answers a supervisor that cannot be read with the closed unreadable outcome, not an exception", async () => {
+    const install = windowsInstall();
+    const events: ServerLogEvent[] = [];
+    // A race after the file was found: the read itself fails.
+    state.failNextHash = true;
+
+    expect(await resolveWindowsStepSupervisor(resolveInput(install, events))).toBeUndefined();
+
+    expect(supervisorOutcome(events)).toBe("unreadable");
+    expect(state.diagnostics).toHaveLength(1);
+    expect(state.diagnostics[0]).toMatchObject({
+      correlationId: "attestation-proof",
+      operation: "editor.verification.windows-step-supervisor.unreadable",
+    });
   });
 
   it("answers the synchronous capability probe from the same checks", () => {

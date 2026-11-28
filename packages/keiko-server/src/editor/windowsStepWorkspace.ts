@@ -87,8 +87,8 @@ const RETRYABLE_REMOVAL_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function retryableRemoval(error: unknown): boolean {
-  const code = (error as { readonly code?: unknown } | null)?.code;
-  return typeof code === "string" && RETRYABLE_REMOVAL_CODES.has(code);
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return typeof error.code === "string" && RETRYABLE_REMOVAL_CODES.has(error.code);
 }
 
 function reportCleanupFailure(error: unknown, correlationId: string | undefined): void {
@@ -163,6 +163,8 @@ function makeCopy(
       ),
     );
   } catch (error) {
+    // Synchronous on purpose: `workspace()` is a synchronous port and this is the rare half-built
+    // copy of a failed copy; the common removal, after the run, is the asynchronous one.
     removeCopySync(root, correlationId);
     throw error;
   }
