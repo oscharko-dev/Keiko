@@ -106,14 +106,6 @@ function objectId(result: CommandResult): string {
   return value;
 }
 /**
- * The effective `core.autocrlf` a verified staging runs under. `exact`: no conversion is configured,
- * so the index takes the verified bytes as they are. Otherwise a file Git would convert while
- * staging is admitted only when Git's own built-in conversion of the verified bytes checks them out
- * again byte for byte (#4491): with `autocrlf=true`, a text file whose every line break is CRLF and
- * that holds no other CR. Git for Windows sets `autocrlf=true` for the whole system, so before this
- * every commit in an ordinary Windows checkout was refused.
- */
-/**
  * Body-free counts a settlement reports about its own bounds: attribute reads that were split in
  * halves after a truncated answer, and paths a batch left undecided because the shared hash-run
  * budget ran out. They make a partly unsettled batch distinguishable from files that are dirty.
@@ -130,6 +122,14 @@ export interface GitStagedConversionStats {
 /** Why the staged-object port could not answer for a batch (a closed vocabulary for the log). */
 export type GitStagedUndecidableReason =
   "config-unreadable" | "attributes-unreadable" | "attributes-truncated" | "hash-failed";
+/**
+ * The effective `core.autocrlf` a verified staging runs under. `exact`: no conversion is configured,
+ * so the index takes the verified bytes as they are. Otherwise a file Git would convert while
+ * staging is admitted only when Git's own built-in conversion of the verified bytes checks them out
+ * again byte for byte (#4491): with `autocrlf=true`, a text file whose every line break is CRLF and
+ * that holds no other CR. Git for Windows sets `autocrlf=true` for the whole system, so before this
+ * every commit in an ordinary Windows checkout was refused.
+ */
 export type GitStageLineEndings = "exact" | "autocrlf-true" | "autocrlf-input";
 const CR = 0x0d;
 const LF = 0x0a;
