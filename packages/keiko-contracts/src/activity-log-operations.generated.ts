@@ -26356,7 +26356,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["implausibly-low", "implausibly-high"],
+        values: ["implausibly-low", "implausibly-high", "ambiguous-cache-layout"],
       },
       reportedPromptTokens: {
         type: "integer",
@@ -26382,6 +26382,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     proofIds: [
       "gateway.prompt.usage-rejected.implausibly-low",
       "gateway.prompt.usage-rejected.implausibly-high",
+      "gateway.prompt.usage-rejected.ambiguous-cache-layout",
     ],
     releaseImpact: "patch",
   },

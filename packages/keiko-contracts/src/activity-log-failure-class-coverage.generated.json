@@ -30619,7 +30619,8 @@
           },
           "proofIds": [
             "gateway.prompt.usage-rejected.implausibly-low",
-            "gateway.prompt.usage-rejected.implausibly-high"
+            "gateway.prompt.usage-rejected.implausibly-high",
+            "gateway.prompt.usage-rejected.ambiguous-cache-layout"
           ],
           "replayReferences": [],
           "missingObligations": []
