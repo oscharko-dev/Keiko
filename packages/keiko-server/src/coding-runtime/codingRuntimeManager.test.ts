@@ -5143,6 +5143,54 @@ describe("coding runtime manager", () => {
     },
   );
 
+  // The failed start's own revoke/reap path is the run's teardown: a Stop arriving while it holds
+  // the revocation barrier awaits that one teardown. Red before: Stop reaped the tree on its own and
+  // returned `stopped`, then the start retried the already released tree and settled
+  // `runtime-reap-unproven`.
+  it("shares one teardown between a failed OpenCode start and a Stop that arrives meanwhile", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let releaseBarrier: () => void = () => undefined;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let revocations = 0;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      revokeRuntime: async (): Promise<true> => {
+        revocations += 1;
+        await barrier;
+        return true;
+      },
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(1);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: false, reason: "readiness-failed" })),
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    const starting = manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await vi.waitFor(() => {
+      expect(revocations).toBe(1);
+    });
+    const stopping = manager.stop("run-1988");
+    releaseBarrier();
+
+    await expect(stopping).resolves.toEqual({ ok: true, status: "stopped" });
+    await expect(starting).resolves.toMatchObject({ ok: false });
+    expect(await starting).not.toMatchObject({ failureCode: "runtime-reap-unproven" });
+    expect(revocations).toBe(1);
+    expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
   it("settles a Codex start whose single exit teardown genuinely fails as reap-unproven", async () => {
     const fixture = createManagedFixture();
     const harness = nativeTreeCodexHarness({ refusal: false, holdReap: true });

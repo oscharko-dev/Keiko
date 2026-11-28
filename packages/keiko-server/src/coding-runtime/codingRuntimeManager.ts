@@ -1508,22 +1508,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     failureCode: CodingRuntimeFailureCode,
   ): Promise<CodingRuntimeStartResult> {
     const observed = failure(failureCode, codexRetryable(failureCode));
-    const folded = await this.exitTeardownFailure(active, observed);
-    if (folded !== undefined) {
-      return folded.failureCode === "runtime-reap-unproven"
-        ? folded
-        : this.recordLaunchFailure(request, folded);
-    }
-    active.stopRequested = true;
-    active.status = "stopping";
-    const receipt = await this.revokeAndTerminate(active);
-    if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
-      await this.enterRecoveryRequired(active);
-      return failure("runtime-reap-unproven", false);
-    }
-    active.status = "stopped";
-    if (this.active === active) this.active = undefined;
-    return this.recordLaunchFailure(request, failure(failureCode, codexRetryable(failureCode)));
+    const teardown = await this.teardownFailedStart(active);
+    if (!teardown.ok) return failure("runtime-reap-unproven", false);
+    return this.recordLaunchFailure(
+      request,
+      teardown.joined ? refusedLaunchFailure(active, observed) : observed,
+    );
   }
 
   private async completeOpenCodeStart(
@@ -1553,17 +1543,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (handshakeFailure === undefined || this.active !== active) {
       return refusedLaunchFailure(active, failure("runtime-crashed", false));
     }
-    const folded = await this.exitTeardownFailure(active, handshakeFailure);
-    if (folded !== undefined) return folded;
-    active.stopRequested = true;
-    active.status = "stopping";
-    const receipt = await this.revokeAndTerminate(active);
-    if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
-      await this.enterRecoveryRequired(active);
-      return failure("runtime-reap-unproven", false);
-    }
-    active.status = "stopped";
-    this.active = undefined;
+    const teardown = await this.teardownFailedStart(active);
+    if (!teardown.ok) return failure("runtime-reap-unproven", false);
     return refusedLaunchFailure(active, handshakeFailure);
   }
 
@@ -1575,15 +1556,32 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return this.active === active && !active.stopRequested && active.status === "starting";
   }
 
-  private async exitTeardownFailure(
+  // The one teardown of a failed start. It is claimed and published on `stopPromise` before the
+  // first await, exactly as stop() and the exit handler do, so a Stop arriving while the start's
+  // cleanup runs awaits this teardown instead of reaping the same tree a second time (which would
+  // read as unproven). A start that finds a teardown already claimed folds onto it.
+  private async teardownFailedStart(
     active: ActiveRuntime,
-    observed: FailureResult,
-  ): Promise<FailureResult | undefined> {
-    const outcome = active.tearingDown ? await active.stopPromise : undefined;
-    if (outcome === undefined) return undefined;
-    return outcome.ok
-      ? refusedLaunchFailure(active, observed)
-      : failure("runtime-reap-unproven", false);
+  ): Promise<{ readonly ok: boolean; readonly joined: boolean }> {
+    const inFlight = active.tearingDown ? active.stopPromise : undefined;
+    if (inFlight !== undefined) return { ok: (await inFlight).ok, joined: true };
+    active.tearingDown = true;
+    const teardown = this.runFailedStartTeardown(active);
+    active.stopPromise = teardown;
+    return { ok: (await teardown).ok, joined: false };
+  }
+
+  private async runFailedStartTeardown(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
+    active.stopRequested = true;
+    active.status = "stopping";
+    const receipt = await this.revokeAndTerminate(active);
+    if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
+      await this.enterRecoveryRequired(active);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    }
+    active.status = "stopped";
+    if (this.active === active) this.active = undefined;
+    return { ok: true, status: "stopped" };
   }
 
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
