@@ -8518,6 +8518,39 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     ).toMatchObject({ runId: "run-after-text-single", runtimeRetry: "allowed" });
   });
 
+  // A held first line whose flush finds the response already ended settles the turn once, as
+  // cancelled: the provider failure behind it must not record a second outcome.
+  it("records one outcome when the held first line cannot be delivered before a failure", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-after-text-gone" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            Object.defineProperty(response.res, "writableEnded", { get: () => true });
+            throw new TransportError("connection reset after answer text");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    const outcomes = sink.events.filter((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.extra).toMatchObject({ outcome: "cancelled" });
+    expect(response.body()).not.toContain("partial");
+  });
+
   // An oversized or unparseable provider answer is the same answer on every attempt: the runtime
   // must not retry it as a dropped connection.
   it("ends a live turn whose provider answer was unusable as a final rejection, not a stream interruption", async () => {

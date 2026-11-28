@@ -4452,7 +4452,8 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    await flushPrefaceBeforeFailure(session);
+    // A flush that found the response gone already settled the turn as cancelled.
+    if (!(await flushPrefaceBeforeFailure(session))) return;
     const failureCode = gatewayStreamFailureCode(error);
     const runtimeRetry = runtimeRetryForRun(
       session.runId,
@@ -4487,15 +4488,16 @@ async function pumpGatewayStreamWithCancellation(
 // A short first line held while the attempt could still turn out to be a tool call is prose the
 // attempt had already produced: when the attempt fails, it reaches the runtime before the failure
 // frame, exactly as if it had streamed, so the retry semantics do not depend on the hold. Held
-// tool-call markup is never forwarded.
-async function flushPrefaceBeforeFailure(session: GatewayStreamSession): Promise<void> {
+// tool-call markup is never forwarded. False when the response could no longer take the text: that
+// write has recorded the turn's one outcome (cancelled), so the failure must not settle it again.
+async function flushPrefaceBeforeFailure(session: GatewayStreamSession): Promise<boolean> {
   const { hold } = session.recovery;
-  if (hold.isHolding || session.cancellation.signal.aborted) return;
+  if (hold.isHolding || session.cancellation.signal.aborted) return true;
   const text = hold.release();
-  if (text.length === 0) return;
-  if ((await forwardStreamText(session, { content: text }, undefined)) && text.trim().length > 0) {
-    session.recovery.proseForwarded = true;
-  }
+  if (text.length === 0) return true;
+  const wrote = await forwardStreamText(session, { content: text }, undefined);
+  if (wrote && text.trim().length > 0) session.recovery.proseForwarded = true;
+  return wrote;
 }
 
 interface GatewayStreamSession {
