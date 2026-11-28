@@ -2223,7 +2223,7 @@ export async function fetchGitBranches(
   params.set("root", root);
   return fetchJson(
     `/api/git/branches?${params.toString()}`,
-    undefined,
+    options?.signal === undefined ? undefined : { signal: options.signal },
     undefined,
     options?.correlationId,
     undefined,

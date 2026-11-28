@@ -832,7 +832,7 @@ export async function fetchGitSummary(
   params.set("root", root);
   return fetchJson(
     `/api/git/summary?${params.toString()}`,
-    undefined,
+    options?.signal === undefined ? undefined : { signal: options.signal },
     validateGitRepositorySummary,
     options?.correlationId,
   );
