@@ -158,27 +158,19 @@ describe("node git mutation adapter — an interactive commit stays on the branc
     expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
   });
 
-  it("fails the commit when the checkout cannot be read after the decision", async () => {
+  it("fails the commit when the checkout read throws after the decision", async () => {
     git(["config", "commit.gpgsign", "false"]);
     writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
-    const stop = new AbortController();
-    const ad = createNodeGitMutationAdapter({
-      workspace: info,
-      processEnv: { PATH: process.env.PATH ?? "" },
-      now: () => Date.now(),
-      signal: stop.signal,
-      preparedCheckout: { branchName: git(["branch", "--show-current"]).trim() },
-      signingRequiredByBranchProtection: (): Promise<boolean> => {
-        stop.abort();
-        return Promise.resolve(false);
-      },
+    // The checkout moves to a branch git accepts but the read refuses to name: only the read
+    // fails, the commit itself would succeed on it, so a pass here would land a commit.
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => {
+      git(["checkout", "-q", "-b", "feature/ünsafe"]);
     });
-    writeFileSync(join(root, "b.txt"), "x\n", "utf8");
-    git(["add", "a.txt"]);
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
 
     const committed = await ad.commit({ message: "must not land", allowEmpty: false });
 
-    expect(committed.outcome).not.toBe("succeeded");
+    expect(committed.outcome).toBe("failed");
     expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
   });
 
