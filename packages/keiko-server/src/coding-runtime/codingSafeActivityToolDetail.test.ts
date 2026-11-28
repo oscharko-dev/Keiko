@@ -428,3 +428,49 @@ describe("the output a shell streams while it runs and keeps when it is stopped"
     );
   });
 });
+
+describe("a subagent call's agent, description and prompt (U-52)", () => {
+  const secret = "fixture-deployment-secret-2026";
+  const state = {
+    status: "completed",
+    input: {
+      agent: "explore",
+      description: "Count test files",
+      prompt: `Count the test files. Token ${TOKEN}`,
+    },
+  };
+
+  it("projects the agent and description as facts and the prompt as detail under the credential floor", () => {
+    const detail = openCodeToolDetail("subagent", shellPart(state), state, "succeeded");
+    expect(detail.agentName).toEqual({ text: "explore", truncated: false });
+    expect(detail.taskDescription).toEqual({ text: "Count test files", truncated: false });
+    expect(detail.taskPrompt?.text).toContain("Count the test files.");
+    expect(JSON.stringify(detail)).not.toContain(TOKEN);
+    expect(isCodingSafeActivityToolPresentation(detail)).toBe(true);
+  });
+
+  it("bounds every text and leaves another tool's input alone", () => {
+    const long = {
+      status: "completed",
+      input: { agent: "a".repeat(500), description: "d".repeat(900), prompt: "p".repeat(5_000) },
+    };
+    const detail = openCodeToolDetail("subagent", shellPart(long), long, "succeeded");
+    expect(detail.agentName?.truncated).toBe(true);
+    expect(detail.taskDescription?.truncated).toBe(true);
+    expect(detail.taskPrompt?.truncated).toBe(true);
+    expect(isCodingSafeActivityToolPresentation(detail)).toBe(true);
+    const other = openCodeToolDetail("read", shellPart(state), state, "succeeded");
+    expect(other).not.toHaveProperty("agentName");
+  });
+
+  it("redacts a deployment secret in all three texts", () => {
+    const presentation = {
+      agentName: { text: `x${secret}`, truncated: false },
+      taskDescription: { text: `y ${secret}`, truncated: false },
+      taskPrompt: { text: `z ${secret}`, truncated: false },
+    };
+    const redacted = redactToolTexts(presentation, [secret]);
+    expect(JSON.stringify(redacted)).not.toContain(secret);
+    expect(isCodingSafeActivityToolPresentation(redacted)).toBe(true);
+  });
+});

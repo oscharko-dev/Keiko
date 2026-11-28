@@ -1606,6 +1606,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.failedTimes": "In diesem Lauf {count}-mal fehlgeschlagen",
   "codingWorkbench.activity.took": "Dauer {duration}",
   "codingWorkbench.activity.command": "Befehl",
+  "codingWorkbench.activity.prompt": "Auftrag",
   "codingWorkbench.activity.agentMessage": "Meldung an den Agenten",
   "codingWorkbench.activity.output": "Ausgabe",
   "codingWorkbench.activity.hiddenLines": "{count} Zeilen ausgeblendet",

@@ -219,6 +219,12 @@ export type CodingSafeActivityToolRefusalCause =
 export const CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS = 1_000;
 /** The error message a failed tool returned to the model, up to this many characters. */
 export const CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS = 1_000;
+/** A subagent call's agent name, up to this many characters. */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS = 80;
+/** A subagent call's short task description, up to this many characters. */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS = 240;
+/** A subagent call's prompt, up to this many characters (the opened row shows all of it). */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS = 1_000;
 /** Output lines a tool row shows from the start and from the end; the lines between are counted. */
 export const CODING_SAFE_ACTIVITY_TOOL_OUTPUT_HEAD_LINES = 5;
 export const CODING_SAFE_ACTIVITY_TOOL_OUTPUT_TAIL_LINES = 20;
@@ -269,6 +275,12 @@ export interface CodingSafeActivityToolPresentation {
   readonly output?: CodingSafeActivityToolOutput;
   /** The error message the tool returned to the model when it failed. Same rules. */
   readonly errorText?: CodingSafeActivityToolText;
+  /** A subagent call's agent name (the model's argument). Same rules as `command`. */
+  readonly agentName?: CodingSafeActivityToolText;
+  /** A subagent call's short task description. Same rules. */
+  readonly taskDescription?: CodingSafeActivityToolText;
+  /** A subagent call's prompt; detail the live feed may shed with the command. Same rules. */
+  readonly taskPrompt?: CodingSafeActivityToolText;
   /** The live feed shed this call's command, output and error text to stay inside its budget. */
   readonly detailOmitted?: true;
   /** The runtime kept only the start of this call's result for the model; the whole result was saved. */
@@ -989,6 +1001,9 @@ export function isCodingSafeActivityToolPresentation(
     "command",
     "output",
     "errorText",
+    "agentName",
+    "taskDescription",
+    "taskPrompt",
     "detailOmitted",
     "outputShortened",
   ];
@@ -1046,14 +1061,29 @@ function validPresentationOutcomeVocabulary(value: Record<string, unknown>): boo
 
 // A tool's text is bounded, free of unsafe format characters, and never carried beside a shed one.
 function validPresentationText(value: Record<string, unknown>): boolean {
-  if (value.detailOmitted === true && [value.command, value.output, value.errorText].some(Boolean))
+  if (
+    value.detailOmitted === true &&
+    [value.command, value.output, value.errorText, value.taskPrompt].some(Boolean)
+  )
     return false;
   return (
+    validSubagentText(value) &&
     (value.command === undefined ||
       isToolText(value.command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS)) &&
     (value.errorText === undefined ||
       isToolText(value.errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS)) &&
     (value.output === undefined || isToolOutput(value.output))
+  );
+}
+
+function validSubagentText(value: Record<string, unknown>): boolean {
+  return (
+    (value.agentName === undefined ||
+      isToolText(value.agentName, CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS)) &&
+    (value.taskDescription === undefined ||
+      isToolText(value.taskDescription, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS)) &&
+    (value.taskPrompt === undefined ||
+      isToolText(value.taskPrompt, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS))
   );
 }
 

@@ -1815,8 +1815,16 @@ function settledPresentation(
   newer: CodingSafeActivityToolPresentation | undefined,
 ): CodingSafeActivityToolPresentation | undefined {
   const merged: CodingSafeActivityToolPresentation = { ...earlier, ...newer };
-  const { failureOrigin, refusalCause, command, output, errorText, detailOmitted, ...facts } =
-    merged;
+  const {
+    failureOrigin,
+    refusalCause,
+    command,
+    output,
+    errorText,
+    taskPrompt,
+    detailOmitted,
+    ...facts
+  } = merged;
   const origin = settledFailureOrigin(state, failureOrigin, facts);
   const presentation: CodingSafeActivityToolPresentation = {
     ...facts,
@@ -1824,7 +1832,7 @@ function settledPresentation(
     ...(origin === undefined || refusalCause === undefined ? {} : { refusalCause }),
     ...(keepsOmission(detailOmitted, newer)
       ? { detailOmitted: true }
-      : toolText(command, output, errorText)),
+      : toolText(command, output, errorText, taskPrompt)),
   };
   return Object.keys(presentation).length === 0 ? undefined : Object.freeze(presentation);
 }
@@ -1837,8 +1845,8 @@ function keepsOmission(
 ): boolean {
   if (detailOmitted !== true) return false;
   if (newer?.detailOmitted === true) return true;
-  return (
-    newer?.command === undefined && newer?.output === undefined && newer?.errorText === undefined
+  return ![newer?.command, newer?.output, newer?.errorText, newer?.taskPrompt].some(
+    (text) => text !== undefined,
   );
 }
 
@@ -1862,8 +1870,10 @@ function toolText(
   command: CodingSafeActivityToolPresentation["command"],
   output: CodingSafeActivityToolPresentation["output"],
   errorText: CodingSafeActivityToolPresentation["errorText"],
-): Pick<CodingSafeActivityToolPresentation, "command" | "output" | "errorText"> {
+  taskPrompt: CodingSafeActivityToolPresentation["taskPrompt"],
+): Pick<CodingSafeActivityToolPresentation, "command" | "output" | "errorText" | "taskPrompt"> {
   return {
+    ...(taskPrompt === undefined ? {} : { taskPrompt }),
     ...(command === undefined ? {} : { command }),
     ...(output === undefined ? {} : { output }),
     ...(errorText === undefined ? {} : { errorText }),
@@ -2144,7 +2154,8 @@ function hasToolDetail(tool: CodingSafeActivityTool): boolean {
   return (
     presentation?.command !== undefined ||
     presentation?.output !== undefined ||
-    presentation?.errorText !== undefined
+    presentation?.errorText !== undefined ||
+    presentation?.taskPrompt !== undefined
   );
 }
 
@@ -2153,6 +2164,7 @@ function withoutToolDetail(tool: CodingSafeActivityTool): CodingSafeActivityTool
     command: _command,
     output: _output,
     errorText: _error,
+    taskPrompt: _prompt,
     ...rest
   } = tool.presentation ?? {};
   return { ...tool, presentation: Object.freeze({ ...rest, detailOmitted: true as const }) };

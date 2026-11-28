@@ -1549,6 +1549,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.failedTimes": "Failed {count} times in this run",
   "codingWorkbench.activity.took": "Took {duration}",
   "codingWorkbench.activity.command": "Command",
+  "codingWorkbench.activity.prompt": "Prompt",
   "codingWorkbench.activity.agentMessage": "Message to the agent",
   "codingWorkbench.activity.output": "Output",
   "codingWorkbench.activity.hiddenLines": "{count} lines hidden",

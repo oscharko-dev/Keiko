@@ -322,6 +322,42 @@ describe("a successful command's row", () => {
   });
 });
 
+describe("a subagent's row (U-52)", () => {
+  const SUBAGENT: CodingSafeActivityTool = {
+    callId: "call-sub",
+    tool: "subagent",
+    state: "succeeded",
+    occurredAt: AT,
+    presentation: {
+      agentName: { text: "explore", truncated: false },
+      taskDescription: { text: "Count test files", truncated: false },
+      taskPrompt: {
+        text: "Count every *.test.ts file under src and report the total.",
+        truncated: false,
+      },
+    },
+  };
+
+  it("names the agent and the task in the row and shows the prompt when opened", () => {
+    const container = renderTools([SUBAGENT]);
+    const found = row(container, 0);
+    expect(found.querySelector("summary")).toHaveTextContent("Subagent");
+    expect(found.querySelector("summary")).toHaveTextContent("explore — Count test files");
+    expect(within(found).getByRole("figure", { name: "Prompt" })).toHaveTextContent(
+      "Count every *.test.ts file under src",
+    );
+  });
+
+  it("says the prompt left the live view when the feed shed it", () => {
+    const { taskPrompt: _prompt, ...facts } = SUBAGENT.presentation ?? {};
+    const container = renderTools([
+      { ...SUBAGENT, presentation: { ...facts, detailOmitted: true } },
+    ]);
+    expect(row(container, 0)).toHaveTextContent("explore — Count test files");
+    expect(within(row(container, 0)).queryByRole("figure", { name: "Prompt" })).toBeNull();
+  });
+});
+
 describe("a command's preview", () => {
   it("shows the first line, shortened to one row", () => {
     expect(commandPreview({ text: "ls -la", truncated: false })).toBe("ls -la");

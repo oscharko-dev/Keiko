@@ -169,6 +169,27 @@ describe("coding safe-activity contract", () => {
     }
   });
 
+  it("admits a subagent's bounded texts and never beside a shed prompt (U-52)", () => {
+    const text = (value: string): { text: string; truncated: boolean } => ({
+      text: value,
+      truncated: false,
+    });
+    expect(
+      isCodingSafeActivityToolPresentation({
+        agentName: text("explore"),
+        taskDescription: text("Count test files"),
+        taskPrompt: text("Count them."),
+      }),
+    ).toBe(true);
+    expect(isCodingSafeActivityToolPresentation({ agentName: text("a".repeat(81)) })).toBe(false);
+    expect(
+      isCodingSafeActivityToolPresentation({ agentName: { text: "", truncated: false } }),
+    ).toBe(false);
+    expect(
+      isCodingSafeActivityToolPresentation({ taskPrompt: text("x"), detailOmitted: true }),
+    ).toBe(false);
+  });
+
   // PERF-2: a result the runtime shortened for the model carries counts only; the lines are both
   // present or both absent, and the model cannot have kept as many lines as the output had.
   it("admits only counts as the shortened-output fact of a tool presentation", () => {

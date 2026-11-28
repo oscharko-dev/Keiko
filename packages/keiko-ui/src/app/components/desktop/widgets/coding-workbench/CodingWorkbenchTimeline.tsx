@@ -1759,7 +1759,17 @@ function ToolSubject({ tool }: { readonly tool: CodingSafeActivityTool }): React
   const command = tool.presentation?.command;
   if (command !== undefined) return <ToolCommandPreview command={command} />;
   const path = tool.presentation?.relativePath;
-  return path === undefined ? null : <code className={styles.toolName}>{path}</code>;
+  if (path !== undefined) return <code className={styles.toolName}>{path}</code>;
+  const task = subagentSubject(tool);
+  return task === undefined ? null : <span className={styles.toolName}>{task}</span>;
+}
+
+// A subagent row names the agent it started and the task, as "explore — Count test files".
+function subagentSubject(tool: CodingSafeActivityTool): string | undefined {
+  const agent = tool.presentation?.agentName?.text;
+  const description = tool.presentation?.taskDescription?.text;
+  if (agent === undefined || description === undefined) return agent ?? description;
+  return `${agent} — ${description}`;
 }
 
 function ToolRowDuration({

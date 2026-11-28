@@ -1,8 +1,11 @@
 import {
   type CodingSafeActivityOutputShortened,
   CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOL_OUTPUT_PART_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS,
   CODING_SAFE_ACTIVITY_TOOL_OUTPUT_HEAD_LINES,
   CODING_SAFE_ACTIVITY_TOOL_OUTPUT_TAIL_LINES,
   type CodingSafeActivityToolFailureOrigin,
@@ -22,7 +25,15 @@ import { redactContent } from "@oscharko-dev/keiko-security";
 
 type ToolDetail = Pick<
   CodingSafeActivityToolPresentation,
-  "failureOrigin" | "durationMs" | "command" | "output" | "errorText" | "outputShortened"
+  | "failureOrigin"
+  | "durationMs"
+  | "command"
+  | "output"
+  | "errorText"
+  | "outputShortened"
+  | "agentName"
+  | "taskDescription"
+  | "taskPrompt"
 >;
 
 /** What one finished or running OpenCode tool part shows beside its state. */
@@ -48,7 +59,33 @@ export function openCodeToolDetail(
     ...(command === undefined ? {} : { command }),
     ...(output === undefined ? {} : { output }),
     ...(errorText === undefined ? {} : { errorText }),
+    ...subagentDetail(name, state),
   };
+}
+
+// A subagent call says which agent it started, for what and with which prompt: the model's own
+// arguments, with the credential floor applied and each bounded like every other tool text.
+function subagentDetail(
+  name: string,
+  state: Readonly<Record<string, unknown>>,
+): Pick<ToolDetail, "agentName" | "taskDescription" | "taskPrompt"> {
+  if (name !== "subagent") return {};
+  const input = record(state.input);
+  const agentName = inputText(input?.agent, CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS);
+  const taskDescription = inputText(
+    input?.description,
+    CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS,
+  );
+  const taskPrompt = inputText(input?.prompt, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS);
+  return {
+    ...(agentName === undefined ? {} : { agentName }),
+    ...(taskDescription === undefined ? {} : { taskDescription }),
+    ...(taskPrompt === undefined ? {} : { taskPrompt }),
+  };
+}
+
+function inputText(value: unknown, maxChars: number): CodingSafeActivityToolText | undefined {
+  return typeof value === "string" ? boundedToolText(value, maxChars) : undefined;
 }
 
 /**
@@ -310,18 +347,34 @@ export function redactToolTexts(
   secrets: readonly string[],
 ): CodingSafeActivityToolPresentation {
   if (secrets.length === 0) return presentation;
-  const { command, output, errorText } = presentation;
-  if (command === undefined && output === undefined && errorText === undefined) return presentation;
+  const { command, output, errorText, agentName, taskDescription, taskPrompt } = presentation;
+  const texts = [command, output, errorText, agentName, taskDescription, taskPrompt];
+  if (texts.every((text) => text === undefined)) return presentation;
   return {
     ...presentation,
-    ...(command === undefined
-      ? {}
-      : { command: secretFree(command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS, secrets) }),
-    ...(errorText === undefined
-      ? {}
-      : { errorText: secretFree(errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS, secrets) }),
+    ...redacted("command", command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS, secrets),
+    ...redacted("errorText", errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS, secrets),
+    ...redacted("agentName", agentName, CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS, secrets),
+    ...redacted(
+      "taskDescription",
+      taskDescription,
+      CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS,
+      secrets,
+    ),
+    ...redacted("taskPrompt", taskPrompt, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS, secrets),
     ...(output === undefined ? {} : { output: secretFreeOutput(output, secrets) }),
   };
+}
+
+function redacted<K extends string>(
+  key: K,
+  value: CodingSafeActivityToolText | undefined,
+  maxChars: number,
+  secrets: readonly string[],
+): Partial<Record<K, CodingSafeActivityToolText>> {
+  return (value === undefined ? {} : { [key]: secretFree(value, maxChars, secrets) }) as Partial<
+    Record<K, CodingSafeActivityToolText>
+  >;
 }
 
 function secretFree(

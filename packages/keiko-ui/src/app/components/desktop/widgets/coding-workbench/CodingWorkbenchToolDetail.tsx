@@ -229,6 +229,14 @@ export function ToolTextDetail({
           t={t}
         />
       )}
+      {facts.taskPrompt === undefined ? null : (
+        <ToolTextBlock
+          label={t("codingWorkbench.activity.prompt")}
+          text={facts.taskPrompt.text}
+          truncated={facts.taskPrompt.truncated}
+          t={t}
+        />
+      )}
       {facts.errorText === undefined ? null : (
         <ToolTextBlock
           label={t("codingWorkbench.activity.agentMessage")}
