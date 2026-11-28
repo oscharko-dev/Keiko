@@ -93,15 +93,24 @@ export async function analyzeLargeFile(
   };
 }
 
-/** The raw blob id and the NUL probe of a large file (the status comparison and a diff side). */
+/**
+ * The raw blob id and the NUL probe of a large file (the status comparison and a diff side). Neither
+ * needs the line-ending shape, so this pass only hashes and probes: the byte-by-byte CRLF walk of
+ * `analyzeLargeFile` belongs to the staging paths that need a conversion proof.
+ */
 export async function blobIdOfLargeFile(
   root: string,
   file: GitStageLargeFile,
   hashLength: number,
   options: GitStageReadOptions,
 ): Promise<{ readonly objectId: string; readonly hasNul: boolean }> {
-  const { objectId, hasNul } = await analyzeLargeFile(root, file, hashLength, options);
-  return { objectId, hasNul };
+  const hash = createHash(blobAlgorithm(hashLength)).update(`blob ${String(file.size)}\0`);
+  let hasNul = false;
+  await streamGitStageFile(root, file, options, (chunk) => {
+    hash.update(chunk);
+    hasNul ||= chunk.includes(0);
+  });
+  return { objectId: hash.digest("hex"), hasNul };
 }
 
 /**
