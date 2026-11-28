@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   isBrowserApprovalId,
   isBrowserApprovalOrigin,
@@ -48,6 +49,14 @@ const APPROVAL_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
     },
+    // Only on `inspect`: whether the polling browser presented a session at all, so an
+    // `unavailable` read from a browser that never connected is told apart from a refused session.
+    reader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["without-session", "with-session"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -78,6 +87,7 @@ function recordApproval(
   outcome: ApprovalOutcome,
   snapshot?: BrowserApprovalManagementSnapshot,
   reconnect?: SessionReconnectKind,
+  reader?: "without-session" | "with-session",
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -88,6 +98,7 @@ function recordApproval(
         outcome,
         sessionCount: deps.codingAppSessionChannel?.sessionCount() ?? 0,
         ...(reconnect === undefined ? {} : { reconnect }),
+        ...(reader === undefined ? {} : { reader }),
         ...(snapshot === undefined
           ? {}
           : {
@@ -113,18 +124,60 @@ async function handleRequest(ctx: RouteContext, deps: UiHandlerDeps): Promise<Ro
   return { status: 200, body: result, headers: PRIVATE_HEADERS };
 }
 
+// `inspect` is a poll, not a transition: every open page reads it on a timer, so a line per read
+// buries the real changes (lab O-9: `unavailable` and `accepted` alternated about every 30 s because
+// a connected page and a browser without a session both polled). One line is written per distinct
+// credential and each time what that credential sees changes; the memory is process-local and bounded.
+const MAX_REMEMBERED_INSPECTORS = 32;
+const lastInspection = new WeakMap<object, Map<string, string>>();
+
+function inspectionChanged(deps: UiHandlerDeps, cookie: string | undefined, seen: string): boolean {
+  const owner: object = deps.codingAppSessionChannel ?? deps;
+  let remembered = lastInspection.get(owner);
+  if (remembered === undefined) {
+    remembered = new Map();
+    lastInspection.set(owner, remembered);
+  }
+  const key =
+    cookie === undefined ? "absent" : createHash("sha256").update(cookie).digest("base64url");
+  if (remembered.get(key) === seen) return false;
+  remembered.delete(key);
+  remembered.set(key, seen);
+  if (remembered.size > MAX_REMEMBERED_INSPECTORS) {
+    const oldest = remembered.keys().next();
+    if (oldest.done !== true) remembered.delete(oldest.value);
+  }
+  return true;
+}
+
+function inspectionSignature(
+  deps: UiHandlerDeps,
+  snapshot: BrowserApprovalManagementSnapshot | undefined,
+): string {
+  return JSON.stringify([
+    snapshot === undefined,
+    snapshot?.requests.length,
+    snapshot?.approvals.map((approval) => approval.remembered),
+    deps.codingAppSessionChannel?.sessionCount() ?? 0,
+  ]);
+}
+
 function handleInspect(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const snapshot = deps.codingAppSessionChannel?.browserApproval?.snapshot(
-    readSessionCookie(ctx.req),
-    { correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID, purpose: "inspection" },
-  );
-  recordApproval(
-    ctx,
-    deps,
-    "inspect",
-    snapshot === undefined ? "unavailable" : "accepted",
-    snapshot,
-  );
+  const cookie = readSessionCookie(ctx.req);
+  const snapshot = deps.codingAppSessionChannel?.browserApproval?.snapshot(cookie, {
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    purpose: "inspection",
+  });
+  if (inspectionChanged(deps, cookie, inspectionSignature(deps, snapshot)))
+    recordApproval(
+      ctx,
+      deps,
+      "inspect",
+      snapshot === undefined ? "unavailable" : "accepted",
+      snapshot,
+      undefined,
+      cookie === undefined ? "without-session" : "with-session",
+    );
   return {
     status: 200,
     body: snapshot === undefined ? UNAVAILABLE : { state: "active", ...snapshot },

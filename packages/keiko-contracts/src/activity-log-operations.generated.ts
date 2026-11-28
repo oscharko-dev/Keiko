@@ -8751,6 +8751,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
       },
+      reader: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["without-session", "with-session"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",

@@ -10076,6 +10076,12 @@
               "required": false
             },
             {
+              "name": "reader",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "reconnect",
               "type": "string",
               "dataClass": "closed-enum",
