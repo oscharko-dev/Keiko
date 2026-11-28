@@ -122,15 +122,21 @@ This placement ensures the kernel remains a narrow execution primitive that know
 
 The implemented Git window offers a separate, user-triggered `/api/git-delivery/commit/draft`
 operation. Ordinary previews remain deterministic and never call the model. The draft reads only
-staged changes through the existing sandboxed Git reader. Its default output allowance is 4 MiB
+staged changes through the existing sandboxed Git reader. One Git invocation returns the NUL-delimited
+file list and the patch from the same staged view. Its default output allowance is 4 MiB
 (explicit narrower policies still apply); truncation is rejected, never accepted as a complete read.
+Both sides of a rename or copy are checked against the workspace path denial policy before the
+patch is sent to the model. Generating a whole-index draft requires opening the Git repository root.
+A nested project receives a refusal with instructions to open that root.
 
 Draft assembly uses the shared context-token counter, including the response schema, output
-reserve and model safety margin. Large patches receive excerpts from every file rather than a
-prefix of the entire patch. Excerpts are explicitly marked as incomplete; the complete staged-file
-list remains in the prompt. A selection whose minimal evidence cannot fit fails explicitly instead
-of silently dropping files. The model is instructed to describe evidenced changes and never infer
-successful verification from the presence of test files.
+reserve and model safety margin. The model compares removed and added content and leads with the
+most consequential change. Complete patches retain blank-line edits because they can affect
+rendered text, document structure or program behavior. For context-limited patches, the draft first
+drops unchanged context, then bounds excerpts per file.
+Original hunk coordinates locate the excerpts in the staged patch. The prompt identifies omissions
+and retains the complete staged-file list. A selection whose minimal evidence cannot fit fails
+explicitly. The presence of test files is insufficient evidence of successful verification.
 
 The server normalizes the validated answer into a single-line subject, a blank line, a `-` bullet
 list, a blank line and the existing Keiko footer. Trailer values retain continuation lines and paragraph breaks (Conventional Commits 1.0.0 §10); their block begins at a paragraph boundary, and reference-style `Refs #123` separators are also preserved. Ordinary trailer tokens belong to the final group of token-led or indented continuation paragraphs. A later unindented body paragraph returns earlier ambiguous labels such as `Note:` or `Summary:` to the normalized list. Explicit `BREAKING CHANGE`/`BREAKING-CHANGE`, reference tokens with a `#` value (including `Refs #123` and `Refs: #123`), and hyphenated trailer names such as `Reviewed-by` may also span unindented paragraphs. Plain colon labels remain ambiguous and follow the terminal-paragraph rule; they do not absorb subsequent body prose. Trailers, including `BREAKING CHANGE`, retain
@@ -142,9 +148,12 @@ model configuration. Concurrent identical requests serialize through the existin
 Unchanged inputs reuse the validated text; errors and cancelled results are never retained. This
 cache is ephemeral and does not promise reproducibility after restart or eviction.
 
-One corrective generation is allowed after invalid output, or after output exhaustion when a
+One corrective generation is allowed after invalid output, including a formatting-only subject
+that overlooks evidenced nonblank edits, or after output exhaustion when a
 larger allowance fits the model's declared output/context limits. Both generations share the
-same deadline, armed after acquiring the draft mutex, and independently traverse gateway spend admission. No policy check is weakened
+same deadline, armed after acquiring the draft mutex, and independently traverse gateway spend
+admission. A structured response request receiving HTTP 501 may use that same corrective attempt
+to request plain JSON from the same model. No policy check is weakened
 and no generic success message substitutes for an unusable answer. Completion evidence records
 prompt bounds, compaction, generation count and reuse without diff or message content. The same line records normalization version/rule, whether formatting changed, input trailer-like line count, output bullet/trailer counts, continuation/paragraph-break counts, and reference/breaking-marker counts. These describe the selected normalization result and persist unchanged on cache reuse; absent fields mean the selected result did not reach normalization. Each preparation/generation attempt records `git.commit.draft.attempt.completed` with its ordinal, outcome, closed failure code, bounds and any normalization evidence under the request correlation. This preserves the first rejection and its formatting even if recovery fails before normalization, is refused by the context budget, or returns a different result. Cache hits emit no attempt event. If only
 the repair prompt exceeds context, preserve the original model failure and its actual call bounds;

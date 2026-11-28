@@ -45,6 +45,104 @@ describe("commit draft evidence bounds", () => {
     expect(prepared.request).toEqual(build(patch, false));
   });
 
+  it("keeps both sides of a changed function while counting incidental blank lines", () => {
+    const patch = [
+      "diff --git a/review.ts b/review.ts",
+      "--- a/review.ts",
+      "+++ b/review.ts",
+      "@@ -1,5 +1,3 @@ function review()",
+      " export function review(result) {",
+      "-",
+      "-  return result.document;",
+      "+  return result.ready ? result.document : null;",
+      "-  ",
+      " }",
+    ].join("\n");
+    const prepared = prepareCommitDraft(patch, capability, build);
+    expect(prepared).toMatchObject({
+      diffEvidence: { blankChangedLines: 2, nonBlankChangedLines: 2, mixedBlankChangeFiles: 1 },
+      diffCompacted: false,
+    });
+    expect(prepared.request).toEqual(build(patch, false));
+  });
+
+  it("keeps blank edits and an end-of-file newline marker", () => {
+    const patch = [
+      "diff --git a/notes.md b/notes.md",
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1,3 +1,2 @@",
+      " # Notes",
+      "-",
+      "-Paragraph",
+      "\\ No newline at end of file",
+      "+Paragraph",
+    ].join("\n");
+    const prepared = prepareCommitDraft(patch, capability, build);
+    expect(prepared.diffEvidence).toEqual({
+      blankChangedLines: 1,
+      nonBlankChangedLines: 2,
+      mixedBlankChangeFiles: 0,
+    });
+    expect(prepared.request).toEqual(build(patch, false));
+  });
+
+  it("preserves a blank-only hunk that changes rendered content beside a separate code edit", () => {
+    const patch = [
+      "diff --git a/mail.ts b/mail.ts",
+      "--- a/mail.ts",
+      "+++ b/mail.ts",
+      "@@ -1,5 +1,4 @@ const greeting",
+      " const emailBody = `Hello",
+      "-",
+      " Your order has shipped.",
+      " `;",
+      " ",
+      "@@ -30 +29 @@",
+      "-const maxRetries = 1;",
+      "+const maxRetries = 2;",
+    ].join("\n");
+    expect(prepareCommitDraft(patch, capability, build).request).toEqual(build(patch, false));
+  });
+
+  it("recognizes an instruction moved across unchanged code beside a blank edit", () => {
+    const patch = [
+      "diff --git a/review.ts b/review.ts",
+      "@@ -1,3 +1,2 @@",
+      "-sendState(ready);",
+      "-",
+      " ready = true;",
+      "+sendState(ready);",
+    ].join("\n");
+    expect(prepareCommitDraft(patch, capability, build).diffEvidence).toEqual({
+      blankChangedLines: 1,
+      nonBlankChangedLines: 2,
+      mixedBlankChangeFiles: 1,
+    });
+  });
+
+  it("prefers changed lines in the middle of a large staged file to unchanged context", () => {
+    const context = ` unchanged context ${"x".repeat(6000)}`;
+    const patch = [
+      "diff --git a/payment.ts b/payment.ts",
+      "--- a/payment.ts",
+      "+++ b/payment.ts",
+      "@@ -1,7 +1,7 @@ function settle()",
+      context,
+      context,
+      context,
+      "-  return capture(payment);",
+      "+  return payment.approved ? capture(payment) : reject(payment);",
+      context,
+      context,
+      context,
+    ].join("\n");
+    const prepared = prepareCommitDraft(patch, capability, build);
+    expect(prepared.diffCompacted).toBe(true);
+    expect(prepared.request?.messages[0]?.content).toContain("payment.approved");
+    expect(prepared.request?.messages[0]?.content).toContain("-  return capture(payment);");
+  });
+
   it("counts the response schema as part of the input budget", () => {
     const plain = prepareCommitDraft("+change", capability, build);
     const structured = prepareCommitDraft("+change", capability, (diff, compacted) => ({

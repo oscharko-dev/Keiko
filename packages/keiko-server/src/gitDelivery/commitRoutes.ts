@@ -30,6 +30,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   ProviderEmptyAnswerError,
+  ProviderError,
   ProviderOutputExhaustedError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security";
@@ -39,6 +40,7 @@ import {
   canonicalCommitBody,
   prepareCommitDraft,
   type CommitBodyNormalizationEvidence,
+  type CommitDraftDiffEvidence,
 } from "./commitDraftQuality.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
@@ -68,6 +70,7 @@ import {
   summarizeStagedChangeset,
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
+import { GitStagedDraftScopeError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
@@ -95,7 +98,7 @@ import {
   gitDeliveryTerminationHandler,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
   readStagedConflictMarkerFileCountFor,
-  readStagedDiffFor,
+  readCommitDraftSnapshotFor,
   readStagedPathsFor,
   readWorktreeSnapshotFor,
   resolveProjectWorkspace,
@@ -134,6 +137,7 @@ export type GitDeliveryCommitErrorCode =
   | "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED"
   | "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE"
   | "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES"
+  | "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED"
   | "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT"
   | "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE";
 
@@ -187,6 +191,7 @@ const COMMIT_DRAFT_MODEL_FIELDS = {
       "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
       "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
       "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+      "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED",
       "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
       "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
     ],
@@ -200,6 +205,11 @@ const COMMIT_DRAFT_MODEL_FIELDS = {
   promptTokens: { type: "integer", dataClass: "count", required: false },
   maxPromptTokens: { type: "integer", dataClass: "count", required: false },
   diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
+  blankChangedLines: { type: "integer", dataClass: "count", required: false },
+  nonBlankChangedLines: { type: "integer", dataClass: "count", required: false },
+  mixedBlankChangeFiles: { type: "integer", dataClass: "count", required: false },
+  blankLineDraftRejected: { type: "boolean", dataClass: "closed-enum", required: false },
+  structuredOutputUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
   generationAttempts: { type: "integer", dataClass: "count", required: false },
   reused: { type: "boolean", dataClass: "closed-enum", required: false },
   draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
@@ -293,10 +303,13 @@ function commitDraftErrorKind(code: GitDeliveryCommitErrorCode): ActivityLogErro
     return "validation-failed";
   }
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES") return "conflict";
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED") return "validation-failed";
   return "internal";
 }
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryCommitErrorCode, string>> = {
+  GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED:
+    "Open the repository root in Git to generate a draft for all staged changes.",
   GIT_DELIVERY_COMMIT_BAD_REQUEST: "The request body is not a valid governed commit request.",
   GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE: "The governed commit request exceeds the maximum size.",
   GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD:
@@ -721,8 +734,12 @@ const COMMIT_DRAFT_SYSTEM_PROMPT = [
   "The subject must be concise, factual, imperative/present tense, and policy-compliant.",
   "Use a conventional-commit prefix when the policy requires or permits one.",
   "The body must be a concise list of concrete changes, using one - bullet per change and no headings.",
-  "Cover all selected files, group related changes, and mention tests only when evidenced; added tests do not prove they passed.",
-  "When diffTruncated is true, excerpts from every file are supplied. Do not invent details from omitted lines.",
+  "Read - lines as the old version, + lines as the new version, and space-prefixed lines as unchanged context.",
+  "For each modified area, compare the old and new behavior or meaning. Name the affected rule, condition, interface, or documented decision and describe how it changed.",
+  "Lead with the most consequential change. Compare the old and new content before describing formatting. When a blank edit changes behavior or document structure, describe its evidenced effect.",
+  "For documentation, summarize the changed guidance or facts. Avoid generic claims such as 'update documentation' or 'remove lines' when the text shows a specific change.",
+  "Cover the selected files, group related changes, and mention tests only when evidenced; added tests do not prove they passed.",
+  "Hunk coordinates locate changes in the original diff. Context-budget excerpts can leave gaps. Do not invent details from omitted lines.",
   "Do not invent verification, reviews, deployments, issue closures, URLs, branding, or attribution.",
   "Do not add a Generated-with footer; Keiko adds the required footer after validation.",
 ].join("\n");
@@ -744,10 +761,13 @@ interface ResolvedCommitDraftModel {
 }
 
 // The bounds one draft's model call ran under; recorded on its `git.commit.draft.completed` line.
-interface CommitDraftBounds extends Partial<CommitBodyNormalizationEvidence> {
+interface CommitDraftBounds
+  extends Partial<CommitBodyNormalizationEvidence>, Partial<CommitDraftDiffEvidence> {
   readonly promptTokens?: number;
   readonly maxPromptTokens?: number;
   readonly diffCompacted?: boolean;
+  readonly blankLineDraftRejected?: boolean;
+  readonly structuredOutputUnavailable?: boolean;
   readonly generationAttempts?: number;
   readonly reused?: boolean;
   readonly draftKeyDigest?: string;
@@ -759,7 +779,8 @@ interface CommitDraftModelInput {
   readonly supportsSeeding?: boolean;
   readonly projectId: string;
   readonly diffCompacted?: boolean;
-  readonly repair?: boolean;
+  readonly diffEvidence?: CommitDraftDiffEvidence;
+  readonly repair?: "format" | "blank-lines";
   readonly modelId: string;
   readonly useResponseFormat: boolean;
   readonly maxOutputTokens: number;
@@ -868,9 +889,20 @@ function commitDraftEvidence(input: CommitDraftModelInput): string {
     areaCount: input.summary.areaCount,
     touchesTests: input.summary.touchesTests,
     diffTruncated: input.diffCompacted ?? false,
+    diffEvidence: input.diffEvidence,
     commitPolicy: commitDraftPolicyEvidence(input.policy),
     stagedDiff: input.stagedDiff,
   });
+}
+
+function draftRepairInstruction(repair: CommitDraftModelInput["repair"]): string {
+  if (repair === undefined) return "";
+  const format =
+    "\nThe previous answer was unusable. Return complete JSON with a single-line policy-compliant subject and a non-empty body. Keep it concise; do not include reasoning or Markdown fences.";
+  return repair === "blank-lines"
+    ? format +
+        "\nThe subject overlooked nonblank changes. Compare removed and added content and lead with their effect."
+    : format;
 }
 
 function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCallRequest {
@@ -879,11 +911,7 @@ function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCall
     messages: [
       {
         role: "system",
-        content:
-          COMMIT_DRAFT_SYSTEM_PROMPT +
-          (input.repair === true
-            ? "\nThe previous answer was unusable. Return complete JSON with a single-line policy-compliant subject and a non-empty body. Keep it concise; do not include reasoning or Markdown fences."
-            : ""),
+        content: COMMIT_DRAFT_SYSTEM_PROMPT + draftRepairInstruction(input.repair),
       },
       { role: "user", content: commitDraftEvidence(input) },
     ],
@@ -1027,18 +1055,23 @@ async function attemptCommitDraft(
   input: CommitDraftInput,
   signal: AbortSignal,
   attempt: number,
+  repair?: CommitDraftModelInput["repair"],
 ): Promise<ModelCommitDraftResult> {
-  const prepared = prepareCommitDraft(input.stagedDiff, resolved.capability, (diff, compacted) =>
-    buildCommitDraftModelRequest({
-      ...input,
-      stagedDiff: diff,
-      diffCompacted: compacted,
-      modelId: resolved.modelId,
-      useResponseFormat: resolved.useResponseFormat,
-      maxOutputTokens: resolved.maxOutputTokens,
-      supportsSeeding: resolved.capability.supportsSeeding === true,
-      repair: attempt > 1,
-    }),
+  const prepared = prepareCommitDraft(
+    input.stagedDiff,
+    resolved.capability,
+    (diff, compacted, diffEvidence) =>
+      buildCommitDraftModelRequest({
+        ...input,
+        stagedDiff: diff,
+        diffCompacted: compacted,
+        diffEvidence,
+        modelId: resolved.modelId,
+        useResponseFormat: resolved.useResponseFormat,
+        maxOutputTokens: resolved.maxOutputTokens,
+        supportsSeeding: resolved.capability.supportsSeeding === true,
+        ...(repair === undefined ? {} : { repair }),
+      }),
   );
   const bounds: CommitDraftBounds = {
     maxOutputTokens: resolved.maxOutputTokens,
@@ -1047,14 +1080,49 @@ async function attemptCommitDraft(
     promptTokens: prepared.promptTokens,
     maxPromptTokens: prepared.maxPromptTokens,
     diffCompacted: prepared.diffCompacted,
+    ...prepared.diffEvidence,
   };
   if (prepared.request === undefined)
     return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE", bounds };
   try {
     const response = await resolved.model.call(prepared.request, signal);
-    const validated = modelCommitMessage(response, input.policy);
-    const observedBounds = { ...bounds, ...validated.normalization };
-    if (validated.ok) return { ok: true, message: validated.message, bounds: observedBounds };
+    return validateDraftAttempt(response, input.policy, bounds);
+  } catch (error) {
+    reportCommitDraftModelFailure(deps, input.correlationId, error);
+    return commitDraftProviderFailure(error, signal, resolved, bounds);
+  }
+}
+
+function commitDraftProviderFailure(
+  error: unknown,
+  signal: AbortSignal,
+  model: ResolvedCommitDraftModel,
+  bounds: CommitDraftBounds,
+): ModelCommitDraftResult {
+  // Some OpenAI-compatible endpoints advertise structured output but cannot serve it.
+  // An explicit 501 permits one schema-free call through the same Model Gateway.
+  const structuredOutputUnavailable =
+    model.useResponseFormat && error instanceof ProviderError && error.httpStatus === 501;
+  return {
+    ok: false,
+    code: classifyCommitDraftModelFailure(error, signal),
+    bounds: structuredOutputUnavailable ? { ...bounds, structuredOutputUnavailable } : bounds,
+  };
+}
+
+// Reject the observed formatting-only claim when the same file contains nonblank edits.
+// Keep this narrow so style changes and describing blank-line handling remain valid.
+const BLANK_LINE_SUBJECT =
+  /^style(?:\([^)\n]+\))?: (?:remove|delete|drop|trim|clean up) (?:redundant |extra |excessive |unnecessary )?(?:blank|empty) lines\b/iu;
+
+function validateDraftAttempt(
+  response: NormalizedResponse,
+  policy: GitCommitMessagePolicy,
+  bounds: CommitDraftBounds,
+): ModelCommitDraftResult {
+  const validated = modelCommitMessage(response, policy);
+  const observedBounds = { ...bounds, ...validated.normalization };
+  if (!validated.ok)
     return {
       ok: false,
       bounds: observedBounds,
@@ -1063,10 +1131,13 @@ async function attemptCommitDraft(
           ? "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
           : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
     };
-  } catch (error) {
-    reportCommitDraftModelFailure(deps, input.correlationId, error);
-    return { ok: false, code: classifyCommitDraftModelFailure(error, signal), bounds };
-  }
+  if ((bounds.mixedBlankChangeFiles ?? 0) > 0 && BLANK_LINE_SUBJECT.test(validated.message))
+    return {
+      ok: false,
+      code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+      bounds: { ...observedBounds, blankLineDraftRejected: true },
+    };
+  return { ok: true, message: validated.message, bounds: observedBounds };
 }
 
 function repairCommitDraftModel(
@@ -1074,6 +1145,8 @@ function repairCommitDraftModel(
   result: ModelCommitDraftResult,
 ): ResolvedCommitDraftModel | undefined {
   if (result.ok) return undefined;
+  if (result.bounds?.structuredOutputUnavailable === true)
+    return { ...model, useResponseFormat: false };
   if (result.code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT") return model;
   if (result.code !== "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED") return undefined;
   const maxOutputTokens = Math.min(
@@ -1117,7 +1190,8 @@ async function generateModelCommitMessage(
     logCommitDraftAttempt(log, input.correlationId, result, 1);
     const recovery = repairCommitDraftModel(resolved, result);
     if (recovery !== undefined && !clientLeft(callSignal)) {
-      const repaired = await attemptCommitDraft(deps, recovery, input, callSignal, 2);
+      const repair = result.bounds?.blankLineDraftRejected === true ? "blank-lines" : "format";
+      const repaired = await attemptCommitDraft(deps, recovery, input, callSignal, 2, repair);
       logCommitDraftAttempt(log, input.correlationId, repaired, 2);
       result = selectCommitDraftRecovery(result, repaired);
     }
@@ -1296,12 +1370,12 @@ async function computeModelCommitDraft(
 ): Promise<RouteResult> {
   const { correlationId, signal } = run;
   const log = seams.activityLog ?? processServerLogSink();
-  const stagedPaths = await readStagedPathsFor(workspace, seams, now, correlationId);
-  const summary = summarizeStagedChangeset(stagedPaths);
+  const staged = await readCommitDraftSnapshotFor(workspace, seams, now, run);
+  const summary = summarizeStagedChangeset(staged.paths);
   // Re-checked after every await that can outlast a disconnect (PR #3602 review): a client that
   // left while a worktree read was pending gets no further read and no model call.
   if (clientLeft(signal)) return draftCancelled(log, correlationId, summary);
-  if (stagedPaths.length === 0) {
+  if (staged.paths.length === 0) {
     return draftFailureResult(
       log,
       correlationId,
@@ -1310,16 +1384,14 @@ async function computeModelCommitDraft(
       "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
     );
   }
-  const stagedDiff = await readStagedDiffFor(workspace, seams, now, correlationId);
-  if (clientLeft(signal)) return draftCancelled(log, correlationId, summary);
   const suggested = await generateModelCommitMessage(
     deps,
     {
       projectId: workspace.root,
       policy,
-      stagedPaths,
+      stagedPaths: staged.paths,
       summary,
-      stagedDiff,
+      stagedDiff: staged.patch,
       instruction: req.instruction,
       correlationId,
     },
@@ -1355,6 +1427,7 @@ function commitDraftCancellation(ctx: RouteContext): {
   };
   ctx.req.once("aborted", onDisconnect);
   ctx.res.once("close", onResponseClosed);
+  if (ctx.req.aborted || ctx.res.destroyed) onDisconnect();
   // The route deadline itself is armed per model, behind that model's gateway budget, where the
   // model is resolved (`generateModelCommitMessage`); this signal only carries the disconnect.
   return {
@@ -1419,8 +1492,14 @@ async function draftWithModel(
   try {
     return await computeModelCommitDraft(deps, workspace, req, policy, seams, now, run);
   } catch (error) {
+    const log = seams.activityLog ?? processServerLogSink();
+    if (clientLeft(run.signal)) return draftCancelled(log, run.correlationId, undefined);
     reportDraftWorktreeFailure(deps, run.correlationId, error);
-    return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+    const code =
+      error instanceof GitStagedDraftScopeError
+        ? "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED"
+        : "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE";
+    return draftFailureResult(log, run.correlationId, undefined, 409, code);
   }
 }
 

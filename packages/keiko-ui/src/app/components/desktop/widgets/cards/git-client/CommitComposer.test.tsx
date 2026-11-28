@@ -421,6 +421,56 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(screen.getByLabelText("Description")).toHaveValue("");
   });
 
+  it.each([true, false])(
+    "binds in-flight generation to the staged revision (changed: %s)",
+    async (changed) => {
+      const user = userEvent.setup();
+      const diagnostics: string[] = [];
+      setClientDiagnosticWriter((message) => diagnostics.push(message));
+      let resolveDraft = (_message: string): void => undefined;
+      const props = {
+        projectId: "/repos/alpha",
+        stagedFileCount: 1,
+        busy: false,
+        outcome: null,
+        error: null,
+        preview: null,
+        previewDraft: null,
+        previewError: null,
+        onPreview: vi.fn(),
+        onGenerateDraft: (): Promise<string> =>
+          new Promise((resolve) => {
+            resolveDraft = resolve;
+          }),
+        onCommit: vi.fn(),
+      } as const;
+      const view = render(<CommitComposer {...props} previewRevision={1} draftRevision="before" />);
+      const generate = screen.getByRole("button", { name: "Generate with Keiko" });
+      await user.click(generate);
+      view.rerender(
+        <CommitComposer
+          {...props}
+          previewRevision={changed ? 1 : 2}
+          draftRevision={changed ? "after" : "before"}
+        />,
+      );
+      resolveDraft("fix: wait for review\n\nRequire a ready document.");
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeEnabled(),
+      );
+      expect(screen.getByLabelText("Summary")).toHaveValue(changed ? "" : "fix: wait for review");
+      expect(diagnostics).toEqual([
+        changed
+          ? "git-client: generated commit draft discarded (staged revision changed before response)"
+          : "git-client: model commit draft applied from explicit action",
+      ]);
+      if (changed) {
+        view.rerender(<CommitComposer {...props} previewRevision={1} draftRevision="before" />);
+        expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeEnabled();
+      }
+    },
+  );
+
   // The applied draft's stored representation must be canonical: a generated message with CRLF
   // or trailing whitespace, once split and applied, has to compare equal to
   // `composeCommitMessage(summary, body)` when the preview revision changes — otherwise

@@ -636,6 +636,8 @@ const BODY_FREE_CLIENT_NOTES: ReadonlySet<string> = new Set([
   "[keiko] journey initial refresh failed",
   "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
   "git-client: stale generated commit draft cleared (repository-revision-changed)",
+  "git-client: generated commit draft discarded (composer edited before response)",
+  "git-client: generated commit draft discarded (staged revision changed before response)",
   "git-client: commit draft cleared (repository-selection-changed)",
   "Keiko editor runtime notice: host-edit-ignored (reason=read-only)",
   "Keiko editor runtime notice: model-ownership-changed",

@@ -3565,6 +3565,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.draft.detail": "Prüfen oder bearbeiten Sie diese Nachricht vor dem Commit.",
   "commitComposer.draft.subject": "Betreff",
   "commitComposer.draft.body": "Textkörper",
+  "commitComposer.draft.stagedChanged":
+    "Die vorgemerkten Änderungen haben sich geändert. Erzeugen Sie einen Entwurf für die aktuelle Auswahl.",
+  "commitComposer.draft.editsKept":
+    "Ihre Eingaben wurden beibehalten. Der erzeugte Entwurf wurde verworfen.",
+  "commitComposer.draft.applied":
+    "Der Commit-Entwurf wurde in Zusammenfassung und Beschreibung eingefügt.",
+  "commitComposer.error.draftRepositoryRoot":
+    "Öffnen Sie das Hauptverzeichnis des Repositorys in Git, um einen Entwurf für alle vorgemerkten Änderungen zu erzeugen.",
+  "commitComposer.error.draftWorktreeUnavailable":
+    "Keiko konnte nicht alle vorgemerkten Änderungen für den Entwurf lesen. Sie können die Commit-Nachricht manuell eingeben.",
   "commitComposer.draft.generateHint":
     "Keiko liest den ausgewählten staged Diff erst, wenn Sie diesen Button klicken.",
   "commitComposer.draft.unavailable":
@@ -6203,6 +6213,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "reviewWidget.confirmApplySingular": "Anwenden bestätigen ({count} Datei)",
   "reviewWidget.confirmApplyPlural": "Anwenden bestätigen ({count} Dateien)",
   "reviewWidget.unexpectedError": "Unerwarteter Fehler.",
+  "gitClientWindow.changes.countOne": "{count} Änderung",
+  "gitClientWindow.changes.countMany": "{count} Änderungen",
+  "gitClientWindow.changes.stagedCount": "{count} vorgemerkt",
   "gitClientWindow.changes.stagingScopeHint":
     "Dateien über die Kontrollkästchen auswählen. Keiko verwendet für den Commit-Entwurf nur bereitgestellte Dateien.",
   "gitClientWindow.connect.stagedDraftHint":

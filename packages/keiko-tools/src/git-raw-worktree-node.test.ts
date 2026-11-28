@@ -24,6 +24,7 @@ import {
   readGitIndexTreeDigest,
   readGitRemoteAliases,
   readGitRevision,
+  readGitStagedDraft,
   readGitStagedDiff,
   readGitTreeDigest,
   readGitTreeEntries,
@@ -151,6 +152,84 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
         policy: DEFAULT_SANDBOX_POLICY,
       }),
     ).rejects.toBeInstanceOf(GitWorktreeReadError);
+  });
+
+  it("captures exact staged paths and patch together even when display settings differ", async () => {
+    const path = " élève.txt";
+    git(["config", "diff.noprefix", "true"]);
+    git(["config", "diff.suppressBlankEmpty", "true"]);
+    writeFileSync(join(root, "code.txt"), "staged\n");
+    writeFileSync(join(root, path), "new\n");
+    git(["add", "--", "code.txt", path]);
+    writeFileSync(join(root, "code.txt"), "worktree-only\n");
+    const deps = { workspace, processEnv: { PATH: process.env.PATH } };
+    expect(await readStagedPaths(deps)).toEqual([path, "code.txt"]);
+    const snapshot = await readGitStagedDraft(deps);
+    expect(snapshot.paths).toEqual([path, "code.txt"]);
+    expect(snapshot.patch).toContain("diff --git a/code.txt b/code.txt");
+    expect(snapshot.patch).toContain("-base\n+staged\n");
+    expect(snapshot.patch).not.toContain("worktree-only");
+  });
+
+  it("keeps rename, removal, and binary evidence in a single staged snapshot", async () => {
+    const deps = { workspace, processEnv: { PATH: process.env.PATH } };
+    expect(await readGitStagedDraft(deps)).toEqual({ paths: [], patch: "" });
+    writeFileSync(join(root, "legacy.txt"), "previous behavior\n");
+    git(["add", "legacy.txt"]);
+    git(["commit", "-qm", "legacy"]);
+    git(["config", "diff.renames", "true"]);
+    git(["mv", "--", "code.txt", "renamed.txt"]);
+    git(["rm", "--", "legacy.txt"]);
+    writeFileSync(join(root, "icon.gif"), Buffer.from([0, 255, 1, 0]));
+    git(["add", "icon.gif"]);
+    const snapshot = await readGitStagedDraft(deps);
+    expect(snapshot.paths).toEqual(["icon.gif", "legacy.txt", "renamed.txt"]);
+    expect(snapshot.patch).toContain("rename from code.txt\nrename to renamed.txt");
+    expect(snapshot.patch).toContain("-previous behavior");
+    expect(snapshot.patch).toContain("Binary files /dev/null and b/icon.gif differ");
+  });
+
+  it("refuses a snapshot whose path metadata was credential-redacted", async () => {
+    writeFileSync(join(root, "code.txt"), "new data\n");
+    git(["add", "code.txt"]);
+    const deps = {
+      workspace,
+      processEnv: { PATH: process.env.PATH, MY_DEPLOY_TOKEN: "code.txt" },
+    };
+    await expect(readGitStagedDraft(deps)).rejects.toBeInstanceOf(GitWorktreeReadError);
+  });
+
+  it("refuses a staged rename from a sensitive path before returning model evidence", async () => {
+    writeFileSync(join(root, ".env"), "PRIVATE_FIXTURE=example\n");
+    git(["add", "--force", ".env"]);
+    git(["commit", "-qm", "sensitive fixture"]);
+    git(["config", "diff.renames", "true"]);
+    git(["mv", "--", ".env", "public.txt"]);
+    const deps = { workspace, processEnv: { PATH: process.env.PATH } };
+    await expect(readGitStagedDraft(deps)).rejects.toBeInstanceOf(PathDeniedError);
+  });
+
+  it("refuses a nested project's staged draft before exposing sibling changes", async () => {
+    const nested = join(root, "selected");
+    mkdirSync(nested);
+    writeFileSync(join(nested, "inside.txt"), "selected content\n");
+    writeFileSync(join(root, "sibling.txt"), "outside selected root\n");
+    git(["add", "--", "selected", "sibling.txt"]);
+    await expect(
+      readGitStagedDraft({
+        workspace: { ...workspace, root: nested, selectedRoot: nested },
+        processEnv: { PATH: process.env.PATH },
+      }),
+    ).rejects.toBeInstanceOf(GitWorktreeReadError);
+  });
+
+  it("uses the same staged gitlink paths for preview and drafting even with local ignore settings", async () => {
+    const head = git(["rev-parse", "HEAD"]);
+    git(["update-index", "--add", "--cacheinfo", `160000,${head},module-ref`]);
+    git(["config", "diff.ignoreSubmodules", "all"]);
+    const deps = { workspace, processEnv: { PATH: process.env.PATH } };
+    expect(await readStagedPaths(deps)).toEqual(["module-ref"]);
+    expect(await readGitStagedDraft(deps)).toMatchObject({ paths: ["module-ref"] });
   });
 
   it("refuses credential-redacted metadata without disabling content redaction", async () => {

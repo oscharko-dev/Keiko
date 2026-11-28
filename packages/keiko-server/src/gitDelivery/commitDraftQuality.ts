@@ -6,6 +6,93 @@ import type { GatewayCallRequest, ModelCapability } from "@oscharko-dev/keiko-mo
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { splitUnifiedDiffSections } from "../gitDiffParser.js";
 
+export interface CommitDraftDiffEvidence {
+  readonly blankChangedLines: number;
+  readonly nonBlankChangedLines: number;
+  readonly mixedBlankChangeFiles: number;
+}
+
+interface DraftHunk {
+  readonly lines: string[];
+  blankChangedLines: number;
+  nonBlankChangedLines: number;
+}
+
+const BLANK_CHANGE = /^[+-][\t \r]*$/u;
+const END_OF_FILE_MARKER = String.raw`\ No newline at end of file`;
+
+function isTextChange(line: string): boolean {
+  return line.startsWith("+") || line.startsWith("-");
+}
+
+function draftHunks(lines: readonly string[]): {
+  readonly headers: readonly string[];
+  readonly hunks: readonly DraftHunk[];
+} {
+  const headers: string[] = [];
+  const hunks: DraftHunk[] = [];
+  let hunk: DraftHunk | undefined;
+  for (const line of lines) {
+    if (line.startsWith("@@ ")) {
+      hunk = {
+        lines: [line],
+        blankChangedLines: 0,
+        nonBlankChangedLines: 0,
+      };
+      hunks.push(hunk);
+      continue;
+    }
+    if (hunk === undefined) {
+      headers.push(line);
+      continue;
+    }
+    hunk.lines.push(line);
+    if (BLANK_CHANGE.test(line)) hunk.blankChangedLines += 1;
+    else if (isTextChange(line)) hunk.nonBlankChangedLines += 1;
+  }
+  return { headers, hunks };
+}
+
+function nonBlankSide(hunk: DraftHunk, prefix: "-" | "+"): string {
+  return hunk.lines
+    .filter((line) => line.startsWith(" ") || (line.startsWith(prefix) && !BLANK_CHANGE.test(line)))
+    .map((line) => line.slice(1).trimEnd())
+    .join("\n");
+}
+
+function changesNonBlankContent(hunk: DraftHunk): boolean {
+  return nonBlankSide(hunk, "-") !== nonBlankSide(hunk, "+");
+}
+
+/** Count edit types while retaining the staged patch as written by Git. */
+export function inspectCommitDraftDiff(diff: string): CommitDraftDiffEvidence {
+  let blankChangedLines = 0;
+  let nonBlankChangedLines = 0;
+  let mixedBlankChangeFiles = 0;
+  for (const lines of splitUnifiedDiffSections(diff)) {
+    const { hunks } = draftHunks(lines);
+    const blank = hunks.reduce((total, hunk) => total + hunk.blankChangedLines, 0);
+    const nonBlank = hunks.reduce((total, hunk) => total + hunk.nonBlankChangedLines, 0);
+    blankChangedLines += blank;
+    nonBlankChangedLines += nonBlank;
+    if (blank > 0 && hunks.some(changesNonBlankContent)) mixedBlankChangeFiles += 1;
+  }
+  return { blankChangedLines, nonBlankChangedLines, mixedBlankChangeFiles };
+}
+
+/** Shrink context first so that a middle replacement survives in a tight model window. */
+function removeDraftDiffContext(lines: readonly string[]): string {
+  const { headers, hunks } = draftHunks(lines);
+  const edits = hunks.flatMap(({ lines: [header, ...body] }) => [
+    header ?? "",
+    ...body.filter(
+      (line, index) =>
+        isTextChange(line) || line === END_OF_FILE_MARKER || body[index + 1] === END_OF_FILE_MARKER,
+    ),
+  ]);
+  return [...headers, ...edits].join("\n");
+}
+
 const OMITTED = "\n[Additional diff lines omitted for the model context budget.]\n";
 
 function requestTokens(request: GatewayCallRequest, capability: ModelCapability): number {
@@ -36,15 +123,21 @@ export interface PreparedCommitDraft {
   readonly promptTokens: number;
   readonly maxPromptTokens: number;
   readonly diffCompacted: boolean;
+  readonly diffEvidence: CommitDraftDiffEvidence;
 }
 
 export function prepareCommitDraft(
   diff: string,
   capability: ModelCapability,
-  build: (diff: string, compacted: boolean) => GatewayCallRequest,
+  build: (
+    diff: string,
+    compacted: boolean,
+    evidence: CommitDraftDiffEvidence,
+  ) => GatewayCallRequest,
 ): PreparedCommitDraft {
+  const diffEvidence = inspectCommitDraftDiff(diff);
   const profile = deriveContextProfileFromCapability(capability);
-  const full = build(diff, false);
+  const full = build(diff, false, diffEvidence);
   const maxPromptTokens = deriveContextProfile({
     ...profile,
     reservedOutputTokens: full.maxOutputTokens ?? 0,
@@ -52,26 +145,27 @@ export function prepareCommitDraft(
   const prepare = (request: GatewayCallRequest, diffCompacted: boolean): PreparedCommitDraft => ({
     request,
     diffCompacted,
+    diffEvidence,
     maxPromptTokens,
     promptTokens: requestTokens(request, capability),
   });
   const original = prepare(full, false);
   if (original.promptTokens <= maxPromptTokens) return original;
-  const parsed = splitUnifiedDiffSections(diff).map((lines) => lines.join("\n"));
+  const parsed = splitUnifiedDiffSections(diff).map(removeDraftDiffContext);
   const sections = parsed.length === 0 ? [diff] : parsed;
   let low = 0;
   let high = sections.reduce((largest, section) => Math.max(largest, section.length), 0);
   let selected: PreparedCommitDraft | undefined;
   while (low <= high) {
     const limit = Math.floor((low + high) / 2);
-    const candidate = prepare(build(compactDiff(sections, limit), true), true);
+    const candidate = prepare(build(compactDiff(sections, limit), true, diffEvidence), true);
     if (candidate.promptTokens <= maxPromptTokens) {
       selected = candidate;
       low = limit + 1;
     } else high = limit - 1;
   }
   if (selected !== undefined) return selected;
-  const minimum = prepare(build(compactDiff(sections, 0), true), true);
+  const minimum = prepare(build(compactDiff(sections, 0), true, diffEvidence), true);
   const refused = minimum.promptTokens < original.promptTokens ? minimum : original;
   return { ...refused, request: undefined };
 }

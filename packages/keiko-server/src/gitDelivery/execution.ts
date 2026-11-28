@@ -38,6 +38,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import {
   createNodeGitMutationAdapter,
+  readGitStagedDraft,
   readGitStagedDiff,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
@@ -797,19 +798,25 @@ export function readStagedPathsFor(
   });
 }
 
-export function readStagedDiffFor(
+export async function readCommitDraftSnapshotFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
-  correlationId?: string,
-): Promise<string> {
-  if (seams.stagedDiffReader !== undefined) return seams.stagedDiffReader(workspace);
-  return readGitStagedDiff({
+  run: { readonly correlationId: string; readonly signal: AbortSignal },
+): ReturnType<typeof readGitStagedDraft> {
+  const readDeps = {
     workspace,
-    processEnv: process.env,
+    processEnv: seams.processEnv ?? process.env,
     now,
-    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
-  });
+    signal: run.signal,
+    onTerminated: gitDeliveryTerminationHandler(seams, run.correlationId),
+  };
+  if (seams.stagedPathsReader === undefined && seams.stagedDiffReader === undefined)
+    return readGitStagedDraft(readDeps);
+  const paths = await readStagedPathsFor(workspace, seams, now, run.correlationId);
+  if (run.signal.aborted || paths.length === 0) return { paths, patch: "" };
+  const patch = await (seams.stagedDiffReader?.(workspace) ?? readGitStagedDiff(readDeps));
+  return { paths, patch };
 }
 
 // Counts staged files that still contain an unresolved merge-conflict marker (`git diff --cached

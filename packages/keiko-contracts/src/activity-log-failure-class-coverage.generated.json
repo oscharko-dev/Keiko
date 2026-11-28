@@ -34645,6 +34645,18 @@
               "required": true
             },
             {
+              "name": "blankChangedLines",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "blankLineDraftRejected",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "bodyBulletCount",
               "type": "integer",
               "dataClass": "count",
@@ -34699,6 +34711,18 @@
               "required": false
             },
             {
+              "name": "mixedBlankChangeFiles",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "nonBlankChangedLines",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "normalizationChanged",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -34736,6 +34760,12 @@
             },
             {
               "name": "reused",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "structuredOutputUnavailable",
               "type": "boolean",
               "dataClass": "closed-enum",
               "required": false
@@ -34796,6 +34826,18 @@
               "required": false
             },
             {
+              "name": "blankChangedLines",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "blankLineDraftRejected",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "bodyBulletCount",
               "type": "integer",
               "dataClass": "count",
@@ -34850,6 +34892,18 @@
               "required": false
             },
             {
+              "name": "mixedBlankChangeFiles",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "nonBlankChangedLines",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "normalizationChanged",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -34895,6 +34949,12 @@
               "name": "stagedFileCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "structuredOutputUnavailable",
+              "type": "boolean",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
