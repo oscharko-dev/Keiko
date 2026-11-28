@@ -66,6 +66,8 @@ const USAGE_REJECTED = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "gateway-prompt-admission.GatewayPromptAdmission.recordUsage",
   fields: {
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -75,8 +77,6 @@ const USAGE_REJECTED = defineActivityLogOperation({
     reportedPromptTokens: { type: "integer", dataClass: "count", required: true },
     localPromptTokens: { type: "integer", dataClass: "count", required: true },
     modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
