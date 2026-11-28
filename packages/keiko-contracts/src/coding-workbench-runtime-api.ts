@@ -949,6 +949,12 @@ export interface CodingWorkbenchRuntimeRevertState {
   readonly deletions: number;
   /** What the undo did to the Git index; absent when the turn staged nothing (U-34b). */
   readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
+  /**
+   * How many Git index paths the newest turn staged through Keiko's governed staging and an undo
+   * can still take back; absent when none. A turn that only changed the index has no file change,
+   * and this count is what keeps its Undo available.
+   */
+  readonly indexPathCount?: number | undefined;
 }
 
 /**
@@ -1006,7 +1012,7 @@ function validateRevertState(value: unknown, errors: string[]): void {
   errors.push(
     ...exactKeys(
       value,
-      ["staged", "fileCount", "additions", "deletions", "index"],
+      ["staged", "fileCount", "additions", "deletions", "index", "indexPathCount"],
       "revertChannelPayload",
     ),
   );
@@ -1019,6 +1025,8 @@ function validateRevertState(value: unknown, errors: string[]): void {
   for (const key of ["fileCount", "additions", "deletions"] as const) {
     if (!revertCountValid(value[key])) errors.push(`revertChannelPayload.${key} is invalid`);
   }
+  if (value.indexPathCount !== undefined && !revertCountValid(value.indexPathCount))
+    errors.push("revertChannelPayload.indexPathCount is invalid");
 }
 
 /** Exact keys, a valid session facet, bounded counts, and no revert state for an unpaired caller. */

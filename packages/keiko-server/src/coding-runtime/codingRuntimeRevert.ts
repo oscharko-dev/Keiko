@@ -48,6 +48,8 @@ export interface CodingRuntimeRevertState extends CodingRuntimeRevertCounts {
   readonly staged: boolean;
   /** What the undo did to the Git index of the paths the turn staged; absent when none (U-34b). */
   readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
+  /** Index paths of the newest turn an undo can still take back; absent when none. */
+  readonly indexPathCount?: number | undefined;
 }
 
 export type CodingRuntimeRevertResult =

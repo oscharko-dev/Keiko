@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1059,7 +1067,7 @@ async function noteGoverned(root: string, paths: readonly string[]): Promise<voi
 }
 
 /** A committed repository whose `a.txt` the turn then stages, as the governed staging does. */
-async function stagedTurn(): Promise<{
+async function stagedTurn(options: { readonly editBeforeTurn?: boolean } = {}): Promise<{
   readonly root: string;
   readonly begun: ReturnType<typeof beginTurnIndex>;
 }> {
@@ -1079,6 +1087,7 @@ async function stagedTurn(): Promise<{
     "-m",
     "fixture",
   );
+  if (options.editBeforeTurn === true) writeFileSync(join(root, "a.txt"), "turn result\n");
   const begun = beginTurnIndex(root);
   await begun.start;
   writeFileSync(join(root, "a.txt"), "turn result\n");
@@ -1132,6 +1141,29 @@ describe("a turn that continued (U-34)", () => {
 });
 
 describe("undo and the Git index (U-34b)", () => {
+  it("keeps Undo for a turn that only staged an existing edit, and puts the index back with the bytes intact", async () => {
+    const { root, begun } = await stagedTurn({ editBeforeTurn: true });
+    const { port, run, log } = subject({ root, files: [] });
+    run.turnIndex = begun;
+    await noteGoverned(root, ["a.txt"]);
+    recordOpenCodeTurnImage(run, log);
+    await run.turnImage;
+
+    await expect(port.revertState(RUN_ID)).resolves.toEqual({
+      staged: false,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      indexPathCount: 1,
+    });
+    await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("turn result\n");
+  });
+
   it("unstages what the turn staged and says so on the state and the log", async () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });

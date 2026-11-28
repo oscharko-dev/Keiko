@@ -49,6 +49,22 @@ describe("CodingWorkbenchRevertBar", () => {
     expect(screen.queryByRole("button", { name: "Undo last turn" })).toBeNull();
   });
 
+  it("offers Undo for a turn that only changed the Git index, and says no file content changed", () => {
+    renderBar({ ...NEWEST, fileCount: 0, additions: 0, deletions: 0, indexPathCount: 2 });
+
+    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "The last turn changed what is staged for 2 files; no file content changed.",
+    );
+  });
+
+  it("keeps a staged undo of an index-only turn on screen without counting zero files", () => {
+    renderBar({ staged: true, fileCount: 0, additions: 0, deletions: 0, index: "restored" });
+
+    expect(screen.getByRole("status")).toHaveTextContent("no file content changed");
+    expect(screen.getByRole("status")).not.toHaveTextContent("0 files");
+  });
+
   it("names a single file in the singular", () => {
     renderBar({ ...NEWEST, fileCount: 1 });
 

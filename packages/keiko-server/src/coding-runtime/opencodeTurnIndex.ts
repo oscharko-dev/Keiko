@@ -366,6 +366,33 @@ export async function restoreTurnIndex(
   return await restoreTouched(root, images, governed);
 }
 
+/**
+ * How many index paths of the turn an undo could take back right now: the paths governed staging
+ * changed whose live entry is still exactly the entry it wrote and differs from the turn start. A
+ * turn that only staged or unstaged a file has no worktree change, so this count is what keeps its
+ * undo offered. `0` whenever any image cannot be proven; a read that throws propagates.
+ */
+export async function countRestorableTurnIndexPaths(
+  root: string,
+  record: TurnIndexRecord | undefined,
+  governed: GovernedIndexRecord,
+): Promise<number> {
+  const start = await record?.start;
+  if (record === undefined || start === undefined) return 0;
+  const live = await captureTurnIndex(root);
+  const left = (await record.settled) ?? live;
+  const images = provenImages(start, live, left);
+  if (images === undefined) return 0;
+  if (images.live.headSha !== images.start.headSha || images.left.headSha !== images.start.headSha)
+    return 0;
+  return touchedPaths(images.start, images.left).filter(
+    (path) =>
+      governed.written.has(path) &&
+      stateOf(images.live, path) === governed.written.get(path) &&
+      stateOf(images.live, path) !== stateOf(images.start, path),
+  ).length;
+}
+
 interface ProvenImages {
   readonly start: TurnIndexImage;
   readonly live: TurnIndexImage;

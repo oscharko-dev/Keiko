@@ -36,6 +36,7 @@ function subject(
     readonly windowMs?: number;
     readonly canHold?: boolean;
     readonly changed?: number | "fails";
+    readonly indexPaths?: number;
     readonly hold?: "held" | "stopped" | "fails";
   } = {},
 ): Subject {
@@ -61,6 +62,7 @@ function subject(
             fileCount: input.changed ?? 1,
             additions: 1,
             deletions: 0,
+            ...(input.indexPaths === undefined ? {} : { indexPathCount: input.indexPaths }),
           }),
     hold: (_runId): Promise<CodingRuntimeHoldResult> => {
       order.push("hold");
@@ -218,6 +220,13 @@ describe("the post-completion undo window", () => {
 describe("holding a succeeded run for the window", () => {
   it("holds a runtime whose newest turn changed a file", async () => {
     const { window, order } = subject();
+
+    await expect(window.hold(RUN_ID)).resolves.toEqual({ stopped: true, held: true });
+    expect(order).toEqual(["hold"]);
+  });
+
+  it("holds a runtime whose newest turn only changed the Git index", async () => {
+    const { window, order } = subject({ changed: 0, indexPaths: 1 });
 
     await expect(window.hold(RUN_ID)).resolves.toEqual({ stopped: true, held: true });
     expect(order).toEqual(["hold"]);

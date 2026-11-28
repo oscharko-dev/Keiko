@@ -30,10 +30,29 @@ export interface CodingWorkbenchRevertBarProps {
   readonly onRevert: (action: CodingWorkbenchRuntimeRevertAction) => void;
 }
 
+// A turn that only changed the Git index has no file to count; the index paths stand for it.
+function indexOnlySummary(
+  revert: CodingWorkbenchRuntimeRevertState,
+  t: CodingWorkbenchTranslate,
+): string | undefined {
+  if (revert.fileCount !== 0) return undefined;
+  if (revert.staged) return t("codingWorkbench.revert.staged.index");
+  const count = revert.indexPathCount ?? 0;
+  if (count === 0) return undefined;
+  return t(
+    count === 1
+      ? "codingWorkbench.revert.summary.index.one"
+      : "codingWorkbench.revert.summary.index",
+    { count },
+  );
+}
+
 function summaryText(
   revert: CodingWorkbenchRuntimeRevertState,
   t: CodingWorkbenchTranslate,
 ): string {
+  const indexOnly = indexOnlySummary(revert, t);
+  if (indexOnly !== undefined) return indexOnly;
   const values = {
     count: revert.fileCount,
     additions: revert.additions,
@@ -62,7 +81,7 @@ function summaryText(
 // Nothing to undo or restore is noise, not a control: the row appears once there is something to
 // act on. The bar still stays while a mutation is in flight or a confirmation is open.
 function hasRevertTarget(revert: CodingWorkbenchRuntimeRevertState): boolean {
-  return revert.staged || revert.fileCount > 0;
+  return revert.staged || revert.fileCount > 0 || (revert.indexPathCount ?? 0) > 0;
 }
 
 function isRevertRowShown(revert: CodingWorkbenchRuntimeRevertState, engaged: boolean): boolean {

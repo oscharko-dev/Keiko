@@ -30,6 +30,7 @@ import {
   beginTurnIndex,
   TURN_INDEX_START_BOUNDS,
   TurnIndexStartBoundError,
+  countRestorableTurnIndexPaths,
   restoreTurnIndex,
   settleTurnIndex,
   type TurnIndexRecord,
@@ -323,7 +324,9 @@ async function undoLastTurn(
   const range = newestTurnRange(await run.client.messages(run.sessionId));
   const boundary = range?.from;
   const changed = await changedFiles(run, range);
-  if (changed.length === 0) return { ok: false, reason: "nothing-to-undo" };
+  // A turn that only staged or unstaged files changed no worktree file but is still undoable.
+  if (changed.length === 0 && (await indexPathCount(ports, run)) === 0)
+    return { ok: false, reason: "nothing-to-undo" };
   if (boundary === undefined) return { ok: false, reason: "turn-boundary-missing" };
   const busy = Object.hasOwn(await run.client.active(), run.sessionId);
   // The runtime restores whole files, so a turn is undone only while every file it changed is
@@ -393,6 +396,20 @@ async function restoreIndexOrReport(
   }
 }
 
+/** Index paths of the newest turn an undo can take back; an unreadable index counts as none. */
+async function indexPathCount(ports: OpenCodeRevertPorts, run: OpenCodeRevertRun): Promise<number> {
+  try {
+    return await countRestorableTurnIndexPaths(
+      run.workspaceRoot,
+      run.turnIndex,
+      governedIndexRecord(run.runId),
+    );
+  } catch (error) {
+    reportIndexFailure(ports, run, error);
+    return 0;
+  }
+}
+
 function reportIndexFailure(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
@@ -434,7 +451,9 @@ async function revertState(
     };
   const interrupts = run.interruptSeq ?? 0;
   try {
-    return { staged: false, ...diffCounts(await turnDiff(run)) };
+    const counts = diffCounts(await turnDiff(run));
+    const indexPaths = await indexPathCount(ports, run);
+    return { staged: false, ...counts, ...(indexPaths > 0 ? { indexPathCount: indexPaths } : {}) };
   } catch (error) {
     // A read the run's teardown overtook (a server stop disposes the runtime under it) ends like a
     // read of a run that is gone: no counts and no failure, since nothing was reverted (#4119). So

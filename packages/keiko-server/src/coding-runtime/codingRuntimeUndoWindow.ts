@@ -153,7 +153,10 @@ export class CodingRuntimeUndoWindow {
   private async undoable(runId: string): Promise<boolean> {
     try {
       const state = await this.deps.revertState(runId);
-      return state !== undefined && (state.staged || state.fileCount > 0);
+      return (
+        state !== undefined &&
+        (state.staged || state.fileCount > 0 || (state.indexPathCount ?? 0) > 0)
+      );
     } catch (error) {
       // A turn whose changes cannot be read offers no undo; the run is stopped as before.
       recordUndoWindowHoldFailed(this.deps.activityLog, runId, error);

@@ -27,6 +27,7 @@ describe("turn revert contract (B3, S04)", () => {
       { session: "active" },
       { session: "active", revert: STATE },
       { session: "active", revert: { ...STATE, staged: true } },
+      { session: "active", revert: { ...STATE, fileCount: 0, indexPathCount: 3 } },
       {
         session: "active",
         revert: { ...STATE, fileCount: CODING_WORKBENCH_RUNTIME_REVERT_MAX_COUNT },
@@ -49,6 +50,10 @@ describe("turn revert contract (B3, S04)", () => {
     ["a non-boolean staged flag", { session: "active", revert: { ...STATE, staged: "yes" } }],
     ["a negative count", { session: "active", revert: { ...STATE, additions: -1 } }],
     ["a fractional count", { session: "active", revert: { ...STATE, deletions: 0.5 } }],
+    [
+      "a negative index path count",
+      { session: "active", revert: { ...STATE, indexPathCount: -1 } },
+    ],
     ["a string count", { session: "active", revert: { ...STATE, fileCount: "2" } }],
     [
       "a count above the bound",
