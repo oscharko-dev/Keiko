@@ -501,6 +501,40 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("keeps the awaited folder when the shown repository is chosen again during its reconnect", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    let finish: (value: unknown) => void = () => undefined;
+    reconnectRepository.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const onSelect = vi.fn();
+    const user = await openPicker({ onSelect });
+    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    await user.click(screen.getByRole("combobox", { name: "Choose coding repository" }));
+    await user.click(screen.getByRole("option", { name: /^app/u }));
+    finish({ project: project("/work/cloned") });
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("/work/cloned"));
+    expect(onSelect).not.toHaveBeenCalledWith("/work/app");
+  });
+
+  it("lets a real later choice win over the reconnecting folder, and still reads the catalog", async () => {
+    const other = project("/work/other");
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted, other]);
+    let finish: (value: unknown) => void = () => undefined;
+    reconnectRepository.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const onSelect = vi.fn();
+    const user = await openPicker({ onSelect });
+    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    await user.click(screen.getByRole("combobox", { name: "Choose coding repository" }));
+    await user.click(screen.getByRole("option", { name: /^other/u }));
+    const reads = selectableRepositories.mock.calls.length;
+    finish({ project: project("/work/cloned") });
+    await waitFor(() => expect(selectableRepositories.mock.calls.length).toBeGreaterThan(reads));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith("/work/other");
+    expect(interactions()).toEqual([
+      { interaction: "repository-reconnected", outcome: "superseded" },
+    ]);
+  });
+
   it("treats a reconnect that leaves the workspace unavailable as a failure", async () => {
     selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
     reconnectRepository.mockResolvedValue({ project: drifted });

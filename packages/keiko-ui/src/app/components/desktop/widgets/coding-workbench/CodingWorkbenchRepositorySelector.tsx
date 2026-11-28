@@ -593,7 +593,7 @@ function useRepositorySelectorState(
   onSelect: (root: string) => void,
 ): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog(catalogRefreshKey);
-  const reconnect = useRepositoryReconnect(catalog.repositories, catalog.reload, onSelect);
+  const reconnect = useRepositoryReconnect(catalog.repositories, catalog.reload, onSelect, root);
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);

@@ -74,6 +74,7 @@ export function useRepositoryReconnect(
   repositories: readonly ProjectWithAvailability[],
   reload: () => void,
   onSelect: (root: string) => void,
+  current: string | null,
 ): RepositoryReconnect {
   const [failed, setFailed] = useState(false);
   const mounted = useMounted();
@@ -88,10 +89,10 @@ export function useRepositoryReconnect(
         if (outcome === "selected") setFailed(true);
         return;
       }
-      if (outcome === "selected") {
-        reload();
-        onSelect(path);
-      }
+      // The catalog is read again for every successful reconnect, even a superseded one, so the
+      // folder stops reading as changed.
+      if (outcome !== "selector-gone") reload();
+      if (outcome === "selected") onSelect(path);
       reportReconnected(outcome);
     },
     [mounted, onSelect, reload],
@@ -110,13 +111,16 @@ export function useRepositoryReconnect(
   );
   const choose = useCallback(
     (path: string): void => {
+      // U-44: while another folder's reconnect runs, a repeat of the repository already shown is
+      // not a new choice; taking it as one made the awaited folder lose its selection.
+      if (path === current && inFlight.current.size > 0) return;
       latest.current = path;
       setFailed(false);
       const project = repositories.find((entry) => entry.path === path);
       if (project !== undefined && needsReconnect(project)) reconnect(path);
       else onSelect(path);
     },
-    [onSelect, reconnect, repositories],
+    [current, onSelect, reconnect, repositories],
   );
   return { choose, failed };
 }

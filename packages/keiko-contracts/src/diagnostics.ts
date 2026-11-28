@@ -2478,7 +2478,6 @@ export const CLIENT_CODING_WORKBENCH_TOOL_PROFILES = ["native", "mapped", "unrep
 export type ClientCodingWorkbenchToolProfile =
   (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
 
-/** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 // What became of the choice once a reconnect of a changed folder succeeded (U-44): the folder was
 // selected, a later choice superseded it, or the selector was gone (the window closed or rebuilt it).
 export const CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES = [
@@ -2489,6 +2488,7 @@ export const CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES = [
 export type ClientCodingWorkbenchReconnectOutcome =
   (typeof CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES)[number];
 
+/** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
 export type ClientCodingWorkbenchBridgeRefusal =
   (typeof CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS)[number];
