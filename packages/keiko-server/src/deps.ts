@@ -1877,12 +1877,13 @@ function syncActivation(
   reason: ActivationRemovalReason,
   correlationId: string = UNKNOWN_CORRELATION_ID,
   removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
+  additions: "allowed" | "withheld" = "allowed",
 ): void {
   if (state.settling !== undefined) {
     deferActivationSync(state, state.settling, reason, correlationId);
     return;
   }
-  state.activation?.sync(liveActivations(state), reason, correlationId, removalReasons);
+  state.activation?.sync(liveActivations(state), reason, correlationId, removalReasons, additions);
 }
 
 function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T): T {
@@ -1898,9 +1899,11 @@ function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T)
   try {
     result = change();
   } catch (error) {
-    // A change that failed midway leaves a partial transient set: never persist it. The record
-    // keeps its last durable state and the next change settles it.
+    // A change that failed midway leaves a partial set. What it removed is persisted, so a restart
+    // cannot restore a model whose proof was already invalidated; nothing it added is written.
     state.settling = undefined;
+    if (settling.dirty)
+      syncActivation(state, "invalidated", settling.correlationId, settling.removals, "withheld");
     throw error;
   }
   state.settling = undefined;

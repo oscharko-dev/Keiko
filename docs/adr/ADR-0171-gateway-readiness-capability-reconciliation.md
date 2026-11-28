@@ -41,7 +41,9 @@ per-model binding and credential are unchanged and discards only the models whos
 that were removed (only the basic-chat proof is carried, never a feature proof). Evidence is `gateway.activation.persistence`: a count of
 restored records and a count discarded per closed reason (`first-start`, `unreadable`, `format-changed`,
 `foreign-installation`, `product-changed`, `configuration-changed`, `credential-changed`, `deactivated`,
-`invalidated`). The credential is stored as a per-installation scrypt derivation, never a plain hash, and a
+`invalidated`, `capacity`). The record stores at most 512 activations (exactly what a restart reads back; the
+rest is counted under `capacity`), and a change that failed midway persists what it removed but never what it
+added. The credential is stored as a per-installation scrypt derivation, never a plain hash, and a
 record whose removal cannot be written is withdrawn whole and reported as a failed Deactivate.
 
 ## Context

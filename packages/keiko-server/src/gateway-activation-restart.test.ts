@@ -273,20 +273,36 @@ describe("activated models across a server restart", () => {
       expect(lines).toContainEqual(expect.objectContaining({ reason: "invalidated", count: 1 }));
     });
 
-    it("does not persist the transient set of a change that threw", async () => {
+    it("persists what a change that threw already removed, so a restart cannot restore it", async () => {
       const first = start(threeModels);
       activateModels(first, "chat-a", "chat-b");
       const holder = holderOf(first);
       expect(() => {
         holder.settleObservations?.(() => {
           holder.clearVerifiedCapability("chat-a");
-          holder.clearVerifiedCapability("chat-b");
           throw new Error("the change failed midway");
         });
       }).toThrow("failed midway");
       const second = await restart(first, threeModels);
-      expect(currentConversationReady(second, "chat-a")).toBe(true);
+      expect(currentConversationReady(second, "chat-a")).toBe(false);
       expect(currentConversationReady(second, "chat-b")).toBe(true);
+    });
+
+    it("never persists an activation that a change which threw had only half applied", async () => {
+      const first = start(threeModels);
+      activateModels(first, "chat-a", "chat-b");
+      const holder = holderOf(first);
+      expect(() => {
+        holder.settleObservations?.(() => {
+          holder.clearVerifiedCapability("chat-a");
+          activateModels(first, "chat-c");
+          throw new Error("the change failed midway");
+        });
+      }).toThrow("failed midway");
+      const second = await restart(first, threeModels);
+      expect(currentConversationReady(second, "chat-a")).toBe(false);
+      expect(currentConversationReady(second, "chat-b")).toBe(true);
+      expect(currentConversationReady(second, "chat-c")).toBe(false);
     });
   });
 

@@ -172,7 +172,7 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     expect(restoredIds(memory(), provider())).toEqual([]);
     // The reason is the exact, closed one: an older format is not an unreadable file.
     expect(changeLines()).toContainEqual(
-      expect.objectContaining({ change: "discarded", reason: "format-changed", count: 0 }),
+      expect.objectContaining({ change: "discarded", reason: "format-changed", count: 1 }),
     );
     expect(changeLines().map((line) => line.reason)).not.toContain("unreadable");
   });
@@ -227,6 +227,10 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     activate(memory(), provider());
     events.length = 0;
     expect(restoredIds(memory({ installationId: "installation-2" }), provider())).toEqual([]);
+    // The discarded count is the number of entries the record held, not an unknown 0.
+    expect(changeLines()).toContainEqual(
+      expect.objectContaining({ change: "discarded", reason: "foreign-installation", count: 1 }),
+    );
     const reasons = changeLines().map((line) => line.reason);
     expect(reasons).toContain("foreign-installation");
     expect(reasons).not.toContain("first-start");
@@ -330,6 +334,19 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(running.recorded()).toBe(true);
       // The withdrawn record is rewritten with the remaining model at once, not at the next change.
       expect(restoredIds(memory(), provider(), second)).toEqual(["chat-b"]);
+    });
+
+    it("keeps a changed binding outstanding after its write failed", () => {
+      const running = memory();
+      activate(running, provider());
+      const rotated = provider({ apiKey: "sk-test-rotated-credential" });
+      writer.failures = 1;
+      activate(running, rotated);
+      expect(running.recorded()).toBe(false);
+      // The same set again is still a change: the file holds the old binding.
+      activate(running, rotated);
+      expect(running.recorded()).toBe(true);
+      expect(restoredIds(memory(), rotated)).toEqual(["chat-a"]);
     });
 
     it("reports a removal that neither the write nor the withdrawal could record, then settles it", () => {

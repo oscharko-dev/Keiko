@@ -126,6 +126,8 @@ export interface ModelActivationMemory {
     correlationId: string,
     /** A model's own reason, when one change removed models for different reasons (by model id). */
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
+    /** `withheld` records removals only: nothing new is written (a change that failed midway). */
+    additions?: "allowed" | "withheld",
   ) => void;
   /**
    * Whether the durable record equals the activated set the last `sync` was given. False after a
@@ -243,24 +245,35 @@ interface StoredFile {
 }
 
 type ReadOutcome =
-  | { readonly kind: "none" | "unreadable" | "format-changed" | "foreign-installation" }
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "unreadable" | "format-changed" | "foreign-installation";
+      /** How many stored entries the record held, 0 only when that is truly unknown. */
+      readonly entries: number;
+    }
   | StoredFileOutcome;
 interface StoredFileOutcome {
   readonly kind: "file";
   readonly file: StoredFile;
 }
 
+function entryCountOf(record: Record<string, unknown>): number {
+  return Array.isArray(record.entries) ? Math.min(record.entries.length, MAX_ENTRIES) : 0;
+}
+
 function parseFile(raw: Buffer, installation: string): ReadOutcome {
   // A malformed file throws here; the reader reports it and treats the record as unreadable.
   const parsed: unknown = JSON.parse(raw.toString("utf8"));
-  if (typeof parsed !== "object" || parsed === null) return { kind: "unreadable" };
+  if (typeof parsed !== "object" || parsed === null) return { kind: "unreadable", entries: 0 };
   const record = parsed as Record<string, unknown>;
-  if (record.schemaVersion === PREVIOUS_SCHEMA_VERSION) return { kind: "format-changed" };
-  if (record.schemaVersion !== SCHEMA_VERSION) return { kind: "unreadable" };
-  if (record.installation !== installation) return { kind: "foreign-installation" };
-  const { productVersion, entries } = record;
-  if (typeof productVersion !== "string" || !Array.isArray(entries)) return { kind: "unreadable" };
-  const kept = entries
+  const entries = entryCountOf(record);
+  if (record.schemaVersion === PREVIOUS_SCHEMA_VERSION) return { kind: "format-changed", entries };
+  if (record.schemaVersion !== SCHEMA_VERSION) return { kind: "unreadable", entries };
+  if (record.installation !== installation) return { kind: "foreign-installation", entries };
+  const { productVersion } = record;
+  if (typeof productVersion !== "string" || !Array.isArray(record.entries))
+    return { kind: "unreadable", entries };
+  const kept = record.entries
     .slice(0, MAX_ENTRIES)
     .map(parseEntry)
     .filter((entry): entry is StoredActivation => entry !== undefined);
@@ -306,6 +319,11 @@ class FileModelActivationMemory implements ModelActivationMemory {
   private desired: readonly ActivatedModel[] = [];
   /** The connection each stored model was bound with, so an unchanged one derives nothing again. */
   private readonly bound = new Map<
+    string,
+    { readonly configurationDigest: string; readonly apiKey: string }
+  >();
+  /** The bindings the next successful write makes durable; never trusted before it lands. */
+  private plannedBindings = new Map<
     string,
     { readonly configurationDigest: string; readonly apiKey: string }
   >();
@@ -359,9 +377,11 @@ class FileModelActivationMemory implements ModelActivationMemory {
     reason: ActivationRemovalReason,
     correlationId: string,
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
+    additions: "allowed" | "withheld" = "allowed",
   ): void {
-    this.desired = activated;
-    const { next, saved, overflow } = this.plan(activated);
+    if (additions === "allowed") this.desired = activated;
+    const { next, saved, overflow, bindings } = this.plan(activated, additions);
+    this.plannedBindings = bindings;
     const removed = this.removalsByReason(next, reason, removalReasons);
     const removedCount = [...removed.values()].reduce((sum, count) => sum + count, 0);
     const stale = this.rewritePending;
@@ -371,26 +391,49 @@ class FileModelActivationMemory implements ModelActivationMemory {
     }
     if (this.write(next, correlationId)) {
       this.durable = next;
+      this.commitBindings();
       this.unrecorded = false;
       this.rewritePending = false;
-      this.logRemovals(removed, correlationId);
-      if (overflow > 0) this.logChange("discarded", "capacity", overflow, correlationId);
-      if (saved > 0) this.logChange("saved", undefined, saved, correlationId);
+      this.logWritten(removed, overflow, saved, correlationId);
     } else if (removedCount > 0 || stale) this.withdrawRecord(next, removed, correlationId);
     else this.unrecorded = true;
+  }
+
+  private logWritten(
+    removed: ReadonlyMap<ActivationRemovalReason, number>,
+    overflow: number,
+    saved: number,
+    correlationId: string,
+  ): void {
+    this.logRemovals(removed, correlationId);
+    if (overflow > 0) this.logChange("discarded", "capacity", overflow, correlationId);
+    if (saved > 0) this.logChange("saved", undefined, saved, correlationId);
   }
 
   /**
    * The record the activated set needs. A model whose connection is the one it was stored with
    * derives nothing again: only a new or changed one pays for its credential derivation. At most
    * `MAX_ENTRIES` are stored, which is exactly what a restart reads back; the rest is counted.
+   * With additions withheld a model the record does not hold (or holds under another binding) is
+   * left out instead of written.
    */
-  private plan(activated: readonly ActivatedModel[]): {
+  private plan(
+    activated: readonly ActivatedModel[],
+    additions: "allowed" | "withheld",
+  ): {
     readonly next: Map<string, StoredActivation>;
     readonly saved: number;
     readonly overflow: number;
+    readonly bindings: Map<
+      string,
+      { readonly configurationDigest: string; readonly apiKey: string }
+    >;
   } {
     const next = new Map<string, StoredActivation>();
+    const bindings = new Map<
+      string,
+      { readonly configurationDigest: string; readonly apiKey: string }
+    >();
     let saved = 0;
     let overflow = 0;
     for (const model of activated) {
@@ -404,16 +447,26 @@ class FileModelActivationMemory implements ModelActivationMemory {
         next.set(key, known);
         continue;
       }
+      if (known === undefined && additions === "withheld") continue;
       const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
-      this.remember(key, model.provider, entry.configurationDigest);
+      bindings.set(key, {
+        configurationDigest: entry.configurationDigest,
+        apiKey: model.provider.apiKey,
+      });
       if (known !== undefined && sameBinding(known, entry)) next.set(key, known);
-      else {
+      else if (additions === "allowed") {
         next.set(key, entry);
         saved += 1;
       }
     }
-    for (const key of this.bound.keys()) if (!next.has(key)) this.bound.delete(key);
-    return { next, saved, overflow };
+    return { next, saved, overflow, bindings };
+  }
+
+  /** Trusts the planned bindings only for what the file now holds, and forgets the rest. */
+  private commitBindings(): void {
+    for (const [key, binding] of this.plannedBindings)
+      if (this.durable.has(key)) this.bound.set(key, binding);
+    for (const key of this.bound.keys()) if (!this.durable.has(key)) this.bound.delete(key);
   }
 
   private remember(key: string, provider: ModelProviderConfig, configuration?: string): void {
@@ -476,11 +529,13 @@ class FileModelActivationMemory implements ModelActivationMemory {
       return;
     }
     this.durable = new Map();
+    this.commitBindings();
     this.unrecorded = false;
     this.rewritePending = false;
     this.logRemovals(removed, correlationId);
     if (next.size > 0 && this.write(next, correlationId)) {
       this.durable = new Map(next);
+      this.commitBindings();
       this.logChange("saved", undefined, next.size, correlationId);
     }
   }
@@ -499,7 +554,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
     const restored: { readonly entry: StoredActivation; readonly provider: ModelProviderConfig }[] =
       [];
     if (outcome.kind === "none") counts.set("first-start", 0);
-    else if (outcome.kind !== "file") counts.set(outcome.kind, 0);
+    else if (outcome.kind !== "file") counts.set(outcome.kind, outcome.entries);
     else if (outcome.file.productVersion !== this.options.productVersion)
       counts.set("product-changed", outcome.file.entries.length);
     else
@@ -535,7 +590,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
       return parseFile(raw, this.installation);
     } catch (error) {
       reportActivationFailure(this.options, "gateway.activation.restore", error, correlationId);
-      return { kind: "unreadable" };
+      return { kind: "unreadable", entries: 0 };
     }
   }
 
