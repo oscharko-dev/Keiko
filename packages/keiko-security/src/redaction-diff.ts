@@ -580,8 +580,16 @@ function isQuotedEscapedRecord(body: string): boolean {
   return rest.startsWith('"') && rest.includes("\\");
 }
 
+/** A hunk, a blank line or a closing fence ends the extended-header block of one patch. */
+function endsPatchHeader(body: string): boolean {
+  return (
+    body.trim() === "" || body.startsWith("@@") || body.startsWith("```") || body.startsWith("~~~")
+  );
+}
+
 /**
- * Path records of a patch are classified wherever they appear after its first `diff --git ` line.
+ * Path records of a patch are classified wherever they appear between its `diff --git ` line and the
+ * end of its extended header (the first hunk, blank line or fence line).
  * A record that spells a quoted or escaped path must be in Git's canonical spelling and its decoded
  * path must pass the credential floor; any other line is masked whole. A plain record, which holds
  * no quote and no backslash, is left to the ordinary floor. Outside a patch (no `diff --git ` line
@@ -601,7 +609,7 @@ export function maskNonCanonicalGitPathRecords(
     .split(/(?<=\n)/u)
     .map((line) => {
       const body = line.endsWith("\n") ? line.slice(0, -1) : line;
-      inPatch ||= body.startsWith("diff --git ");
+      inPatch = body.startsWith("diff --git ") || (inPatch && !endsPatchHeader(body));
       const suspect =
         GIT_PATH_HEADER.test(body) && (inPatch ? /["\\]/u.test(body) : isQuotedEscapedRecord(body));
       if (!suspect || isCanonicalGitPathHeader(body, ports)) return line;

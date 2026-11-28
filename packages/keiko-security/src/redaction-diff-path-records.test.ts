@@ -15,6 +15,16 @@ describe("non-canonical Git path records are masked only in a diff context", () 
     expect(redact(text)).toBe(text);
   });
 
+  it("leaves prose readable after a fenced patch closed, and after its last hunk", () => {
+    const prose = 'copy from "the docs" when sharing the example\n';
+    const patch = `diff --git a/x.js b/x.js\n${BODY}`;
+    expect(redact(`\`\`\`diff\n${patch}\`\`\`\n${prose}`)).toContain(prose);
+    expect(redact(`${patch}\n${prose}`)).toContain(prose);
+    const renameOnly =
+      'diff --git a/x.js b/y.js\nrename from x.js\nrename to "caf\\303\\251\\147.js"\n';
+    expect(redact(`\`\`\`diff\n${renameOnly}\`\`\`\n`)).not.toContain("\\147");
+  });
+
   it("still masks a non-canonical record inside a diff", () => {
     const text = `diff --git a/x.js b/x.js\nrename from a.js\nrename to "caf\\303\\251\\147.js"\n${BODY}`;
     const redacted = redact(text);
