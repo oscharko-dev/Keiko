@@ -962,15 +962,14 @@ const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation
 });
 
 /**
- * What Keiko's shutdown interrupted (U-31): a run held for a decision only the person can make had
- * no action in flight, any other live run may have had one. Chosen from the state alone, so the
- * Workbench never claims more than the server knew.
+ * What Keiko's shutdown interrupted (U-31): a run waiting on the person, or any other live run.
+ * Chosen from the state alone and never a claim about changes: an approval can be released while the
+ * state still reads waiting, and parallel tool calls can run beside a waiting one. A run already
+ * `stopping` is a person's Stop in flight and gets no shutdown cause.
  */
-function shutdownStopCause(current: CodingRuntimeSnapshot): CodingWorkbenchStopCause {
-  const waiting =
-    current.state === "awaiting-approval" ||
-    (current.state === "paused" && current.pauseReason !== undefined);
-  return waiting ? "server-shutdown-waiting" : "server-shutdown-working";
+function shutdownStopCause(current: CodingRuntimeSnapshot): CodingWorkbenchStopCause | undefined {
+  if (current.state === "stopping") return undefined;
+  return waitsOnPerson(current) ? "server-shutdown-waiting" : "server-shutdown-working";
 }
 
 const CODING_RUNTIME_RUN_SHUTDOWN_OPERATION = defineActivityLogOperation({
@@ -4390,8 +4389,14 @@ export class CodingRuntimeOrchestrator {
       return { ok: true, snapshot: this.projection.idle() };
     }
     // Named before the end so the settlement this stop produces carries it, whichever path settles.
-    this.shutdownStopCause = { runId: current.runId, cause: shutdownStopCause(current) };
-    const result = await this.end("stop", current.runId, { requestId: current.runId });
+    const cause = shutdownStopCause(current);
+    if (cause !== undefined) this.shutdownStopCause = { runId: current.runId, cause };
+    let result: CodingRuntimeOrchestratorResult;
+    try {
+      result = await this.end("stop", current.runId, { requestId: current.runId });
+    } finally {
+      this.shutdownStopCause = undefined;
+    }
     this.deps.activityLog?.write(
       activityLogEvent(
         CODING_RUNTIME_RUN_SHUTDOWN_OPERATION,

@@ -1963,6 +1963,58 @@ describe("CodingRuntimeOrchestrator", () => {
       });
     });
 
+    it("names a pause that waits for a decision as waiting", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const live = f.rows.get("run-1");
+      if (live === undefined) throw new Error("expected a live run");
+      f.rows.set("run-1", {
+        ...live,
+        state: "paused",
+        revision: live.revision + 1,
+        updatedAt: live.updatedAt,
+        pauseReason: "workspace-script-trust",
+      });
+
+      await f.orchestrator.shutdown();
+
+      expect(f.orchestrator.getSnapshot("run-1")?.stopCause).toBe("server-shutdown-waiting");
+    });
+
+    it("names a pause without a reason as working", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const live = f.rows.get("run-1");
+      if (live === undefined) throw new Error("expected a live run");
+      f.rows.set("run-1", {
+        ...live,
+        state: "paused",
+        revision: live.revision + 1,
+        updatedAt: live.updatedAt,
+      });
+
+      await f.orchestrator.shutdown();
+
+      expect(f.orchestrator.getSnapshot("run-1")?.stopCause).toBe("server-shutdown-working");
+    });
+
+    it("gives a person's Stop that is already in flight no shutdown cause", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const live = f.rows.get("run-1");
+      if (live === undefined) throw new Error("expected a live run");
+      f.rows.set("run-1", {
+        ...live,
+        state: "stopping",
+        revision: live.revision + 1,
+        updatedAt: live.updatedAt,
+      });
+
+      await f.orchestrator.shutdown();
+
+      expect(f.orchestrator.getSnapshot("run-1")?.stopCause).toBeUndefined();
+    });
+
     it("records no cause for the person's own Stop, even while the run waited", async () => {
       const f = fixture();
       await f.orchestrator.start(start);

@@ -182,8 +182,9 @@ function ReadinessDetails({
 }
 
 // U-31: a run Keiko's own shutdown cancelled says why it stopped and what to do, so a restart is
-// never mistaken for the person's own Stop. It claims "nothing was changed" only for a run that was
-// waiting for the person, the one case where the server knows no action was in flight.
+// never mistaken for the person's own Stop. It makes no claim about changes in either case: an
+// approval can be released while the state still reads waiting, and parallel tool calls can run
+// beside a waiting one, so the waiting text asks the person to check the workspace.
 function StopCauseNote({
   state,
   t,

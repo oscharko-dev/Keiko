@@ -1352,7 +1352,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.answeredWithoutTools":
     "Das Modell hat geantwortet, ohne Werkzeuge zu nutzen. Es wurden keine Dateien geändert und keine Befehle ausgeführt.",
   "codingWorkbench.runStatus.stopCause.server-shutdown-waiting":
-    "Keiko wurde geschlossen, während dieser Lauf auf deine Freigabe wartete. Danach wurde nichts mehr verändert. Starte die Aufgabe erneut, um fortzufahren.",
+    "Keiko wurde geschlossen, während dieser Lauf auf deine Freigabe wartete. Prüfe den Arbeitsbereich, bevor du die Aufgabe erneut startest.",
   "codingWorkbench.runStatus.stopCause.server-shutdown-working":
     "Keiko wurde geschlossen, während dieser Lauf arbeitete. Bereits begonnene Änderungen sind möglicherweise unvollständig. Starte die Aufgabe erneut, um fortzufahren.",
   "codingWorkbench.resourceStatus.unavailable": "Nicht verfügbar",

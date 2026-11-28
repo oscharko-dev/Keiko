@@ -562,18 +562,18 @@ describe("CodingWorkbenchRunStatus answered without tools", () => {
 // U-31: a run Keiko's shutdown cancelled says why it stopped; the person's own Stop says nothing more.
 describe("CodingWorkbenchRunStatus stop cause", () => {
   const WAITING_EN =
-    "Keiko was closed while this run was waiting for your approval. Nothing was changed after that point. Start the task again to continue.";
+    "Keiko was closed while this run was waiting for your approval. Check the workspace before you start the task again.";
   const WORKING_EN =
     "Keiko was closed while this run was working. Changes it had already started may be incomplete. Start the task again to continue.";
   const WAITING_DE =
-    "Keiko wurde geschlossen, während dieser Lauf auf deine Freigabe wartete. Danach wurde nichts mehr verändert. Starte die Aufgabe erneut, um fortzufahren.";
+    "Keiko wurde geschlossen, während dieser Lauf auf deine Freigabe wartete. Prüfe den Arbeitsbereich, bevor du die Aufgabe erneut startest.";
   const events = [status(0, "starting", STARTED)];
 
   afterEach(() => {
     window.localStorage.removeItem(I18N_STORAGE_KEY);
   });
 
-  it("says Keiko was closed while the run waited, and claims nothing was changed", async () => {
+  it("says Keiko was closed while the run waited and asks for a workspace check", async () => {
     const { container } = render(
       <CodingWorkbenchRunStatus
         state={runState(snapshot("cancelled", { stopCause: "server-shutdown-waiting" }), events)}
@@ -585,7 +585,7 @@ describe("CodingWorkbenchRunStatus stop cause", () => {
     expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
   });
 
-  it("does not claim nothing was changed when the run was working", () => {
+  it("never claims nothing was changed", () => {
     render(
       <CodingWorkbenchRunStatus
         state={runState(snapshot("cancelled", { stopCause: "server-shutdown-working" }), events)}
@@ -596,6 +596,7 @@ describe("CodingWorkbenchRunStatus stop cause", () => {
     const note = screen.getByTestId("coding-runtime-stop-cause");
     expect(note).toHaveTextContent(WORKING_EN);
     expect(note).not.toHaveTextContent("Nothing was changed");
+    expect(screen.queryByText(/Nothing was changed/u)).not.toBeInTheDocument();
   });
 
   it("shows no note for the person's own Stop", () => {
