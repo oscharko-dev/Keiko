@@ -244,12 +244,12 @@ a bridge deadline that stops a call leaves a `coding-runtime.tool-bridge` diagno
 deadline. A fixed 30 s default in the registry, the catalog and the bridge cut a waiting approval
 off long before its own five-minute ceiling (F43/F44, PR #3452).
 The governed Git read tools (`keiko_git_status`, `keiko_git_diff`) declare
-`GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS` in `maxDurationMs`. A raw status is a
+`GOVERNED_GIT_TOOL_MAX_DURATION_MS` in `maxDurationMs`. A raw status is a
 sequence of Git processes, and on a host with slow process creation (Windows with a real-time
 scanner) a six-file status took 14 s, so the fixed 30 s default ended healthy work (#4491, W-4).
 The same scan streams a whole tracked large file whose index stat no longer matches (a modified
-6 GiB file at 10 MiB/s needs 614.4 s), so the budget follows the bounded-lifetime rule of
-`keiko.git.execute` below: it equals `GOVERNED_GIT_EXECUTE_MAX_DURATION_MS` (eight hours) and the
+6 GiB file at 10 MiB/s needs 614.4 s), so the reads share the bounded-lifetime budget of
+`keiko.git.execute` below (eight hours) and the
 call still ends earlier at the run's authority expiry, on Stop or on revocation. The former ten
 minutes cut that read while execute already allowed it. Hang protection is unchanged where it
 belongs: every Git process keeps its own sandbox timeout and the scan is bounded in paths and
@@ -258,7 +258,7 @@ Because the budget exceeds the sandbox default, these tools join the long-hold l
 and the bridge. When such a call ends under the run, the `git.runtime-action` line names the cause
 (`deadline-exceeded`, `signal-aborted` or `authority-revoked`); the model-facing refusal is unchanged.
 A redeemed git delivery proposal (`keiko.git.execute`: stage, unstage, commit, push, pull request)
-declares `GOVERNED_GIT_EXECUTE_MAX_DURATION_MS` (eight hours, the longest run an Authority Envelope
+declares `GOVERNED_GIT_TOOL_MAX_DURATION_MS` (eight hours, the longest run an Authority Envelope
 can authorize, `MAX_RUNTIME_MAX_DURATION_MINUTES`) instead of the 30 s sandbox default. It runs many
 git subprocesses, each bounded by its own command timeout (a large-file hash by its size-proportional
 deadline) and cancelled by Stop or authority revocation, and the catalog deadline is the earlier of

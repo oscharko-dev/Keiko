@@ -18,8 +18,7 @@ import {
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
-  GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
-  GOVERNED_GIT_EXECUTE_MAX_DURATION_MS,
+  GOVERNED_GIT_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { VERIFICATION_TOOL_MAX_DURATION_MS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -581,7 +580,7 @@ function gitStatusSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-git-status-port",
-    maxDurationMs: GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
+    maxDurationMs: GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -605,7 +604,7 @@ function gitDiffSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-git-diff-port",
-    maxDurationMs: GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
+    maxDurationMs: GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -727,7 +726,7 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     idempotency: "server-key-required",
     handlerId: "opencode-git-execute-port",
     // Many bounded git subprocesses: the budget is a runaway backstop, not a 30 s cut (ADR-0175).
-    maxDurationMs: GOVERNED_GIT_EXECUTE_MAX_DURATION_MS,
+    maxDurationMs: GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   };
 }
 

@@ -243,19 +243,15 @@ export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
 // against it in the server tests): the call can never outlive its Authority Envelope, whose expiry
 // (`context.deadlineAt`) still ends it earlier, and a staging deadline that scales with file size is
 // never cut by a shorter outer one. It is not the global default.
-export const GOVERNED_GIT_EXECUTE_MAX_DURATION_MS = 8 * 60 * 60 * 1_000;
-
-// The settlement budget of the governed Git read tools (`keiko_git_status`, `keiko_git_diff`). A raw
+// The governed Git read tools (`keiko_git_status`, `keiko_git_diff`) share this budget. A raw
 // status is a sequence of Git processes (one per index, tree, attribute and hash read), and on a
 // host whose process creation is slow (Windows with a real-time scanner, W-4: ~14 s for one status
 // of a six-file repository) the fixed 30 s sandbox default ended healthy work. The same raw scan
 // streams a whole tracked large file whose index stat no longer matches, so a supported 6 GiB file
-// at 10 MiB/s needs 614.4 s for that read alone and a ten-minute budget cut it (PR #4573 review). The
-// budget therefore follows the same bounded-lifetime rule as `keiko.git.execute`: the longest run
-// the product can authorize, still ended earlier by the run's authority expiry, Stop or revocation.
+// at 10 MiB/s needs 614.4 s for that read alone and a ten-minute budget cut it (PR #4573 review).
 // Hang protection stays where it belongs: every Git process keeps its own `defaultTimeoutMs`, and
 // the scan is bounded in paths and bytes.
-export const GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS = GOVERNED_GIT_EXECUTE_MAX_DURATION_MS;
+export const GOVERNED_GIT_TOOL_MAX_DURATION_MS = 8 * 60 * 60 * 1_000;
 
 // ─── Governed git lanes: the two credential-capable env profiles ─────────────────
 //

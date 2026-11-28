@@ -4,8 +4,7 @@ import type { CanonicalToolId } from "@oscharko-dev/keiko-contracts/runtime/gove
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
-  GOVERNED_GIT_EXECUTE_MAX_DURATION_MS,
-  GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
+  GOVERNED_GIT_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -134,16 +133,16 @@ describe("opencode registration set", () => {
     const gitReads = new Set(["keiko.git.status", "keiko.git.diff"]);
     for (const id of gitReads) {
       expect(byId.get(id as CanonicalToolId)?.bounds.maxDurationMs).toBe(
-        GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
+        GOVERNED_GIT_TOOL_MAX_DURATION_MS,
       );
     }
     // A redeemed delivery proposal runs many bounded Git subprocesses, so `keiko.git.execute` alone
     // carries a runaway backstop that outlasts the default; no other proposal tool gets one.
     const gitExecute = "keiko.git.execute";
     expect(byId.get(gitExecute as CanonicalToolId)?.bounds.maxDurationMs).toBe(
-      GOVERNED_GIT_EXECUTE_MAX_DURATION_MS,
+      GOVERNED_GIT_TOOL_MAX_DURATION_MS,
     );
-    expect(GOVERNED_GIT_EXECUTE_MAX_DURATION_MS).toBeGreaterThan(
+    expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
     );
     const widened = new Set<string>([
