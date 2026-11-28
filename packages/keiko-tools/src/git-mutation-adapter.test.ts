@@ -61,7 +61,7 @@ describe("argv builders — fixed, governed argument vectors", () => {
     expect(plan.length).toBeGreaterThan(1);
     for (const argv of plan) {
       expect(argv.slice(0, 3)).toEqual(["restore", "--staged", "--"]);
-      expect(argv.join(" ").length).toBeLessThan(20_000);
+      expect(argv.join(" ").length).toBeLessThan(9_000);
     }
     expect(plan.flatMap((argv) => argv.slice(3))).toEqual(
       pathspecs.map((pathspec) => `:(literal)${pathspec}`),

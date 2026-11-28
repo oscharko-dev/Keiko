@@ -265,9 +265,9 @@ export function buildStageArgv(req: GitStageExecRequest): GitMutationArgvPlan {
 }
 
 // One `restore` run's pathspec text stays far below Windows' CreateProcess limit (about 32 K
-// characters for the whole command line), so a directory unstage that names thousands of files
+// characters for the whole command line, which argument quoting can roughly double), so a directory unstage that names thousands of files
 // (U-28) runs as several restores inside one index transaction instead of one oversized command.
-const UNSTAGE_ARGV_PATHSPEC_CHARS = 16_000;
+const UNSTAGE_ARGV_PATHSPEC_CHARS = 8_000;
 
 export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPlan {
   const plan: string[][] = [];
