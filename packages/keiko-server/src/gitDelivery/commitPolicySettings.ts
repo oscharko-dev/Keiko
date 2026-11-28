@@ -170,11 +170,6 @@ function decision(
   return { policy: gitCommitMessagePolicyForMode(mode), mode, source };
 }
 
-/**
- * The message policy and where it came from. A person's own setting always wins; with no setting the
- * repository decides (commitlint present means Keiko's Conventional check, otherwise the repository's
- * own hooks stay authoritative). A failed read fails closed to the Conventional check.
- */
 function emitFallbackDiagnostic(
   deps: Pick<UiHandlerDeps, "diagnostics">,
   correlationId: string,
@@ -206,6 +201,11 @@ async function decisionFromSettings(
   return decision(declared ? "keiko-conventional" : "repository-native", "repository");
 }
 
+/**
+ * The message policy and where it came from. A person's own setting always wins; with no setting the
+ * repository decides (commitlint present means Keiko's Conventional check, otherwise the repository's
+ * own hooks stay authoritative). A failed read fails closed to the Conventional check.
+ */
 export async function resolveGovernedCommitMessagePolicyDecision(
   deps: Pick<UiHandlerDeps, "editorSettingsControl" | "diagnostics">,
   workspaceRoot: string,
