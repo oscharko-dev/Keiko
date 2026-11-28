@@ -30,6 +30,7 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1586,10 +1587,35 @@ describe("verified Code-task commit service", () => {
       rmSync(shimDir, { recursive: true, force: true });
     });
 
+    // A tracked file whose mtime is not older than the index is "racy": Git cannot trust its stat,
+    // so the read checks its content and pays the lazy `core.fileMode` read. A fast runner writes
+    // the fixture and the index in the same tick, so settle that first: every host then counts the
+    // processes of the same, clean state.
+    function settleIndexStat(): void {
+      const past = new Date(Date.now() - 60_000);
+      for (const path of git(["ls-files", "-z"]).split("\0").filter(Boolean)) {
+        const file = join(root, path);
+        if (existsSync(file)) lutimesSync(file, past, past);
+      }
+      git(["update-index", "-q", "--really-refresh"]);
+    }
+
+    // The installed Git's version is probed once per process and memoized (the lazy-fetch guard), so
+    // the action that happens to run first would pay it. Probe it before counting: each pin then
+    // counts its own action's processes, whichever test runs first or alone.
+    async function warmGitVersionMemo(): Promise<void> {
+      await runtimeService("supervised-coding").execute(
+        { action: "git", actionId: "warm", idempotencyKey: "warm", operation: "status" },
+        guard,
+      );
+    }
+
     // The arguments of every process the action started, so a failing budget names what ran.
     async function counted<T>(
       run: () => Promise<T>,
     ): Promise<{ value: T; spawned: number; started: string }> {
+      await warmGitVersionMemo();
+      settleIndexStat();
       writeFileSync(spawnLog, "");
       const value = await run();
       const lines = readFileSync(spawnLog, "utf8").split("\n").filter(Boolean);
