@@ -183,7 +183,7 @@ function objectIdLength(
 function declaresSha256(config: string): boolean {
   let section = "";
   let format: string | undefined;
-  for (const raw of config.split(/\r?\n/u)) {
+  for (const raw of logicalLines(config)) {
     let line = raw.trim();
     if (line.startsWith("[")) {
       // A header may carry the first assignment on its own line: `[extensions] objectformat = sha256`.
@@ -196,6 +196,24 @@ function declaresSha256(config: string): boolean {
     if (assignment?.key === "objectformat") format = assignment.value;
   }
   return format === "sha256";
+}
+
+// Git joins a line that ends in an unescaped backslash with the next one (`sha\` + `256` reads as
+// `sha256`); an even run of trailing backslashes is escaped backslashes, not a continuation.
+function logicalLines(config: string): string[] {
+  const lines: string[] = [];
+  let pending = "";
+  for (const physical of config.split(/\r?\n/u)) {
+    const trailing = /\\+$/u.exec(physical)?.[0].length ?? 0;
+    if (trailing % 2 === 1) {
+      pending += physical.slice(0, -1);
+    } else {
+      lines.push(pending + physical);
+      pending = "";
+    }
+  }
+  if (pending !== "") lines.push(pending);
+  return lines;
 }
 
 // The lower-cased name of a `[section]` or `[section "subsection"]` header and the text after its
