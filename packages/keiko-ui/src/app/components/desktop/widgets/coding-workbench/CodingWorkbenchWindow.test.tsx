@@ -11,6 +11,7 @@ import {
   startsShown,
 } from "./_restoredConversationTestSupport";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { SELECTION_MISMATCH_ERROR_CODE } from "@/lib/coding-workbench-runtime-mutations";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import * as reportApi from "@/lib/support-report-api";
@@ -3039,6 +3040,61 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(workspace.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // U-39 audit: a refused start compares the checkout with the branch the BINDING holds, never with
+  // the base branch the person picked in the chip. Rendered through the window, so the wiring of the
+  // refusal's remembered branch is pinned, not only the helper.
+  describe("a start refused for the selection, after a pending base-branch pick", () => {
+    const refusedState = (): CodingWorkbenchRuntimeState =>
+      liveState({
+        mutation: {
+          status: "error",
+          kind: "start",
+          requestId: "req-mismatch",
+          error: { code: SELECTION_MISMATCH_ERROR_CODE, message: "redacted", retryable: false },
+        },
+      });
+
+    function renderRefusal(checkoutBranch: string): void {
+      const bound = activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko", {
+        taskBranch: "chore/mark-reviewed",
+      });
+      const workspace: ActiveWorkspaceApi = {
+        ...bound,
+        activeInstance:
+          bound.activeInstance === null ? null : { ...bound.activeInstance, baseBranch: "main" },
+      };
+      repositoryBranchHookMock.mockImplementation((root) => ({
+        root,
+        response: null,
+        loading: false,
+        error: null,
+        denied: false,
+        branches: [],
+        currentBranch: root === null ? null : checkoutBranch,
+        ordinaryFolder: false,
+        refresh: vi.fn(() => Promise.resolve()),
+      }));
+      runtimeHookMock.mockReturnValue({ state: refusedState(), actions: actions() });
+      render(
+        <ActiveWorkspaceProvider value={workspace}>
+          <CodingWorkbenchWindow selectedRoot="/repos/keiko" selectedBranch="develop" />
+        </ActiveWorkspaceProvider>,
+      );
+    }
+
+    it("does not blame an outside branch change while the checkout is on the bound branch", async () => {
+      renderRefusal("chore/mark-reviewed");
+      expect(await screen.findByText(/not the one Keiko had open for this start/u)).toBeVisible();
+      expect(screen.queryByText(/outside Keiko/u)).toBeNull();
+    });
+
+    it("names the branch the checkout moved to when it differs from the bound one", async () => {
+      renderRefusal("other");
+      expect(await screen.findByText(/changed to other outside Keiko/u)).toBeVisible();
+      expect(screen.queryByText(/not the one Keiko had open for this start/u)).toBeNull();
+    });
   });
 
   it("follows the newest activity again once the person decides a changeset review", async () => {
