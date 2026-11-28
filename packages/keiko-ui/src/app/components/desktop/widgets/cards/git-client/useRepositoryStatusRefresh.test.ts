@@ -126,6 +126,32 @@ describe("useRepositoryStatusRefresh ambient refresh (U-35)", () => {
     expect(refreshDiff).toHaveBeenCalledTimes(2);
   });
 
+  // Review #4573: the return intent is consumed only by a successful comparison. A transient status
+  // error on the first probe must not turn the retry into an ordinary interval check.
+  it("keeps the return-triggered diff re-read through a transient status error, without periodic diff reads", async (): Promise<void> => {
+    let attempts = 0;
+    const { refresh, refreshDiff, probe } = mount({
+      probe: async (): Promise<boolean> => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient status error");
+        return false;
+      },
+    });
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(refreshDiff).not.toHaveBeenCalled();
+    await advance(AMBIENT_BASE_INTERVAL_MS * 2);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(refreshDiff).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+    await advance(AMBIENT_MAX_INTERVAL_MS * 2);
+    expect(probe.mock.calls.length).toBeGreaterThan(2);
+    expect(refreshDiff).toHaveBeenCalledTimes(1);
+  });
+
   it("checks when the document becomes visible and not when it becomes hidden", async (): Promise<void> => {
     const { probe } = mount();
     act((): void => setVisibility("hidden"));

@@ -302,8 +302,11 @@ class ProbeLoop {
     this.coalescer.trigger(true);
   }
 
-  private fail(error: unknown): void {
+  private fail(error: unknown, fromReturn: boolean): void {
     if (this.disposed) return;
+    // The return intent is consumed by a successful comparison only: after a transient status
+    // error the next successful probe still re-reads the diff the person returned to.
+    if (fromReturn) this.returnCheck = true;
     this.backOff();
     if (!this.failureReported) reportProbeFailure(error);
     this.failureReported = true;
@@ -331,7 +334,7 @@ class ProbeLoop {
     boundedProbe(ambient.probe, controller)
       .then(
         (changed) => this.settle(changed, fromReturn),
-        (error: unknown) => this.fail(error),
+        (error: unknown) => this.fail(error, fromReturn),
       )
       .finally((): void => {
         if (this.running === controller) this.running = undefined;
