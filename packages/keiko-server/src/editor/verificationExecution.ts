@@ -49,8 +49,16 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
 
 import { resolveVerificationRuntimeTarget } from "./verificationRuntimeTarget.js";
-import { resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
-import { privateStepWorkspace, type PrivateStepWorkspace } from "./windowsStepWorkspace.js";
+import {
+  attestWindowsStepSupervisor,
+  resolveWindowsStepSupervisorSync,
+  type WindowsStepAttestationTimings,
+} from "./windowsStepSupervisor.js";
+import {
+  privateStepWorkspace,
+  type PrivateStepWorkspace,
+  type StepCopyCleanup,
+} from "./windowsStepWorkspace.js";
 
 const verificationWorkspaces = createWorkspaceMutexRegistry();
 const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
@@ -194,9 +202,10 @@ export function localDockerEngineAnswer(
 function isolationAvailability(
   platform: NodeJS.Platform,
   windowsStep: ResolvedWindowsStep,
+  installed: BackendAvailability = probeBackends(),
 ): BackendAvailability {
   return {
-    ...probeBackends(),
+    ...installed,
     windowsAppContainer: platform === "win32" && windowsStep.supervisor !== undefined,
   };
 }
@@ -209,9 +218,21 @@ function isolationAvailability(
  */
 export interface ResolvedWindowsStep {
   readonly supervisor: WindowsStepSupervisor | undefined;
+  /** How long the supervisor and the step Node.js took to attest; absent off Windows. */
+  readonly attestation?: WindowsStepAttestationTimings | undefined;
 }
 
-function resolveWindowsStep(
+async function resolveWindowsStep(
+  platform: NodeJS.Platform,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): Promise<ResolvedWindowsStep> {
+  if (platform !== "win32") return { supervisor: undefined };
+  return attestWindowsStepSupervisor({ activityLog, correlationId });
+}
+
+// The one synchronous caller (the workflow dispatch's capability probe) keeps the blocking read.
+function resolveWindowsStepSync(
   platform: NodeJS.Platform,
   activityLog: ServerLogSink,
   correlationId: string | undefined,
@@ -219,7 +240,7 @@ function resolveWindowsStep(
   return {
     supervisor:
       platform === "win32"
-        ? resolveWindowsStepSupervisor({ activityLog, correlationId })
+        ? resolveWindowsStepSupervisorSync({ activityLog, correlationId })
         : undefined,
   };
 }
@@ -262,7 +283,7 @@ export function probeNetworkIsolation(
     cwd,
     isolationAvailability(
       platform,
-      resolveWindowsStep(platform, processServerLogSink(), correlationId),
+      resolveWindowsStepSync(platform, processServerLogSink(), correlationId),
     ),
     platform,
     () => localDockerHost(cwd, diagnostics, correlationId) !== undefined,
@@ -281,11 +302,13 @@ export async function probeNetworkIsolationServed(
   diagnostics?: ServerDiagnosticSink,
   correlationId?: string,
   windowsStep?: ResolvedWindowsStep,
+  installed?: BackendAvailability,
 ): Promise<NetworkIsolationProbe> {
   const platform = currentPlatform();
   const availability = isolationAvailability(
     platform,
-    windowsStep ?? resolveWindowsStep(platform, processServerLogSink(), correlationId),
+    windowsStep ?? (await resolveWindowsStep(platform, processServerLogSink(), correlationId)),
+    installed,
   );
   const served = (): boolean => localDockerHost(cwd, diagnostics, correlationId) !== undefined;
   const probe = planIsolationProbe(cwd, availability, platform, served);
@@ -308,14 +331,19 @@ export async function probeNetworkIsolationServed(
 export function windowsStepRunDeps(
   probe: NetworkIsolationProbe,
   supervisor: WindowsStepSupervisor | undefined,
-  installed: BackendAvailability = probeBackends(),
+  installed?: BackendAvailability,
 ): Pick<VerificationDeps, "enforcedNetworkAvailable" | "sandboxAvailability"> {
   if (probe.backend !== "windows-appcontainer")
     return { enforcedNetworkAvailable: probe.available };
   if (supervisor === undefined) return { enforcedNetworkAvailable: false };
   return {
     enforcedNetworkAvailable: probe.available,
-    sandboxAvailability: { ...installed, docker: false, podman: false, windowsAppContainer: true },
+    sandboxAvailability: {
+      ...(installed ?? probeBackends()),
+      docker: false,
+      podman: false,
+      windowsAppContainer: true,
+    },
   };
 }
 
@@ -325,6 +353,8 @@ export interface TimedNetworkIsolationProbe {
   readonly durationMs: number;
   /** The supervisor the probe planned with; the run that executes under this probe reuses it. */
   readonly windowsStep?: ResolvedWindowsStep | undefined;
+  /** The backends the probe scanned the host for; the run reuses them instead of scanning again. */
+  readonly installed?: BackendAvailability | undefined;
 }
 
 export async function timedNetworkIsolationProbe(
@@ -333,9 +363,20 @@ export async function timedNetworkIsolationProbe(
   correlationId?: string,
 ): Promise<TimedNetworkIsolationProbe> {
   const startedAtMs = Date.now();
-  const windowsStep = resolveWindowsStep(currentPlatform(), processServerLogSink(), correlationId);
-  const probe = await probeNetworkIsolationServed(cwd, diagnostics, correlationId, windowsStep);
-  return { probe, durationMs: Math.max(0, Date.now() - startedAtMs), windowsStep };
+  const windowsStep = await resolveWindowsStep(
+    currentPlatform(),
+    processServerLogSink(),
+    correlationId,
+  );
+  const installed = probeBackends();
+  const probe = await probeNetworkIsolationServed(
+    cwd,
+    diagnostics,
+    correlationId,
+    windowsStep,
+    installed,
+  );
+  return { probe, durationMs: Math.max(0, Date.now() - startedAtMs), windowsStep, installed };
 }
 
 export interface ExecuteVerificationArgs {
@@ -388,6 +429,14 @@ export interface ExecuteVerificationResult {
   // starts, so no duration on the report accounts for it. Optional so a caller-supplied execution
   // port that does not measure it stays valid; the real execution always reports it.
   readonly probeDurationMs?: number | undefined;
+  // How much of the probe was byte attestation on Windows: the supervisor's size and digest, and the
+  // step Node.js's digest. Absent off Windows and when the caller supplied no timed probe.
+  readonly supervisorAttestationMs?: number | undefined;
+  readonly stepNodeAttestationMs?: number | undefined;
+  // What removing the run's private step copy took, and how often the removal was retried; absent
+  // when the run made no copy.
+  readonly stepCopyCleanupMs?: number | undefined;
+  readonly stepCopyCleanupRetryCount?: number | undefined;
   // The egress policy the orchestrator ran under (see VERIFICATION_NETWORK_ENFORCEMENT).
   readonly networkEnforcement?: NetworkEnforcementMode | undefined;
 }
@@ -484,45 +533,91 @@ export async function executeVerificationEnforced(
   });
 }
 
+// #4496: only a run the probe gave the Windows backend frames its steps to the supervisor, in a
+// private copy of the workspace that the run removes when it ends. The supervisor is the one the
+// probe planned with (#4491); a probe handed in without one has the run resolve it once.
+async function stepForRun(
+  args: ExecuteVerificationArgs,
+  timed: TimedNetworkIsolationProbe,
+  activityLog: ServerLogSink,
+): Promise<ResolvedWindowsStep | undefined> {
+  if (!timed.probe.available || timed.probe.backend !== "windows-appcontainer") return undefined;
+  return (
+    timed.windowsStep ??
+    (await resolveWindowsStep(currentPlatform(), activityLog, args.correlationId))
+  );
+}
+
 async function executeExclusiveVerification(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
-  const {
-    probe,
-    durationMs: probeDurationMs,
-    windowsStep,
-  } = args.isolation ??
-  (await timedNetworkIsolationProbe(
-    args.probeCwd ?? args.workspace.root,
-    args.diagnostics,
-    args.correlationId,
-  ));
+  const timed =
+    args.isolation ??
+    (await timedNetworkIsolationProbe(
+      args.probeCwd ?? args.workspace.root,
+      args.diagnostics,
+      args.correlationId,
+    ));
+  const { probe, durationMs: probeDurationMs, windowsStep } = timed;
   const activityLog = args.activityLog ?? processServerLogSink();
-  // #4496: only a run the probe gave the Windows backend frames its steps to the supervisor, in a
-  // private copy of the workspace that the run removes when it ends. The supervisor is the one the
-  // probe planned with (#4491); a probe handed in without one has the run resolve it once.
-  const windowsStepSupervisor =
-    probe.available && probe.backend === "windows-appcontainer"
-      ? (windowsStep ?? resolveWindowsStep(currentPlatform(), activityLog, args.correlationId))
-          .supervisor
-      : undefined;
+  const resolvedStep = await stepForRun(args, timed, activityLog);
+  const windowsStepSupervisor = resolvedStep?.supervisor;
   const stepCopy =
     windowsStepSupervisor === undefined
       ? undefined
       : privateStepWorkspace(args.workspace, activityLog, args.correlationId);
+  const { report, cleanup } = await runInStepCopy(
+    args.plan,
+    verificationDeps(args, activityLog, probe, windowsStepSupervisor, stepCopy, timed.installed),
+    stepCopy,
+  );
+  return {
+    report,
+    probe,
+    probeDurationMs,
+    ...windowsExecutionFields((windowsStep ?? resolvedStep)?.attestation, cleanup),
+    networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
+  };
+}
+
+// The run, then the removal of its private step copy, awaited inside the exclusive scope: the next
+// execution never makes its own copy beside this one. A failed run is rethrown only after its copy
+// is gone.
+async function runInStepCopy(
+  plan: VerificationPlan,
+  deps: VerificationDeps,
+  stepCopy: PrivateStepWorkspace | undefined,
+): Promise<{ readonly report: VerificationReport; readonly cleanup: StepCopyCleanup | undefined }> {
   try {
-    return {
-      report: await runVerification(
-        args.plan,
-        verificationDeps(args, activityLog, probe, windowsStepSupervisor, stepCopy),
-      ),
-      probe,
-      probeDurationMs,
-      networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
-    };
-  } finally {
-    stepCopy?.dispose();
+    const report = await runVerification(plan, deps);
+    return { report, cleanup: await stepCopy?.dispose() };
+  } catch (error) {
+    await stepCopy?.dispose();
+    throw error;
   }
+}
+
+function windowsExecutionFields(
+  attestation: WindowsStepAttestationTimings | undefined,
+  cleanup: StepCopyCleanup | undefined,
+): Pick<
+  ExecuteVerificationResult,
+  | "supervisorAttestationMs"
+  | "stepNodeAttestationMs"
+  | "stepCopyCleanupMs"
+  | "stepCopyCleanupRetryCount"
+> {
+  return {
+    ...(attestation === undefined
+      ? {}
+      : {
+          supervisorAttestationMs: attestation.supervisorMs,
+          stepNodeAttestationMs: attestation.stepNodeMs,
+        }),
+    ...(cleanup === undefined
+      ? {}
+      : { stepCopyCleanupMs: cleanup.durationMs, stepCopyCleanupRetryCount: cleanup.retryCount }),
+  };
 }
 
 function verificationDeps(
@@ -531,6 +626,7 @@ function verificationDeps(
   probe: NetworkIsolationProbe,
   windowsStepSupervisor: WindowsStepSupervisor | undefined,
   stepCopy: PrivateStepWorkspace | undefined,
+  installed: BackendAvailability | undefined,
 ): VerificationDeps {
   return {
     workspace: args.workspace,
@@ -540,7 +636,7 @@ function verificationDeps(
     ...(args.fs === undefined ? {} : { fs: args.fs }),
     signal: args.signal,
     networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
-    ...windowsStepRunDeps(probe, windowsStepSupervisor),
+    ...windowsStepRunDeps(probe, windowsStepSupervisor, installed),
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
     onTerminated: verificationTerminationHandler(activityLog, args.correlationId),

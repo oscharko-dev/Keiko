@@ -1013,6 +1013,13 @@ when it resolves outside the install's folder), `pathPrefixed` and `placement` (
 `inside-execution-root` for a folder the step may modify, which is never used). Closed values only:
 never a path.
 
+The `editor.verification.execute` completion line splits the Windows part of `probeDurationMs`
+(#4491): `supervisorAttestationMs` is the supervisor's size and digest check and `stepNodeAttestationMs`
+the step Node.js's digest, both read per verification and never remembered (Windows only);
+`stepCopyCleanupMs` and `stepCopyCleanupRetryCount` are the removal of the run's private step copy
+after the last step, inside the exclusive workspace scope, and how many times that removal was
+retried. All four are whole milliseconds or a count, omitted when the run did not measure them.
+
 ## Gateway readiness, model activation and the tool-calling check
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,

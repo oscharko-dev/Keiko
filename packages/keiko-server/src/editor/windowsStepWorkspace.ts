@@ -4,7 +4,8 @@
 // copy is made once, after the dependency bootstrap installed into the workspace, shared by the
 // run's steps, and removed when the run ends. Counts only on the log: never a path or a name.
 
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, type RmOptions } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -45,32 +46,98 @@ const WINDOWS_STEP_COPY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/** What removing a run's step copy took: its wall time and how often the removal was retried. */
+export interface StepCopyCleanup {
+  readonly durationMs: number;
+  readonly retryCount: number;
+}
+
 export interface PrivateStepWorkspace {
   /** The copy the steps run in; the first call makes it. */
   readonly workspace: () => WorkspaceInfo;
-  /** Removes the copy, if one was made. */
-  readonly dispose: () => void;
+  /**
+   * Removes the copy, if one was made, and settles only once it is gone (or the removal failed and
+   * was recorded), so the next execution of the exclusive scope never starts beside a half-removed
+   * copy. `undefined` when no copy was made.
+   */
+  readonly dispose: () => Promise<StepCopyCleanup | undefined>;
+}
+
+/** The removal's seams: tests inject faults and a recording delay, never a real wait. */
+export interface StepCopyRemovalHost {
+  readonly remove?: ((path: string, options: RmOptions) => Promise<void>) | undefined;
+  readonly sleep?: ((ms: number) => Promise<void>) | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 function credentialNamed(source: string): boolean {
   return isCredentialNamedSegment(basename(source));
 }
 
-function removeCopy(root: string, correlationId: string | undefined): void {
+// The retry policy of Node's own recursive removal (`maxRetries: 5`, `retryDelay: 100`, a delay that
+// grows with each attempt, the same transient codes), applied here so a retry can be counted.
+const REMOVE_MAX_RETRIES = 5;
+const REMOVE_RETRY_DELAY_MS = 100;
+const RETRYABLE_REMOVAL_CODES: ReadonlySet<string> = new Set([
+  "EBUSY",
+  "EMFILE",
+  "ENFILE",
+  "ENOTEMPTY",
+  "EPERM",
+]);
+
+function retryableRemoval(error: unknown): boolean {
+  const code = (error as { readonly code?: unknown } | null)?.code;
+  return typeof code === "string" && RETRYABLE_REMOVAL_CODES.has(code);
+}
+
+function reportCleanupFailure(error: unknown, correlationId: string | undefined): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "editor.verification.windows-step-copy.cleanup-failed",
+      source: "editor.verification.windows-step-copy",
+      error,
+      redact: () => "A private step copy could not be removed.",
+    }),
+  );
+}
+
+// Used only where the copy is being made and the caller is synchronous: a copy that failed halfway.
+function removeCopySync(root: string, correlationId: string | undefined): void {
   try {
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   } catch (error) {
-    emitServerDiagnostic(
-      undefined,
-      serverDiagnosticFromError({
-        correlationId: correlationIdOrUnknown(correlationId),
-        operation: "editor.verification.windows-step-copy.cleanup-failed",
-        source: "editor.verification.windows-step-copy",
-        error,
-        redact: () => "A private step copy could not be removed.",
-      }),
-    );
+    reportCleanupFailure(error, correlationId);
   }
+}
+
+async function removeCopy(
+  root: string,
+  correlationId: string | undefined,
+  host: StepCopyRemovalHost,
+): Promise<StepCopyCleanup> {
+  const remove = host.remove ?? rm;
+  const sleep =
+    host.sleep ?? ((ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms)));
+  const clock = host.now ?? Date.now;
+  const startedAtMs = clock();
+  let retryCount = 0;
+  for (;;) {
+    try {
+      await remove(root, { recursive: true, force: true });
+      break;
+    } catch (error) {
+      if (retryCount >= REMOVE_MAX_RETRIES || !retryableRemoval(error)) {
+        reportCleanupFailure(error, correlationId);
+        break;
+      }
+      retryCount += 1;
+      await sleep(REMOVE_RETRY_DELAY_MS * retryCount);
+    }
+  }
+  return { durationMs: Math.max(0, clock() - startedAtMs), retryCount };
 }
 
 function makeCopy(
@@ -96,7 +163,7 @@ function makeCopy(
       ),
     );
   } catch (error) {
-    removeCopy(root, correlationId);
+    removeCopySync(root, correlationId);
     throw error;
   }
   return { ...real, root, selectedRoot: root };
@@ -107,6 +174,7 @@ export function privateStepWorkspace(
   real: WorkspaceInfo,
   activityLog: ServerLogSink,
   correlationId: string | undefined,
+  host: StepCopyRemovalHost = {},
 ): PrivateStepWorkspace {
   let copy: WorkspaceInfo | undefined;
   return {
@@ -114,9 +182,11 @@ export function privateStepWorkspace(
       copy ??= makeCopy(real, activityLog, correlationId);
       return copy;
     },
-    dispose: (): void => {
-      if (copy !== undefined) removeCopy(copy.root, correlationId);
+    dispose: async (): Promise<StepCopyCleanup | undefined> => {
+      if (copy === undefined) return undefined;
+      const { root } = copy;
       copy = undefined;
+      return removeCopy(root, correlationId, host);
     },
   };
 }

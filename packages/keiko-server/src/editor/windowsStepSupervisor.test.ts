@@ -66,10 +66,10 @@ function persistedOutcomes(stateRoot: string): readonly Record<string, unknown>[
 }
 
 describe("resolveWindowsStepSupervisor (#4496)", () => {
-  it("is absent off Windows and records nothing there", () => {
+  it("is absent off Windows and records nothing there", async () => {
     const stateRoot = temporary("keiko-step-supervisor-log-");
     expect(
-      resolveWindowsStepSupervisor({
+      await resolveWindowsStepSupervisor({
         platform: "darwin",
         activityLog: createActivityLogSink(stateRoot),
         runtime: () => {
@@ -95,7 +95,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     const bytes = Buffer.from("verified supervisor bytes");
     writeFileSync(helperPath, bytes);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    const supervisor = resolveWindowsStepSupervisor({
+    const supervisor = await resolveWindowsStepSupervisor({
       platform: "win32",
       env: {},
       activityLog: createActivityLogSink(stateRoot),
@@ -136,13 +136,13 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
   });
 
   // #4492: a refused step names the supervisor's closed code, and whether the step had started.
-  it("records the supervisor's refusal code on the step's correlation", () => {
+  it("records the supervisor's refusal code on the step's correlation", async () => {
     const stateRoot = temporary("keiko-step-supervisor-log-");
     const install = temporary("keiko-step-supervisor-install-");
     const helperPath = join(install, "keiko-runtime-supervisor.exe");
     const bytes = Buffer.from("verified supervisor bytes");
     writeFileSync(helperPath, bytes);
-    const supervisor = resolveWindowsStepSupervisor({
+    const supervisor = await resolveWindowsStepSupervisor({
       platform: "win32",
       env: {},
       activityLog: createActivityLogSink(stateRoot),
@@ -171,12 +171,12 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     expect(lines[1]).toMatchObject({ phase: "after-launch", refusalCode: 10 });
   });
 
-  it("refuses a step that gets no drive letters as isolation unavailable", () => {
+  it("refuses a step that gets no drive letters as isolation unavailable", async () => {
     const install = temporary("keiko-step-supervisor-install-");
     const helperPath = join(install, "keiko-runtime-supervisor.exe");
     const bytes = Buffer.from("verified supervisor bytes");
     writeFileSync(helperPath, bytes);
-    const supervisor = resolveWindowsStepSupervisor({
+    const supervisor = await resolveWindowsStepSupervisor({
       platform: "win32",
       env: {},
       activityLog: createActivityLogSink(temporary("keiko-step-supervisor-log-")),
@@ -188,13 +188,13 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     );
   });
 
-  it("is absent for a supervisor whose bytes miss the pin, and records why", () => {
+  it("is absent for a supervisor whose bytes miss the pin, and records why", async () => {
     const stateRoot = temporary("keiko-step-supervisor-log-");
     const install = temporary("keiko-step-supervisor-install-");
     const helperPath = join(install, "keiko-runtime-supervisor.exe");
     writeFileSync(helperPath, "replaced bytes");
     expect(
-      resolveWindowsStepSupervisor({
+      await resolveWindowsStepSupervisor({
         platform: "win32",
         env: {},
         activityLog: createActivityLogSink(stateRoot),
@@ -204,12 +204,12 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     expect(persistedOutcomes(stateRoot)[0]).toMatchObject({ outcome: "pin-mismatch" });
   });
 
-  it("refuses a step as isolation unavailable when the bytes change after resolving", () => {
+  it("refuses a step as isolation unavailable when the bytes change after resolving", async () => {
     const install = temporary("keiko-step-supervisor-install-");
     const helperPath = join(install, "keiko-runtime-supervisor.exe");
     const bytes = Buffer.from("verified supervisor bytes");
     writeFileSync(helperPath, bytes);
-    const supervisor = resolveWindowsStepSupervisor({
+    const supervisor = await resolveWindowsStepSupervisor({
       platform: "win32",
       env: {},
       activityLog: createActivityLogSink(temporary("keiko-step-supervisor-log-")),
@@ -226,10 +226,10 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     expect((refusal as Error).message.startsWith(ISOLATION_UNAVAILABLE_DENIAL_PREFIX)).toBe(true);
   });
 
-  it("is absent without a runtime, and records why", () => {
+  it("is absent without a runtime, and records why", async () => {
     const stateRoot = temporary("keiko-step-supervisor-log-");
     expect(
-      resolveWindowsStepSupervisor({
+      await resolveWindowsStepSupervisor({
         platform: "win32",
         env: {},
         activityLog: createActivityLogSink(stateRoot),
@@ -238,13 +238,13 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     ).toBeUndefined();
     expect(persistedOutcomes(stateRoot)[0]).toMatchObject({ outcome: "no-runtime" });
   });
-  it("is absent for a runtime that carries no supervisor pin, and records why", () => {
+  it("is absent for a runtime that carries no supervisor pin, and records why", async () => {
     const stateRoot = temporary("keiko-step-supervisor-log-");
     const helperPath = join(temporary("keiko-step-supervisor-install-"), "supervisor.exe");
     writeFileSync(helperPath, "unpinned supervisor bytes");
     const unpinned = { nativeHelperPath: helperPath } as unknown as ResolvedPortableOpenCodeRuntime;
     expect(
-      resolveWindowsStepSupervisor({
+      await resolveWindowsStepSupervisor({
         platform: "win32",
         env: {},
         activityLog: createActivityLogSink(stateRoot),
@@ -577,14 +577,14 @@ describe("windowsMavenRepository (#4492)", () => {
     expect(isRealDirectory(join(home, "missing"))).toBe(false);
   });
 
-  it("is granted by the resolved supervisor and recorded as present", () => {
+  it("is granted by the resolved supervisor and recorded as present", async () => {
     const stateRoot = temporary("keiko-step-supervisor-log-");
     const install = temporary("keiko-step-supervisor-install-");
     const helperPath = join(install, "keiko-runtime-supervisor.exe");
     const bytes = Buffer.from("verified supervisor bytes");
     writeFileSync(helperPath, bytes);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    const supervisor = resolveWindowsStepSupervisor({
+    const supervisor = await resolveWindowsStepSupervisor({
       platform: "win32",
       env: { USERPROFILE: profile },
       activityLog: createActivityLogSink(stateRoot),

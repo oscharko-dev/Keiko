@@ -23,6 +23,12 @@
 //                     orchestration between steps. The install's own duration is on
 //                     `editor.verification.dependencies`; `dependencyBootstrap` names the outcome.
 //   probeDurationMs   the isolation probe, which runs before the report's clock starts.
+//   supervisorAttestationMs / stepNodeAttestationMs
+//                     the part of the probe the Windows supervisor's and the step Node.js's byte
+//                     attestation took (Windows only).
+//   stepCopyCleanupMs / stepCopyCleanupRetryCount
+//                     removing the run's private step copy after the last step, inside the
+//                     exclusive workspace scope, and how often that removal was retried.
 // The time a run waited for the workspace is the gap between its `editor.verification.workspace`
 // `waiting` and `acquired` lines.
 
@@ -106,6 +112,10 @@ export const VERIFICATION_COMPLETION_FIELD_CONTRACTS = {
   outsideStepsMs: DURATION_FIELD,
   maxStepDurationMs: DURATION_FIELD,
   probeDurationMs: DURATION_FIELD,
+  supervisorAttestationMs: DURATION_FIELD,
+  stepNodeAttestationMs: DURATION_FIELD,
+  stepCopyCleanupMs: DURATION_FIELD,
+  stepCopyCleanupRetryCount: { type: "integer", dataClass: "count", required: false },
   testStatus: STATUS_FIELD,
   testDurationMs: DURATION_FIELD,
   targetedTestStatus: STATUS_FIELD,
@@ -156,6 +166,10 @@ interface VerificationCompletionLogFields {
   readonly outsideStepsMs?: number;
   readonly maxStepDurationMs?: number;
   readonly probeDurationMs?: number;
+  readonly supervisorAttestationMs?: number;
+  readonly stepNodeAttestationMs?: number;
+  readonly stepCopyCleanupMs?: number;
+  readonly stepCopyCleanupRetryCount?: number;
   readonly testStatus?: VerificationStatus;
   readonly testDurationMs?: number;
   readonly targetedTestStatus?: VerificationStatus;
@@ -309,7 +323,26 @@ function isolationFields(execution: ExecuteVerificationResult): VerificationComp
       ? {}
       : { networkEnforcement: execution.networkEnforcement }),
     ...(probeMs === undefined ? {} : { probeDurationMs: probeMs }),
+    ...windowsStepFields(execution),
   };
+}
+
+// Whole milliseconds and a count, or nothing: a field the execution did not report is omitted.
+function windowsStepFields(execution: ExecuteVerificationResult): VerificationCompletionLogFields {
+  const supervisorMs = optionalMilliseconds(execution.supervisorAttestationMs);
+  const stepNodeMs = optionalMilliseconds(execution.stepNodeAttestationMs);
+  const cleanupMs = optionalMilliseconds(execution.stepCopyCleanupMs);
+  const retries = optionalMilliseconds(execution.stepCopyCleanupRetryCount);
+  return {
+    ...(supervisorMs === undefined ? {} : { supervisorAttestationMs: supervisorMs }),
+    ...(stepNodeMs === undefined ? {} : { stepNodeAttestationMs: stepNodeMs }),
+    ...(cleanupMs === undefined ? {} : { stepCopyCleanupMs: cleanupMs }),
+    ...(retries === undefined ? {} : { stepCopyCleanupRetryCount: retries }),
+  };
+}
+
+function optionalMilliseconds(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : wholeMilliseconds(value);
 }
 
 // The fields the `editor.verification.execute` completion line adds to its counts: where the wall

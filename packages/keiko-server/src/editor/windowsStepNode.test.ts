@@ -104,11 +104,11 @@ function supervisorLines(stateRoot: string): readonly Record<string, unknown>[] 
 }
 
 describe("the runtime's step Node.js (#4492)", () => {
-  it("is offered when its bytes match the pin, and the supervisor line says patched", () => {
+  it("is offered when its bytes match the pin, and the supervisor line says patched", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     const directory = installStepNode(root);
-    const supervisor = resolve(stateRoot, runtime);
+    const supervisor = await resolve(stateRoot, runtime);
     expect(supervisor?.stepNode?.directory).toBe(directory);
     expect(supervisor?.stepNode?.executable).toBe(join(directory, "node.exe"));
     expect(supervisorLines(stateRoot)[0]).toMatchObject({
@@ -119,11 +119,11 @@ describe("the runtime's step Node.js (#4492)", () => {
     });
   });
 
-  it("records each step's launch decision on the run's correlation, with closed values only", () => {
+  it("records each step's launch decision on the run's correlation, with closed values only", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     installStepNode(root);
-    const supervisor = resolve(stateRoot, runtime);
+    const supervisor = await resolve(stateRoot, runtime);
     supervisor?.stepNode?.record({
       image: "step-node",
       npmLaunch: "install-cmd",
@@ -151,10 +151,10 @@ describe("the runtime's step Node.js (#4492)", () => {
     expect(JSON.stringify(lines)).not.toContain(root);
   });
 
-  it("runs the steps as before and says absent when the runtime carries none", () => {
+  it("runs the steps as before and says absent when the runtime carries none", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { runtime } = runtimeRoot();
-    const supervisor = resolve(stateRoot, runtime);
+    const supervisor = await resolve(stateRoot, runtime);
     expect(supervisor).toBeDefined();
     expect(supervisor?.stepNode).toBeUndefined();
     expect(supervisorLines(stateRoot)[0]).toMatchObject({
@@ -163,18 +163,18 @@ describe("the runtime's step Node.js (#4492)", () => {
     });
   });
 
-  it("says absent when this server carries no pin for it", () => {
+  it("says absent when this server carries no pin for it", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     installStepNode(root);
-    expect(resolve(stateRoot, runtime, () => undefined)?.stepNode).toBeUndefined();
+    expect((await resolve(stateRoot, runtime, () => undefined))?.stepNode).toBeUndefined();
     expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "absent" });
   });
 
-  it("says absent, not mismatch, when there is no supervisor to find the runtime from", () => {
+  it("says absent, not mismatch, when there is no supervisor to find the runtime from", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     expect(
-      resolveWindowsStepSupervisor({
+      await resolveWindowsStepSupervisor({
         platform: "win32",
         env: {},
         activityLog: createActivityLogSink(stateRoot),
@@ -191,11 +191,11 @@ describe("the runtime's step Node.js (#4492)", () => {
   it.each([
     ["different bytes of another size", Buffer.from("tampered")],
     ["different bytes of the pinned size", Buffer.from("patched step node bytez")],
-  ])("refuses %s and says mismatch", (_label, bytes) => {
+  ])("refuses %s and says mismatch", async (_label, bytes) => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     installStepNode(root, bytes);
-    const supervisor = resolve(stateRoot, runtime);
+    const supervisor = await resolve(stateRoot, runtime);
     // The supervisor itself is still available: only the step Node.js is withheld.
     expect(supervisor).toBeDefined();
     expect(supervisor?.stepNode).toBeUndefined();
@@ -205,24 +205,24 @@ describe("the runtime's step Node.js (#4492)", () => {
     });
   });
 
-  it("refuses a folder that holds anything besides the pinned file", () => {
+  it("refuses a folder that holds anything besides the pinned file", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     const directory = installStepNode(root);
     writeFileSync(join(directory, "payload.dll"), "unverified");
-    expect(resolve(stateRoot, runtime)?.stepNode).toBeUndefined();
+    expect((await resolve(stateRoot, runtime))?.stepNode).toBeUndefined();
     expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "mismatch" });
   });
 
-  it("refuses a folder with no node.exe in it", () => {
+  it("refuses a folder with no node.exe in it", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     mkdirSync(join(root, "step-node"));
-    expect(resolve(stateRoot, runtime)?.stepNode).toBeUndefined();
+    expect((await resolve(stateRoot, runtime))?.stepNode).toBeUndefined();
     expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "mismatch" });
   });
 
-  it("refuses a folder that is a link, however good the bytes behind it", () => {
+  it("refuses a folder that is a link, however good the bytes behind it", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     const elsewhere = temporary("keiko-step-node-elsewhere-");
@@ -232,29 +232,29 @@ describe("the runtime's step Node.js (#4492)", () => {
       join(root, "step-node"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    expect(resolve(stateRoot, runtime)?.stepNode).toBeUndefined();
+    expect((await resolve(stateRoot, runtime))?.stepNode).toBeUndefined();
     expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "mismatch" });
   });
 
-  it("refuses a node.exe that is a link to the pinned bytes", () => {
+  it("refuses a node.exe that is a link to the pinned bytes", async () => {
     const stateRoot = temporary("keiko-step-node-log-");
     const { root, runtime } = runtimeRoot();
     const elsewhere = temporary("keiko-step-node-elsewhere-");
     writeFileSync(join(elsewhere, "node.exe"), STEP_NODE_BYTES);
     mkdirSync(join(root, "step-node"));
     symlinkSync(join(elsewhere, "node.exe"), join(root, "step-node", "node.exe"), "file");
-    expect(resolve(stateRoot, runtime)?.stepNode).toBeUndefined();
+    expect((await resolve(stateRoot, runtime))?.stepNode).toBeUndefined();
     expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "mismatch" });
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "says mismatch, never throws, when the file cannot be read",
-    () => {
+    async () => {
       const stateRoot = temporary("keiko-step-node-log-");
       const { root, runtime } = runtimeRoot();
       const directory = installStepNode(root);
       chmodSync(join(directory, "node.exe"), 0o000);
-      expect(resolve(stateRoot, runtime)?.stepNode).toBeUndefined();
+      expect((await resolve(stateRoot, runtime))?.stepNode).toBeUndefined();
       expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "mismatch" });
     },
   );

@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   discoverNpmLaneOpenCode,
+  discoverNpmLaneRuntimeSupervisor,
   npmLanePackageRoot,
   type DevLaneOpenCodeDiscovery,
 } from "./devLanePortableCodingRuntime.js";
@@ -547,6 +548,59 @@ describe("npm-lane OpenCode discovery on Windows", () => {
     expect(npmLanePackageRoot(discovery.runtime)).toBe(dirname(install.runtimeRoot));
   });
 
+  // #4491: a verification step runs only the supervisor, so its discovery locates that one file
+  // and leaves every byte of it, and of the OpenCode payload, to the caller's own attestation.
+  describe("locating only the supervisor for a verification step", () => {
+    function locate(
+      install: GlobalInstall,
+      approval: NpmLaneRuntimeApproval = install.approval,
+      platform: NodeJS.Platform = "win32",
+    ): ReturnType<typeof discoverNpmLaneRuntimeSupervisor> {
+      return discoverNpmLaneRuntimeSupervisor({
+        env: install.env,
+        platform,
+        arch: "x64",
+        npmLaneApprovals: { "windows-x64": approval },
+      });
+    }
+
+    it("finds the supervisor with its compiled pin and reads none of its bytes", () => {
+      const install = windowsInstall();
+      expect(locate(install)).toEqual({
+        outcome: "found",
+        supervisorPath: join(install.runtimeRoot, "native", "keiko-runtime-supervisor.exe"),
+        sha256: sha256(SUPERVISOR),
+        sizeBytes: SUPERVISOR.length,
+      });
+      // Not the approved bytes: still found, because the caller attests them.
+      expect(locate(windowsInstall("supervisor-bin4ry"))).toMatchObject({ outcome: "found" });
+    });
+
+    it("does not look at the OpenCode payload", () => {
+      const install = windowsInstall();
+      write(
+        join(install.runtimeRoot, "opencode-compatible", "payload", "bin", "opencode.exe"),
+        "x",
+      );
+      expect(locate(install)).toMatchObject({ outcome: "found" });
+    });
+
+    it("is refused for a missing supervisor, an unpinned approval and an unexpected native entry", () => {
+      expect(locate(windowsInstall(null))).toEqual({ outcome: "refused" });
+      const install = windowsInstall();
+      const { runtimeSupervisor: _pin, ...unpinned } = install.approval;
+      expect(locate(install, unpinned)).toEqual({ outcome: "refused" });
+      write(join(install.runtimeRoot, "native", "planted.exe"), "x", 0o755);
+      expect(locate(install)).toEqual({ outcome: "refused" });
+    });
+
+    it("is inactive when no runtime package is installed or the host is not Windows", () => {
+      const install = windowsInstall();
+      expect(locate(install, install.approval, "darwin")).toEqual({ outcome: "inactive" });
+      expect(locate({ ...install, env: {} })).toEqual({ outcome: "inactive" });
+    });
+  });
+
   it("refuses a package without its supervisor", () => {
     expect(discoverWindows(windowsInstall(null))).toEqual({
       outcome: "refused",
@@ -574,13 +628,16 @@ describe("npm-lane OpenCode discovery on Windows", () => {
   // #4491: the runtime the real npm-lane discovery activates is the one the verification step
   // supervisor is governed by, at the pin the discovery verified, and by nothing else.
   describe("as the verification step supervisor's runtime", () => {
-    function supervisorLine(install: GlobalInstall, tamper?: string): Record<string, unknown> {
+    async function supervisorLine(
+      install: GlobalInstall,
+      tamper?: string,
+    ): Promise<Record<string, unknown>> {
       const discovery = discoverWindows(install);
       if (discovery.outcome !== "activated") throw new Error("expected activation");
       expect(windowsGatewayHelperPin(discovery.runtime)).toBe(sha256(SUPERVISOR));
       if (tamper !== undefined) write(discovery.runtime.nativeHelperPath ?? "", tamper, 0o755);
       const events: ServerLogEvent[] = [];
-      const supervisor = resolveWindowsStepSupervisor({
+      const supervisor = await resolveWindowsStepSupervisor({
         platform: "win32",
         env: { USERPROFILE: "C:\\Users\\dev" },
         activityLog: { write: (event): void => void events.push(event) },
@@ -595,11 +652,11 @@ describe("npm-lane OpenCode discovery on Windows", () => {
 
     // The step's copy is verified against the pin each time one is written, so bytes replaced
     // between two steps of one execution refuse the second step as isolation unavailable.
-    it("refuses the second step as isolation unavailable when the bytes change between steps", () => {
+    it("refuses the second step as isolation unavailable when the bytes change between steps", async () => {
       const discovery = discoverWindows(windowsInstall());
       if (discovery.outcome !== "activated") throw new Error("expected activation");
       const defined = new Set<string>();
-      const supervisor = resolveWindowsStepSupervisor({
+      const supervisor = await resolveWindowsStepSupervisor({
         platform: "win32",
         env: { USERPROFILE: "C:\\Users\\dev" },
         activityLog: { write: (): void => undefined },
@@ -621,12 +678,12 @@ describe("npm-lane OpenCode discovery on Windows", () => {
       );
     });
 
-    it("is available when the installed supervisor carries the discovered pin", () => {
-      expect(supervisorLine(windowsInstall())).toMatchObject({ outcome: "available" });
+    it("is available when the installed supervisor carries the discovered pin", async () => {
+      expect(await supervisorLine(windowsInstall())).toMatchObject({ outcome: "available" });
     });
 
-    it("is no supervisor, recorded as pin-mismatch, when the installed bytes changed afterwards", () => {
-      expect(supervisorLine(windowsInstall(), "supervisor-bin4ry")).toMatchObject({
+    it("is no supervisor, recorded as pin-mismatch, when the installed bytes changed afterwards", async () => {
+      expect(await supervisorLine(windowsInstall(), "supervisor-bin4ry")).toMatchObject({
         outcome: "pin-mismatch",
       });
     });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, createReadStream, openSync, readSync } from "node:fs";
 
 /** One read's size: a payload of any admitted size is hashed in this much memory (#4495). */
 export const FILE_SHA256_CHUNK_BYTES = 1024 * 1024;
@@ -21,5 +21,17 @@ export function sha256FileSync(path: string): string {
   } finally {
     closeSync(descriptor);
   }
+  return hash.digest("hex");
+}
+
+/**
+ * The SHA-256 of a file's bytes, streamed without blocking the event loop. The same digest as
+ * `sha256FileSync`, for a caller on a request path whose server streams must keep flowing while a
+ * large executable is attested.
+ */
+export async function sha256FileAsync(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = createReadStream(path, { highWaterMark: FILE_SHA256_CHUNK_BYTES });
+  for await (const chunk of stream) hash.update(chunk as Buffer);
   return hash.digest("hex");
 }

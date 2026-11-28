@@ -117,7 +117,11 @@ package), so an npm installation's steps are governed by the runtime package it 
 runs from. Like the activation, it stops at a refused packaged or dev-checkout lane instead of falling
 through to the next one, and each verification execution resolves the supervisor once, sharing it between its isolation
 probe and its run and remembering nothing afterwards (a Coding run reuses one correlation id for every
-attempt), with the discovery failure line carrying the run's correlation id. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
+attempt), with the discovery failure line carrying the run's correlation id. A verification attests only what its
+steps execute: on the npm lane the discovery locates the supervisor and reads its size and digest once, asynchronously
+and streamed, and hashes the step Node.js on every use (never a cache keyed on metadata); the OpenCode payload tree is
+the sidecar's own launch attestation and is not hashed for a verification. The private step copy is removed
+asynchronously, awaited inside the exclusive workspace scope before the next execution. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
 denies it as isolation unavailable instead of reporting a missing script.
 
 ## Context

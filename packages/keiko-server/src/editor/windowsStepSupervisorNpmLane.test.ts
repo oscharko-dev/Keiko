@@ -11,9 +11,11 @@ const discovered = vi.hoisted((): { runtime: unknown; hosts: unknown[] } => ({
 }));
 
 vi.mock("../coding-runtime/runtimeLaneDiscovery.js", () => ({
-  discoverActivatedRuntime: (host: unknown): unknown => {
+  discoverSupervisorRuntime: (host: unknown): unknown => {
     discovered.hosts.push(host);
-    return discovered.runtime;
+    return discovered.runtime === undefined
+      ? undefined
+      : { kind: "activated-runtime", runtime: discovered.runtime };
   },
 }));
 
@@ -41,7 +43,7 @@ function npmLaneRuntime(bytes: Buffer, helperPath: string): unknown {
 }
 
 describe("the Windows step supervisor on the npm lane (#4491)", () => {
-  it("is available for the runtime the Coding activation found, resolved through the shared order", () => {
+  it("is available for the runtime the Coding activation found, resolved through the shared order", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-npm-step-supervisor-")));
     roots.push(root);
     const helperPath = join(root, "keiko-runtime-supervisor.exe");
@@ -51,7 +53,7 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
     const events: ServerLogEvent[] = [];
     const env = { USERPROFILE: String.raw`C:\Users\dev` };
 
-    const supervisor = resolveWindowsStepSupervisor({
+    const supervisor = await resolveWindowsStepSupervisor({
       platform: "win32",
       env,
       activityLog: { write: (event): void => void events.push(event) },
@@ -65,10 +67,10 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
     expect(line?.correlationId).toBe("npm-lane-step-supervisor");
   });
 
-  it("stays absent, recorded as no-runtime, when no lane holds an activated runtime", () => {
+  it("stays absent, recorded as no-runtime, when no lane holds an activated runtime", async () => {
     const events: ServerLogEvent[] = [];
     expect(
-      resolveWindowsStepSupervisor({
+      await resolveWindowsStepSupervisor({
         platform: "win32",
         env: {},
         activityLog: { write: (event): void => void events.push(event) },
@@ -80,7 +82,7 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
   });
   // Nothing is remembered between executions: the Coding run reuses its run id for every
   // verification attempt, so a refused discovery must not stick and a replaced package is seen.
-  it("discovers again for each execution that reuses a correlation id", () => {
+  it("discovers again for each execution that reuses a correlation id", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-npm-step-supervisor-")));
     roots.push(root);
     const helperPath = join(root, "keiko-runtime-supervisor.exe");
@@ -95,11 +97,11 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
       });
 
     discovered.runtime = undefined;
-    expect(resolveOnce()).toBeUndefined();
+    expect(await resolveOnce()).toBeUndefined();
     discovered.runtime = npmLaneRuntime(bytes, helperPath);
-    expect(resolveOnce()).toBeDefined();
+    expect(await resolveOnce()).toBeDefined();
     discovered.runtime = undefined;
-    expect(resolveOnce()).toBeUndefined();
+    expect(await resolveOnce()).toBeUndefined();
     expect(discovered.hosts).toEqual([
       { env: {}, correlationId: "coding-run-7" },
       { env: {}, correlationId: "coding-run-7" },

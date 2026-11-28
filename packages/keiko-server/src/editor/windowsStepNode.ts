@@ -17,7 +17,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { NPM_LANE_RUNTIME_APPROVALS } from "../coding-runtime/npmLaneRuntimeApprovals.js";
 import type { NpmLaneStepNodeApproval } from "../coding-runtime/npmLaneRuntimeApprovals.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { sha256FileSync } from "../file-sha256.js";
+import { sha256FileAsync, sha256FileSync } from "../file-sha256.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 
 const WINDOWS_STEP_NODE_OPERATION = defineActivityLogOperation({
@@ -94,12 +94,15 @@ export interface StepNodeFs {
   readonly lstat: (path: string) => Stats | undefined;
   readonly readdir: (path: string) => readonly string[];
   readonly sha256: (path: string) => string;
+  /** The streaming digest the asynchronous resolution uses; absent, `sha256` answers it. */
+  readonly sha256Async?: (path: string) => Promise<string>;
 }
 
 const nodeStepNodeFs: StepNodeFs = {
   lstat: (path) => lstatSync(path, { throwIfNoEntry: false }),
   readdir: (path) => readdirSync(path),
   sha256: sha256FileSync,
+  sha256Async: sha256FileAsync,
 };
 
 interface ResolveStepNodeInput {
@@ -113,8 +116,8 @@ interface ResolveStepNodeInput {
 
 // A lstat of a link reports `isFile() === false`, so the link case needs no condition of its own.
 // The single link count is checked on its own: a hard link shares the pinned bytes with a file the
-// person can still write through another name.
-function mismatchOf(
+// person can still write through another name. The bytes themselves are hashed by the caller.
+function structuralMismatchOf(
   directory: string,
   executable: string,
   pin: NpmLaneStepNodeApproval,
@@ -125,23 +128,57 @@ function mismatchOf(
   if (fs.readdir(directory).length !== 1) return "extra-entries";
   const entry = fs.lstat(executable);
   if (entry === undefined || !entry.isFile() || entry.nlink !== 1) return "not-ordinary-file";
-  if (entry.size !== pin.sizeBytes) return "size";
-  // Hashed on every resolution: the folder's owner can restore every timestamp after a rewrite,
-  // so no metadata match proves the bytes are still the pinned build.
-  return fs.sha256(executable) === pin.sha256 ? undefined : "hash";
+  return entry.size === pin.sizeBytes ? undefined : "size";
 }
 
-function inspect(
-  directory: string,
-  pin: NpmLaneStepNodeApproval,
+/** A step Node.js that passed every structural check and awaits its byte comparison. */
+interface PendingStepNode {
+  readonly directory: string;
+  readonly executable: string;
+  readonly pin: NpmLaneStepNodeApproval;
+}
+
+function reportUnreadableStepNode(input: ResolveStepNodeInput, error: unknown): StepNodeResolution {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation: "editor.verification.windows-step-supervisor.step-node-unreadable",
+      source: "editor.verification.windows-step-supervisor",
+      error,
+      redact: () => "The Windows step Node.js could not be read to verify it.",
+    }),
+  );
+  return { outcome: "mismatch", mismatch: "unreadable" };
+}
+
+// Everything but the hash: the answer when it is already known, else the build to hash.
+function structuralResolution(
   input: ResolveStepNodeInput,
-): StepNodeResolution {
-  if ((input.fs ?? nodeStepNodeFs).lstat(directory) === undefined) return { outcome: "absent" };
-  const executable = join(directory, STEP_NODE_FILE_NAME);
-  const mismatch = mismatchOf(directory, executable, pin, input);
-  return mismatch === undefined
-    ? { outcome: "patched", directory, executable }
-    : { outcome: "mismatch", mismatch };
+): { readonly done: StepNodeResolution } | { readonly pending: PendingStepNode } {
+  const { supervisorPath, pin } = input;
+  if (supervisorPath === undefined || pin === undefined) return { done: { outcome: "absent" } };
+  const directory = join(dirname(dirname(supervisorPath)), STEP_NODE_DIRECTORY_NAME);
+  try {
+    if ((input.fs ?? nodeStepNodeFs).lstat(directory) === undefined) {
+      return { done: { outcome: "absent" } };
+    }
+    const executable = join(directory, STEP_NODE_FILE_NAME);
+    const mismatch = structuralMismatchOf(directory, executable, pin, input);
+    return mismatch === undefined
+      ? { pending: { directory, executable, pin } }
+      : { done: { outcome: "mismatch", mismatch } };
+  } catch (error) {
+    return { done: reportUnreadableStepNode(input, error) };
+  }
+}
+
+// Hashed on every resolution: the folder's owner can restore every timestamp after a rewrite, so
+// no metadata match proves the bytes are still the pinned build.
+function hashedResolution(pending: PendingStepNode, sha256: string): StepNodeResolution {
+  return sha256 === pending.pin.sha256
+    ? { outcome: "patched", directory: pending.directory, executable: pending.executable }
+    : { outcome: "mismatch", mismatch: "hash" };
 }
 
 /**
@@ -156,23 +193,32 @@ function inspect(
  * `patches/node-26.13.1-win-crates-synchronization.patch`; the pin restates that build's receipt.
  */
 export function resolveStepNode(input: ResolveStepNodeInput): StepNodeResolution {
-  const { supervisorPath, pin } = input;
-  if (supervisorPath === undefined || pin === undefined) return { outcome: "absent" };
-  const directory = join(dirname(dirname(supervisorPath)), STEP_NODE_DIRECTORY_NAME);
+  const structural = structuralResolution(input);
+  if ("done" in structural) return structural.done;
   try {
-    return inspect(directory, pin, input);
+    const fs = input.fs ?? nodeStepNodeFs;
+    return hashedResolution(structural.pending, fs.sha256(structural.pending.executable));
   } catch (error) {
-    emitServerDiagnostic(
-      undefined,
-      serverDiagnosticFromError({
-        correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
-        operation: "editor.verification.windows-step-supervisor.step-node-unreadable",
-        source: "editor.verification.windows-step-supervisor",
-        error,
-        redact: () => "The Windows step Node.js could not be read to verify it.",
-      }),
-    );
-    return { outcome: "mismatch", mismatch: "unreadable" };
+    return reportUnreadableStepNode(input, error);
+  }
+}
+
+/**
+ * `resolveStepNode` for a request path: the same checks, with the bytes streamed so the server's
+ * event loop keeps serving while the build is hashed. Never cached: every call hashes the file.
+ */
+export async function resolveStepNodeAsync(
+  input: ResolveStepNodeInput,
+): Promise<StepNodeResolution> {
+  const structural = structuralResolution(input);
+  if ("done" in structural) return structural.done;
+  try {
+    const fs = input.fs ?? nodeStepNodeFs;
+    const digest =
+      fs.sha256Async ?? ((path: string): Promise<string> => Promise.resolve(fs.sha256(path)));
+    return hashedResolution(structural.pending, await digest(structural.pending.executable));
+  } catch (error) {
+    return reportUnreadableStepNode(input, error);
   }
 }
 

@@ -5,8 +5,7 @@
 // runtime's patched Node.js (#4492) is verified here too; without a verified one the steps run as
 // they did before and the log names it, so a project that needs no Node.js is unaffected.
 
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import {
   activityLogEvent,
@@ -18,7 +17,11 @@ import type {
   WindowsStepSupervisorCopy,
 } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { discoverActivatedRuntime } from "../coding-runtime/runtimeLaneDiscovery.js";
+import {
+  discoverSupervisorRuntime,
+  type SupervisorRuntimeDiscovery,
+} from "../coding-runtime/runtimeLaneDiscovery.js";
+import { sha256FileAsync, sha256FileSync } from "../file-sha256.js";
 import {
   discardVerifiedHelperCopy,
   verifiedHelperExecutionCopy,
@@ -41,7 +44,12 @@ import {
   type WindowsDriveHost,
   type WindowsStepDriveScope,
 } from "./windowsStepDrives.js";
-import { resolveStepNode, windowsStepNodeFor, windowsStepNodePin } from "./windowsStepNode.js";
+import {
+  resolveStepNode,
+  resolveStepNodeAsync,
+  windowsStepNodeFor,
+  windowsStepNodePin,
+} from "./windowsStepNode.js";
 
 const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -363,18 +371,30 @@ export function windowsMavenRepository(
   return isDirectory(repository) ? repository : undefined;
 }
 
-// The runtime found the way the Coding activation finds it: packaged release, dev checkout, then the
-// npm runtime package (#4491), so an installation whose Coding runs start has governed steps too.
-// Nothing is remembered between resolutions: a refused discovery, or a runtime package reinstalled
-// meanwhile, is seen by the next verification execution, which resolves its supervisor once.
-function discoveredRuntime(
+// What a step needs of the installed runtime, found the way the Coding activation finds it:
+// packaged release, dev checkout, then the npm runtime package (#4491), so an installation whose
+// Coding runs start has governed steps too. On the npm lane only the supervisor is located: the
+// OpenCode payload tree is the sidecar's own launch attestation, not a step's. Nothing is
+// remembered between resolutions: a refused discovery, or a runtime package reinstalled meanwhile,
+// is seen by the next verification execution, which resolves its supervisor once.
+function discoveredSupervisor(
+  input: WindowsStepSupervisorInput,
   env: NodeJS.ProcessEnv,
-  correlationId: string | undefined,
-): ResolvedPortableOpenCodeRuntime | undefined {
-  return discoverActivatedRuntime({
+): SupervisorRuntimeDiscovery | undefined {
+  if (input.runtime !== undefined) {
+    const runtime = input.runtime();
+    return runtime === undefined ? undefined : { kind: "activated-runtime", runtime };
+  }
+  return discoverSupervisorRuntime({
     env,
-    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
   });
+}
+
+/** How long each byte attestation of a resolution took, in whole milliseconds. */
+export interface WindowsStepAttestationTimings {
+  readonly supervisorMs: number;
+  readonly stepNodeMs: number;
 }
 
 export interface WindowsStepSupervisorInput {
@@ -390,26 +410,72 @@ export interface WindowsStepSupervisorInput {
   readonly driveHost?: WindowsDriveHost | undefined;
   /** Injectable for tests; defaults to the step Node.js pin compiled into this server. */
   readonly stepNodePin?: (() => NpmLaneStepNodeApproval | undefined) | undefined;
+  /** Hermetic test seam: the clock the attestation durations are measured with. */
+  readonly now?: (() => number) | undefined;
+}
+
+/** The supervisor to attest: where it is, and the digest and size it must carry. */
+interface SupervisorCandidate {
+  readonly helperPath: string;
+  readonly pin: string;
+  readonly sizeBytes?: number | undefined;
 }
 
 type SupervisorBinary =
   | { readonly outcome: "available"; readonly helperPath: string; readonly pin: string }
   | { readonly outcome: "no-runtime" | "no-pin" | "pin-mismatch" };
 
-// Whether the installed bytes carry the pin now; each step's copy is verified again when written.
-function matchesPin(helperPath: string, pin: string): boolean {
-  if (!existsSync(helperPath)) return false;
-  return createHash("sha256").update(readFileSync(helperPath)).digest("hex") === pin;
+type SupervisorSelection =
+  { readonly candidate: SupervisorCandidate } | { readonly outcome: "no-runtime" | "no-pin" };
+
+function supervisorSelection(found: SupervisorRuntimeDiscovery | undefined): SupervisorSelection {
+  if (found === undefined) return { outcome: "no-runtime" };
+  if (found.kind === "npm-supervisor") {
+    return {
+      candidate: {
+        helperPath: found.supervisorPath,
+        pin: found.sha256,
+        sizeBytes: found.sizeBytes,
+      },
+    };
+  }
+  const helperPath = found.runtime.nativeHelperPath;
+  if (helperPath === undefined) return { outcome: "no-runtime" };
+  const pin = windowsGatewayHelperPin(found.runtime);
+  return pin === undefined ? { outcome: "no-pin" } : { candidate: { helperPath, pin } };
 }
 
-function supervisorBinary(runtime: ResolvedPortableOpenCodeRuntime | undefined): SupervisorBinary {
-  const helperPath = runtime?.nativeHelperPath;
-  if (runtime === undefined || helperPath === undefined) return { outcome: "no-runtime" };
-  const pin = windowsGatewayHelperPin(runtime);
-  if (pin === undefined) return { outcome: "no-pin" };
-  return matchesPin(helperPath, pin)
-    ? { outcome: "available", helperPath, pin }
+// Whether the file is there at the pinned size; the digest is compared by the caller.
+function candidateSizeMatches(candidate: SupervisorCandidate): boolean {
+  if (!existsSync(candidate.helperPath)) return false;
+  return (
+    candidate.sizeBytes === undefined || statSync(candidate.helperPath).size === candidate.sizeBytes
+  );
+}
+
+function attestedBinary(candidate: SupervisorCandidate, sha256: string): SupervisorBinary {
+  return sha256 === candidate.pin
+    ? { outcome: "available", helperPath: candidate.helperPath, pin: candidate.pin }
     : { outcome: "pin-mismatch" };
+}
+
+// Whether the installed bytes carry the pin now, read once; each step's copy is verified again when
+// written. Never remembered: the next verification reads the bytes it is about to execute.
+async function attestSupervisor(
+  selection: SupervisorSelection,
+  sha256: (path: string) => Promise<string>,
+): Promise<SupervisorBinary> {
+  if (!("candidate" in selection)) return { outcome: selection.outcome };
+  const { candidate } = selection;
+  if (!candidateSizeMatches(candidate)) return { outcome: "pin-mismatch" };
+  return attestedBinary(candidate, await sha256(candidate.helperPath));
+}
+
+function attestSupervisorSync(selection: SupervisorSelection): SupervisorBinary {
+  if (!("candidate" in selection)) return { outcome: selection.outcome };
+  const { candidate } = selection;
+  if (!candidateSizeMatches(candidate)) return { outcome: "pin-mismatch" };
+  return attestedBinary(candidate, sha256FileSync(candidate.helperPath));
 }
 
 // A copy that cannot be verified (its bytes miss the pin, or it cannot be written) is a supervisor
@@ -489,19 +555,6 @@ function verifiedCopies(
   };
 }
 
-// The runtime's patched Node.js, looked for only beside a verified supervisor (#4492).
-function verifiedStepNode(
-  binary: SupervisorBinary,
-  input: WindowsStepSupervisorInput,
-): ReturnType<typeof resolveStepNode> {
-  return resolveStepNode({
-    supervisorPath: binary.outcome === "available" ? binary.helperPath : undefined,
-    pin: (input.stepNodePin ?? windowsStepNodePin)(),
-    isDirectory: isRealDirectory,
-    correlationId: input.correlationId,
-  });
-}
-
 // The one supervisor line a resolution writes: counts, closed values and flags, never a path.
 function recordResolution(
   input: WindowsStepSupervisorInput,
@@ -535,21 +588,45 @@ function recordResolution(
   );
 }
 
-/**
- * The supervisor a verification run's steps are framed to on Windows, or undefined on every other
- * platform and when no verified supervisor exists. Resolving it records the outcome.
- */
-export function resolveWindowsStepSupervisor(
-  input: WindowsStepSupervisorInput,
-): WindowsStepSupervisor | undefined {
-  if ((input.platform ?? process.platform) !== "win32") return undefined;
+// What a resolution settles before any byte is hashed: where the supervisor is, the read roots, the
+// person's Maven repository.
+interface ResolutionPlan {
+  readonly env: NodeJS.ProcessEnv;
+  readonly selection: SupervisorSelection;
+  readonly readRoots: readonly string[];
+  readonly profile: string | undefined;
+  readonly refused: WindowsReadRootRefusals;
+  readonly mavenRepository: string | undefined;
+}
+
+function planResolution(input: WindowsStepSupervisorInput): ResolutionPlan {
   const env = input.env ?? process.env;
-  const binary = supervisorBinary(
-    input.runtime === undefined ? discoveredRuntime(env, input.correlationId) : input.runtime(),
-  );
+  const selection = supervisorSelection(discoveredSupervisor(input, env));
   const { roots: readRoots, profile, refused } = windowsStepReadRoots(env);
   const mavenRepository = (input.mavenRepository ?? windowsMavenRepository)(env);
-  const stepNode = verifiedStepNode(binary, input);
+  return { env, selection, readRoots, profile, refused, mavenRepository };
+}
+
+function stepNodeInput(
+  binary: SupervisorBinary,
+  input: WindowsStepSupervisorInput,
+): Parameters<typeof resolveStepNode>[0] {
+  return {
+    supervisorPath: binary.outcome === "available" ? binary.helperPath : undefined,
+    pin: (input.stepNodePin ?? windowsStepNodePin)(),
+    isDirectory: isRealDirectory,
+    correlationId: input.correlationId,
+  };
+}
+
+// The supervisor the steps are framed to, once its bytes and the step Node.js are attested.
+function finishResolution(
+  input: WindowsStepSupervisorInput,
+  plan: ResolutionPlan,
+  binary: SupervisorBinary,
+  stepNode: ReturnType<typeof resolveStepNode>,
+): WindowsStepSupervisor | undefined {
+  const { env, readRoots, profile, refused, mavenRepository } = plan;
   // Checked again for each step's own toolchain folder, so a credential added later is seen too.
   const admitReadRoot = windowsReadRootAdmission(profile);
   recordResolution(input, {
@@ -574,4 +651,57 @@ export function resolveWindowsStepSupervisor(
     mavenRepository,
     ...(stepNode.outcome === "patched" ? { stepNode: windowsStepNodeFor(stepNode, input) } : {}),
   };
+}
+
+/** A resolved supervisor and how long its two byte attestations took. */
+export interface AttestedWindowsStepSupervisor {
+  readonly supervisor: WindowsStepSupervisor | undefined;
+  readonly attestation: WindowsStepAttestationTimings;
+}
+
+/**
+ * The supervisor a verification run's steps are framed to on Windows, resolved without blocking the
+ * event loop, with the duration of each attestation. A verification checks only what its steps
+ * execute: the supervisor (size and digest, read once) and the step Node.js (hashed on every use);
+ * never the OpenCode payload tree. Nothing is cached: every resolution reads the bytes again.
+ */
+export async function attestWindowsStepSupervisor(
+  input: WindowsStepSupervisorInput,
+): Promise<AttestedWindowsStepSupervisor> {
+  const none = { supervisorMs: 0, stepNodeMs: 0 };
+  if ((input.platform ?? process.platform) !== "win32") {
+    return { supervisor: undefined, attestation: none };
+  }
+  const clock = input.now ?? Date.now;
+  const plan = planResolution(input);
+  const supervisorStart = clock();
+  const binary = await attestSupervisor(plan.selection, sha256FileAsync);
+  const stepNodeStart = clock();
+  // The runtime's patched Node.js, looked for only beside a verified supervisor (#4492).
+  const stepNode = await resolveStepNodeAsync(stepNodeInput(binary, input));
+  const attestation = {
+    supervisorMs: Math.max(0, stepNodeStart - supervisorStart),
+    stepNodeMs: Math.max(0, clock() - stepNodeStart),
+  };
+  return { supervisor: finishResolution(input, plan, binary, stepNode), attestation };
+}
+
+/** The supervisor of `attestWindowsStepSupervisor`, without the timings. */
+export async function resolveWindowsStepSupervisor(
+  input: WindowsStepSupervisorInput,
+): Promise<WindowsStepSupervisor | undefined> {
+  return (await attestWindowsStepSupervisor(input)).supervisor;
+}
+
+/**
+ * The same resolution for the one synchronous caller (the workflow dispatch's capability probe),
+ * which has no request stream to keep flowing. Same checks, same bytes read, nothing cached.
+ */
+export function resolveWindowsStepSupervisorSync(
+  input: WindowsStepSupervisorInput,
+): WindowsStepSupervisor | undefined {
+  if ((input.platform ?? process.platform) !== "win32") return undefined;
+  const plan = planResolution(input);
+  const binary = attestSupervisorSync(plan.selection);
+  return finishResolution(input, plan, binary, resolveStepNode(stepNodeInput(binary, input)));
 }

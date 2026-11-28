@@ -221,6 +221,57 @@ export function discoverNpmLaneOpenCode(
 }
 
 /**
+ * The Windows supervisor of the installed npm runtime package, located and structurally admitted
+ * but NOT yet hashed: the caller attests the bytes it executes against `sha256` and `sizeBytes`,
+ * both compiled into this server. A verification step runs only this supervisor, so it needs
+ * neither the OpenCode payload tree nor the secure-read helper, which the sidecar's own launch path
+ * attests (#4491). `refused` is a present package whose layout is not the approved one.
+ */
+export type NpmLaneSupervisorDiscovery =
+  | { readonly outcome: "inactive" | "refused" }
+  | {
+      readonly outcome: "found";
+      readonly supervisorPath: string;
+      readonly sha256: string;
+      readonly sizeBytes: number;
+    };
+
+export function discoverNpmLaneRuntimeSupervisor(
+  input: DevLaneOpenCodeDiscoveryInput,
+): NpmLaneSupervisorDiscovery {
+  const target = targetFromDiscoveryInput(input);
+  if (target !== "windows-x64") return { outcome: "inactive" };
+  const approval = (input.npmLaneApprovals ?? NPM_LANE_RUNTIME_APPROVALS)[target];
+  if (approval === undefined) return { outcome: "inactive" };
+  try {
+    const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
+    if (packageRoot === undefined) return { outcome: "inactive" };
+    const runtimeRoot = join(packageRoot, NPM_LANE_RUNTIME_DIR);
+    const pin = approval.runtimeSupervisor;
+    const path = join(runtimeRoot, runtimeSupervisorRelativePath(target));
+    const admitted =
+      pin !== undefined &&
+      isRegularFile(path) &&
+      trustedNativeHelperDirectory(runtimeRoot, target, [npmLaneRipgrepName(target)]);
+    return admitted
+      ? { outcome: "found", supervisorPath: path, sha256: pin.sha256, sizeBytes: pin.sizeBytes }
+      : { outcome: "refused" };
+  } catch (error) {
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: input.correlationId ?? randomUUID(),
+        operation: "coding.runtime.discover",
+        source: "coding.runtime.discovery",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
+    return { outcome: "refused" };
+  }
+}
+
+/**
  * Whether this is an npm installation of Keiko on a computer that has an approved runtime package,
  * whose package is simply not installed (#4068): Keiko's own package root sits inside a
  * `node_modules` directory. A checkout or an unsupported platform answers false, and the Workbench
