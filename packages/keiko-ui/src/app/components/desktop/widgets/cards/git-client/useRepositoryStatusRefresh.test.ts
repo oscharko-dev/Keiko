@@ -33,16 +33,18 @@ function setVisibility(state: "visible" | "hidden"): void {
 
 interface Harness {
   readonly refresh: Mock<() => void>;
-  readonly probe: Mock<() => Promise<boolean>>;
+  readonly probe: Mock<(signal: AbortSignal) => Promise<boolean>>;
   readonly state: { busy: boolean; paused: boolean; changed: boolean };
   readonly restore: () => void;
   readonly unmount: () => void;
 }
 
-function mount(overrides: { path?: string | null; probe?: () => Promise<boolean> } = {}): Harness {
+function mount(
+  overrides: { path?: string | null; probe?: (signal: AbortSignal) => Promise<boolean> } = {},
+): Harness {
   const state = { busy: false, paused: false, changed: false };
   const refresh = vi.fn<() => void>();
-  const probe = vi.fn<() => Promise<boolean>>(
+  const probe = vi.fn<(signal: AbortSignal) => Promise<boolean>>(
     overrides.probe ?? (async (): Promise<boolean> => state.changed),
   );
   const path = overrides.path === undefined ? "/repos/alpha" : overrides.path;
@@ -281,6 +283,29 @@ describe("useRepositoryStatusRefresh ambient refresh (U-35)", () => {
     expect(reportClientDiagnostic.mock.calls[0]?.[1]).toMatchObject({ errorKind: "timeout" });
     await advance(AMBIENT_MAX_INTERVAL_MS * 2);
     expect(probe.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // U-45: giving up on a probe must also end its request; otherwise a paused tunnel leaks one hung
+  // connection per cycle until the browser's per-host slots are exhausted.
+  it("aborts the request of a probe that timed out and of one still running at teardown", async (): Promise<void> => {
+    const signals: AbortSignal[] = [];
+    const { unmount } = mount({
+      probe: (signal) => {
+        signals.push(signal);
+        return new Promise<boolean>(() => undefined);
+      },
+    });
+    await advance(AMBIENT_BASE_INTERVAL_MS);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+    await advance(AMBIENT_PROBE_TIMEOUT_MS);
+    expect(signals[0]?.aborted).toBe(true);
+    for (let second = 0; signals.length < 2 && second < 120; second += 1) await advance(1_000);
+    expect(signals).toHaveLength(2);
+    const running = signals[1];
+    expect(running?.aborted).toBe(false);
+    unmount();
+    expect(running?.aborted).toBe(true);
   });
 
   it("reports a failed probe once per failure streak and again after a success", async (): Promise<void> => {

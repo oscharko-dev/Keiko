@@ -2130,6 +2130,8 @@ export async function copyFilesEntry(input: {
 // settlement lines on one timeline (PR #3625 review).
 interface GitReadRequestOptions {
   readonly correlationId?: string | undefined;
+  /** Ends the request; a caller that gives up on a read (a timed-out probe) aborts it. */
+  readonly signal?: AbortSignal | undefined;
 }
 
 export async function fetchGitStatus(

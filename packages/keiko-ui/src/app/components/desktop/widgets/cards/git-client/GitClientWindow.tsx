@@ -1814,9 +1814,9 @@ export function GitClientWindow({
         observer.observe(root);
         return (): void => observer.disconnect();
       },
-      probe: async (): Promise<boolean> => {
+      probe: async (signal): Promise<boolean> => {
         if (selectedPath === null) return false;
-        const fresh = await client.getStatus(selectedPath);
+        const fresh = await client.getStatus(selectedPath, { signal });
         // Read what is shown only now: a refresh or mutation may have settled during the request.
         const changed =
           !windowBusyRef.current && statusFingerprintDiffers(shownStatusRef.current, fresh);

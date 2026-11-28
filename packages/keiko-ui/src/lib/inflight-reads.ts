@@ -62,6 +62,9 @@ export function endInflightReads(): void {
  * accepted and never answered) used to keep its entry for good, so every later identical read
  * joined it and no request ever reached the network again. After this bound the entry is evicted
  * and every joiner still waiting reads for itself. A status-class read answers in milliseconds.
+ * The bound evicts; it does not abort the request: a caller that opts in must also carry its own
+ * deadline or signal on the read (a read with its own signal is never shared at all), or the hung
+ * request itself stays open.
  */
 export const INFLIGHT_READ_MAX_MS = 15_000;
 

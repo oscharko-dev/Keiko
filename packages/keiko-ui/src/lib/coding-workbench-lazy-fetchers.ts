@@ -817,7 +817,7 @@ export async function fetchGitStatus(
   if (options?.includeIgnored === true) params.set("includeIgnored", "true");
   return fetchJson(
     `/api/git/status?${params.toString()}`,
-    undefined,
+    options?.signal === undefined ? undefined : { signal: options.signal },
     validateGitRepositoryStatusResponse,
     options?.correlationId,
   );

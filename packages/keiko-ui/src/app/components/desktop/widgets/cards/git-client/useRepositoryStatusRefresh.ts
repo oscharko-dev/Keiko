@@ -43,7 +43,8 @@ export const REFRESH_COALESCE_MS = 300;
 
 export interface AmbientRefresh {
   // Reads the status and reports whether it differs from what the window shows.
-  readonly probe: () => Promise<boolean>;
+  // `signal` ends the request when the loop gives up on the probe or is torn down.
+  readonly probe: (signal: AbortSignal) => Promise<boolean>;
   // True while a status read is already running; the tick is skipped, never queued.
   readonly isBusy: () => boolean;
   // Drops the status the probe kept for its own refresh: a refresh that another trigger shares
@@ -212,15 +213,24 @@ function reportProbeFailure(error: unknown): void {
 }
 
 // The probe's own read carries no deadline of its own on every transport, so the loop bounds it: a
-// late answer is ignored, the failure takes the ordinary failure path.
-function boundedProbe(probe: Promise<boolean>): Promise<boolean> {
+// late answer is ignored, the failure takes the ordinary failure path, and the request itself is
+// aborted so a paused tunnel cannot leak one hung connection per cycle (U-45).
+function boundedProbe(
+  probe: (signal: AbortSignal) => Promise<boolean>,
+  controller: AbortController,
+): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new DOMException("The ambient status check did not answer in time.", "TimeoutError"));
+      const timeout = new DOMException(
+        "The ambient status check did not answer in time.",
+        "TimeoutError",
+      );
+      controller.abort(timeout);
+      reject(timeout);
     }, AMBIENT_PROBE_TIMEOUT_MS);
   });
-  return Promise.race([probe, expired]).finally((): void => {
+  return Promise.race([probe(controller.signal), expired]).finally((): void => {
     clearTimeout(timer);
   });
 }
@@ -235,6 +245,7 @@ class ProbeLoop {
   private pending = false;
   private failureReported = false;
   private disposed = false;
+  private running: AbortController | undefined;
 
   constructor(
     private readonly coalescer: RefreshCoalescer,
@@ -264,6 +275,7 @@ class ProbeLoop {
   dispose(): void {
     this.disposed = true;
     this.stop();
+    this.running?.abort();
   }
 
   private backOff(): void {
@@ -306,12 +318,15 @@ class ProbeLoop {
     }
     this.pending = false;
     this.inFlight = true;
-    boundedProbe(ambient.probe())
+    const controller = new AbortController();
+    this.running = controller;
+    boundedProbe(ambient.probe, controller)
       .then(
         (changed) => this.settle(changed),
         (error: unknown) => this.fail(error),
       )
       .finally((): void => {
+        if (this.running === controller) this.running = undefined;
         this.inFlight = false;
         this.schedule();
       });
