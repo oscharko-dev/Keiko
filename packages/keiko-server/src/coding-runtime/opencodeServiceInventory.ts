@@ -872,7 +872,7 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "compaction.keep.tokens",
     ],
   ),
-  keikoSet(["S09"], ["tool_output", "tool_output.max_bytes"]),
+  keikoSet(["S09"], ["tool_output", "tool_output.max_bytes", "tool_output.max_lines"]),
   keikoSet(["T19"], ["experimental", "experimental.todo"]),
   // #4271: Keiko alone bounds the runtime's lifetime, so a quiet hour unloads nothing under a run.
   keikoSet(["S01"], ["experimental.location_idle_timeout"]),
@@ -1133,7 +1133,6 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   ),
   refused("keiko-owns-configuration", 3900, ["C08"], ["references.*.hidden"]),
   refused("leaves-machine", 3902, ["C08"], ["references.*.branch", "references.*.repository"]),
-  refused("keiko-owns-configuration", 3899, ["S09"], ["tool_output.max_lines"]),
   refused(
     "keiko-owns-configuration",
     3905,

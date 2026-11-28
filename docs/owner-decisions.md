@@ -6,6 +6,21 @@ content changes. Read the matching entry before you change that area. Where an A
 ADR is the architectural record; this page keeps the binding detail agents previously found in
 AGENTS.md.
 
+## Model activation (2026-11-28)
+
+Verbatim (German): "eigentlich ist es so gewollt, dass die aktivierten Modelle sich gemerkt werden
+und nur beim Erststart oder wenn irgendein Update durchgeführt wurde, wo es sich nicht verhindern
+lässt, die Modelle wieder aktiviert werden müssen. Also eigentlich sollte sich Keiko einmal
+aktivierte Modelle merken."
+
+Binding rules: Keiko remembers a model a person activated in Settings > Models (or the Coding
+Workbench notice). The record is bound to the installation, the product version and the model's
+configuration and credential digest, and is restored at the next start without sending any request
+(startup loads no model). Only a first start, a product update, a changed endpoint, model or
+credential of that model (a configuration saved again keeps every unchanged model), Deactivate, or a proven failure of the model discards it and requires a new activation.
+A tool-calling proof is never inferred from the record. Activation stays the person's act: Keiko
+never activates a model by itself. Amends ADR-0171 D2.
+
 ## Repository credential relay (2026-11-22)
 
 In every mode a native Coding run reads dependencies from the Maven and npm repositories the person
@@ -80,6 +95,20 @@ A bound stays where it protects memory, security, the model's context window (re
 output, request size) or stops a runaway loop. Trimming a conversation to the model's context window
 is shown to the person, never silent. Never lower a raised default to ration ordinary work; the
 person's Stop and the hard denials remain the guards.
+
+## A run that ran no check is not a failed run (2026-11-28)
+
+A finished multi-hour review or refactor ended as "failed" with the notice "Änderungen nicht
+geprüft" and a "Prüfung nachholen" button because no verification ran after its last code change.
+The owner ordered that notice and button removed. A run whose only verification gap is
+`no-check-run` now settles with the outcome its turn reported (`succeeded` stays `succeeded`),
+without a failure code; the gap is recorded body-free on the Activity Log (the `not-evidenced`
+continuation line with `gap: no-check-run`) and the task still hands the verification debt on to its
+next follow-up; that hand-off lives in memory only and does not survive a restart. Keiko still asks the model once to repair a failed check. The gaps that are real
+failures keep failing exactly as before: `check-failed`, `check-not-started` and `budget-exhausted`
+settle `failed` with `verification-not-evidenced`, shown as the ordinary "Coding run failed" with
+their gap sentence. A run stored by an older version with `no-check-run` still loads and renders as
+that ordinary failed run; no enum value or column constraint was dropped. See ADR-0137 and ADR-0124.
 
 ## Knowledge Pod scope (2026-11-04)
 

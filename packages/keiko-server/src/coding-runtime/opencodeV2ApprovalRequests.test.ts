@@ -71,6 +71,7 @@ describe("OpenCode V2 approval requests", () => {
         onPermission: ask.onPermission,
         signal: new AbortController().signal,
       });
+      expect(ask.events[0]?.callId).toBe("call_1");
       expect(approvals.resolve(RUN_ID, requestIdOf(ask), approved)).toBe(true);
       await expect(decision).resolves.toEqual({
         outcome,

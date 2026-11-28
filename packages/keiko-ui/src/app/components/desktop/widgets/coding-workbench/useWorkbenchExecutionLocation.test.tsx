@@ -280,6 +280,51 @@ describe("workbench execution location restoration", () => {
     });
   });
 
+  // U-3: an activation the Workbench requests on its own names, in the Activity Log, where the
+  // repository it binds came from, under the correlation of the request itself.
+  it.each([
+    ["window-selection", "window-selection"],
+    ["window-pinned", "window-pinned"],
+    ["shell-seed", "shell-seed"],
+    [undefined, "active-follow"],
+  ] as const)(
+    "reports the trigger of an automatic activation (%s)",
+    async (trigger, activationTrigger) => {
+      mocks.fetchGitStatus.mockResolvedValue({ available: true, branch: "main", detached: false });
+      mocks.selectLocalCheckout.mockResolvedValue({});
+      renderHook(useWorkbenchExecutionLocation, {
+        initialProps: {
+          root: "/repo",
+          branch: undefined,
+          location: "local" as const,
+          activeInstance: null,
+          branchLoading: false,
+          branchError: false,
+          branchDenied: false,
+          workspaceLoading: false,
+          workspaceError: false,
+          runIsActive: false,
+          folderMode: false,
+          activationTrigger: trigger,
+          refresh,
+        },
+      });
+
+      await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+      const correlationId = mocks.selectLocalCheckout.mock.calls[0]?.[0]?.correlationId as string;
+      expect(vi.mocked(reportClientDiagnostic)).toHaveBeenCalledWith(
+        "[keiko] coding workbench interaction: workspace-activation-requested",
+        {
+          codingWorkbenchInteraction: {
+            interaction: "workspace-activation-requested",
+            activationTrigger,
+          },
+          correlationId,
+        },
+      );
+    },
+  );
+
   it("reports a failed branch discovery under its original attempt correlation", async () => {
     mocks.fetchGitStatus.mockResolvedValue({ available: false });
     renderHook(useWorkbenchExecutionLocation, {
@@ -340,6 +385,58 @@ describe("workbench execution location restoration", () => {
     expect(result.current.ready).toBe(true);
     expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
     expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
+  });
+
+  // The run starts in the repository on screen: a binding of another repository, or one that is
+  // being read again after a new session, never lets Start through.
+  it("is not ready while the held binding names another repository, or is being read again", () => {
+    const shown = {
+      root: "/repo-b",
+      branch: undefined,
+      location: "worktree" as const,
+      activeInstance: managed as WorkspaceInstance | null,
+      branchLoading: false,
+      branchError: false,
+      branchDenied: false,
+      workspaceLoading: false,
+      workspaceError: false,
+      runIsActive: false,
+      folderMode: false,
+      refresh,
+    };
+    const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: shown,
+    });
+    expect(result.current.ready).toBe(false);
+
+    const held = { ...managed, repositoryRoot: "/repo-b" } as WorkspaceInstance;
+    rerender({ ...shown, activeInstance: held });
+    expect(result.current.ready).toBe(true);
+
+    rerender({ ...shown, activeInstance: held, workspaceLoading: true });
+    expect(result.current.ready).toBe(false);
+  });
+
+  // `beginStart` returns silently while the window shows no repository. That is only honest because
+  // Start is never enabled then: no root is never "ready", whatever binding the server still holds.
+  it("is never ready while the window shows no repository, so Start cannot be pressed", () => {
+    const { result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: {
+        root: null,
+        branch: undefined,
+        location: "worktree" as const,
+        activeInstance: managed as WorkspaceInstance | null,
+        branchLoading: false,
+        branchError: false,
+        branchDenied: false,
+        workspaceLoading: false,
+        workspaceError: false,
+        runIsActive: false,
+        folderMode: false,
+        refresh,
+      },
+    });
+    expect(result.current.ready).toBe(false);
   });
 
   it("discards a stale branch read when the selected workspace changes", async () => {
@@ -597,6 +694,27 @@ describe("a selection whose folder lost its workspace behind a still-held bindin
     });
     await waitFor(() => {
       expect(result.current.unbound).toBe(false);
+    });
+  });
+
+  it("reads the folder's availability again on retry, so a reconnect makes it ready at once", async () => {
+    // The person reconnected the folder: no focus event follows, only the retry the action calls.
+    mocks.fetchProjects.mockResolvedValueOnce(project(false)).mockResolvedValue(project(true));
+    mocks.selectLocalCheckout.mockReturnValue(new Promise(() => undefined));
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(result.current.unbound).toBe(true);
+    });
+    mocks.fetchProjects.mockClear();
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => {
+      expect(mocks.fetchProjects).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(result.current.unbound).toBe(false);
+      expect(result.current.ready).toBe(true);
     });
   });
 

@@ -195,7 +195,7 @@ interface GeneratedOpenCodeBundle {
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly compaction: Readonly<Record<string, boolean | number>>;
-    readonly tool_output: { readonly max_bytes: number };
+    readonly tool_output: { readonly max_bytes: number; readonly max_lines: number };
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -251,9 +251,9 @@ function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerifi
 }
 
 describe("generated OpenCode bundle", () => {
-  it("uses the governed response ceiling for native custom-tool output", () => {
+  it("keeps the model-visible output cap apart from the governed response ceiling", () => {
     const bundle = createGeneratedOpenCodeBundle();
-    expect(bundle.config.tool_output).toEqual({ max_bytes: CODING_TOOL_MAX_BODY_BYTES });
+    expect(bundle.config.tool_output).toEqual({ max_bytes: 51_200, max_lines: 2_000 });
     expect(bundle.toolSources.keiko_verification).toContain(
       `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
     );
@@ -1714,6 +1714,36 @@ describe("OpenCode runtime adapter readiness", () => {
 
     expect(waiting?.aborted).toBe(true);
     expect(failures).toEqual([]);
+  });
+
+  it("records the cause of a reconciliation that throws, body-free, under the run's correlation", async () => {
+    const harness = readinessPorts();
+    const records: ServerDiagnosticRecord[] = [];
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      diagnostics: { record: (record) => void records.push(record) },
+      correlationId: "run-reconcile-1",
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> =>
+      Promise.reject(new Error("SENTINEL_HISTORY_BODY"));
+
+    await expect(adapter.reconcile()).resolves.toEqual({
+      ok: false,
+      phase: "sse-history-reconciliation",
+      reason: "readiness-failed",
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-reconcile-1",
+        operation: "coding-runtime.monitor",
+        source: "opencode.reconcile",
+        code: "stage=reconcile:reason=history-reconcile-failed",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("SENTINEL_HISTORY_BODY");
+    await adapter.close();
   });
 
   it("records each reconnect decision as a body-free diagnostic under the run's correlation", async () => {

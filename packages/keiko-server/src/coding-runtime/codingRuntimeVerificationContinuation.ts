@@ -18,6 +18,13 @@ import {
  * run's last code change, failed, and the model ended its turn without a passing one. Verification
  * is asked for up front in the run's instructions (the launch profile's "Verify" step), so Keiko
  * never repeats a generic request at the end; every other gap is named to the person instead.
+ *
+ * The continuation is a write phase with the run's editable tools, and the server cannot narrow
+ * what the model then changes (the first lab run changed 301 files for a check that was red before
+ * the run). So it starts only for a check whose own identity is proven the run's doing: the same
+ * check target passed earlier in this run and fails after a later code edit. A red check that never
+ * passed in the run is not repaired automatically; the run settles with its named gap and the
+ * person decides.
  */
 export const VERIFICATION_CONTINUATION_MAX = 1;
 /**
@@ -48,7 +55,7 @@ export function verificationContinuationIntent(
     hasShellTool === false
       ? "rerun the same check with the governed verification tool"
       : `rerun the same check in your shell. ${SHELL_VERIFICATION_STATUS_RULE}`;
-  return `${subject} you ran after your last change failed (${failedStepsSentence(failure.failedCount)}). Continue within the original scope and authority: read the relevant source and test files, repair the cause of the failure without weakening assertions, ${rerun} Do not claim completion until a check passes after your last change. If you cannot repair it or the check cannot run for a reason outside the task, state the exact cause once and finish.`;
+  return `${subject} you ran after your last change failed (${failedStepsSentence(failure.failedCount)}). That failure may have existed before your first change in this run. Continue within the original task and authority. Read the relevant source and test files first to decide whether your own changes caused the failure or the person's task asks you to fix it. Only then repair the cause of the failure without weakening assertions, ${rerun} Do not claim completion until a check passes after your last change. Otherwise the failure is pre-existing and outside the task: do not change any file to repair it, state once that it is pre-existing and unrelated to your changes, and finish. If you cannot repair a failure you caused, or the check cannot run for a reason outside the task, state the exact cause once and finish.`;
 }
 
 /**
@@ -56,7 +63,9 @@ export function verificationContinuationIntent(
  * one-line answer a support analysis reads (`skipped`). `docs-only`: the run changed documentation
  * alone and needs no check. `no-failed-check`: no check ran, so there is nothing to repair.
  * `blocked`: a check could not start. `budget-exhausted`: the run's budget was used up.
- * `already-continued`: the run's one continuation already ran.
+ * `already-continued`: the run's one continuation already ran. `target-unproven`: the red check
+ * never passed earlier in this run, so nothing proves the run's own edits broke it (it may have been
+ * red before the run, #4491 review): no automatic write phase starts, and the person is told.
  */
 export const VERIFICATION_CONTINUATION_SKIP_REASONS = [
   "docs-only",
@@ -64,6 +73,7 @@ export const VERIFICATION_CONTINUATION_SKIP_REASONS = [
   "blocked",
   "budget-exhausted",
   "already-continued",
+  "target-unproven",
 ] as const;
 
 export type VerificationContinuationSkipReason =

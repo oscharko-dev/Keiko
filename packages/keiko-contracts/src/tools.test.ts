@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "./coding-workbench-runtime.js";
 import {
   copyNetworkGatewayPolicy,
   DEFAULT_COMMAND_RULES,
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
   isValidNetworkGatewayPolicy,
@@ -154,5 +156,17 @@ describe("the budget of a governed tool that waits for a human decision", () => 
     expect(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS).toBe(3_600_000);
     expect(GOVERNED_TOOL_SETTLEMENT_GRACE_MS).toBe(15_000);
     expect(GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS).toBe(3_645_000);
+  });
+
+  // W-4 (Windows 1.5.10 lab): a six-file status took 14 s; the fixed 30 s default ended healthy work.
+  // A modified 6 GiB tracked file at 10 MiB/s needs 614.4 s to read, so a ten-minute budget cut it:
+  // the reads follow the delivery backstop (the longest authorizable run) and end at authority expiry.
+  it("gives the Git read tools a budget well above the sandbox default", () => {
+    expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBe(8 * 60 * 60 * 1_000);
+    expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBe(MAX_RUNTIME_MAX_DURATION_MINUTES * 60_000);
+    expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBeGreaterThan((6_144 / 10) * 1_000);
+    expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBeGreaterThan(
+      DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   captureCodingRepositoryRequest,
+  CODING_REPOSITORY_LIMITS,
   type CodingRepositoryResult,
   type CodingRepositorySearchObservation,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
@@ -389,6 +390,30 @@ function isCodingRepositorySuccess(value: Record<string, unknown>): boolean {
  * (codingToolFacade.ts's defense-in-depth boundary, same treatment as every other governed
  * result type). Checks shape only, never a limit already enforced by the producing handler.
  */
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+/**
+ * The result held to the model-visible bound (`CODING_REPOSITORY_LIMITS.outputBytes`) at the facade,
+ * whatever the producer returned: a search drops its trailing hits and says so with the
+ * `output-limit` truncation reason, so the JSON stays valid and the cut is honest. A read that does
+ * not fit has no honest shortened form and is `undefined`.
+ */
+export function boundedCodingRepositoryResult(
+  result: CodingRepositoryResult,
+): CodingRepositoryResult | undefined {
+  const limit = CODING_REPOSITORY_LIMITS.outputBytes;
+  if (!result.ok || serializedBytes(result) <= limit) return result;
+  if (result.kind !== "search") return undefined;
+  const truncationReasons = [...new Set([...result.truncationReasons, "output-limit" as const])];
+  const hits = [...result.hits];
+  while (hits.length > 0 && serializedBytes({ ...result, hits, truncationReasons }) > limit)
+    hits.pop();
+  const bounded = { ...result, hits, truncationReasons };
+  return serializedBytes(bounded) <= limit ? bounded : undefined;
+}
+
 export function isCodingRepositoryResult(value: unknown): value is CodingRepositoryResult {
   if (!isRecord(value) || typeof value.ok !== "boolean") return false;
   return value.ok

@@ -35,7 +35,11 @@ import {
   GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
-import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
+import type {
+  GitBranchCreateExecRequest,
+  GitLocalMutationAdapter,
+} from "./git-mutation-adapter.js";
+import { isGitZeroObjectId } from "./git-head-state.js";
 import type {
   GitPreflightFinding,
   GitPreflightReport,
@@ -370,16 +374,24 @@ function dispatchStage(
   });
 }
 
+// A zero start point is the unborn head: nothing to branch from, so HEAD is re-pointed (#4491).
+function branchCreateRequest(command: GitBranchCreateCommand): GitBranchCreateExecRequest {
+  return {
+    branchName: command.branchName,
+    startPointRefHash: command.startPointRefHash,
+    ...(isGitZeroObjectId(command.startPointRefHash)
+      ? { fromUnbornBranch: command.baseBranchName }
+      : {}),
+  };
+}
+
 function dispatchExecution(
   command: GitMutationCommand,
   adapter: GitLocalMutationAdapter,
 ): Promise<GitDeliveryExecutionResult> {
   switch (command.kind) {
     case "branch-create":
-      return adapter.createBranch({
-        branchName: command.branchName,
-        startPointRefHash: command.startPointRefHash,
-      });
+      return adapter.createBranch(branchCreateRequest(command));
     case "branch-switch":
       return adapter.switchBranch({ branchName: command.branchName });
     case "stage":

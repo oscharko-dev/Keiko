@@ -122,7 +122,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      // `interrupted`: an explicit Stop or takeover settled the calls still open as cancelled and kept
+      // `interrupted`: a run's end (Stop, takeover or any other terminal state) settled the calls still open as cancelled and kept
       // the feed, as OpenCode keeps an aborted session's tool steps (owner decision 2026-10-30, #3907).
       // `answer-retained` / `reasoning-retained`: an assistant answer or the model's reasoning grew
       // longer than the bounded feed carries; the feed names it and its complete text is streamed as
@@ -147,6 +147,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       values: [
         "stop",
         "takeover",
+        "run-ended",
         "shutdown",
         "workspace-switch",
         "invariant-violation",
@@ -327,6 +328,39 @@ const CODING_RUNTIME_TOOL_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * A tool result the runtime shortened for the model's context window, one line per call: the tool's
+ * closed class, the bytes the model kept and, when the runtime stated them, the lines kept and the
+ * lines the whole output had (the original byte size is not reported). A running count makes a run
+ * that keeps overflowing readable from its last line. Body-free: never the output, a path or a command.
+ */
+const CODING_RUNTIME_TOOL_OUTPUT_SHORTENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.tool-output.shortened",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingSafeActivityProjection.toolOutputShortened",
+  fields: {
+    tool: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...NATIVE_TOOL_DENIED_TOOLS, "keiko", "other"],
+    },
+    keptBytes: { type: "integer", dataClass: "count", required: true },
+    keptLines: { type: "integer", dataClass: "count", required: false },
+    totalLines: { type: "integer", dataClass: "count", required: false },
+    occurrenceCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.tool-output.shortened.emitted-line"],
+  releaseImpact: "patch",
+});
+
 // A native tool keeps its closed name, Keiko's governed tools are `keiko`, anything else `other`.
 function toolLogClass(tool: string): string {
   if (NATIVE_TOOL_DENIED_TOOL_SET.has(tool)) return tool;
@@ -355,6 +389,11 @@ export type CodingSafeActivitySignal =
        * (#4491). Absent: the person's own message.
        */
       readonly origin?: CodingSafeActivityMessageOrigin | undefined;
+      /**
+       * An `assistant` message whose turn ended at the model's output limit, read from the runtime
+       * message's finish reason. Absent: no such finish was reported.
+       */
+      readonly outputLimit?: true | undefined;
       readonly parentMessageId?: string | undefined;
       /** Committed native metadata; the backend projects it separately without retaining bodies. */
       readonly nativeRetry?: CodingWorkbenchNativeRetry;
@@ -486,7 +525,7 @@ export interface CodingSafeActivityProjection {
   // `correlationId` is the calling operation (a server shutdown); see the implementation.
   readonly purgeAll: (reason: CodingSafeActivityPurgeReason, correlationId?: string) => void;
   readonly markUnavailable: (runId: string) => void;
-  readonly interrupt: (runId: string, reason: "stop" | "takeover") => void;
+  readonly interrupt: (runId: string, reason: "stop" | "takeover" | "run-ended") => void;
   readonly currentContent: () => CodingSafeActivityContent | null;
   /** A listed assistant answer's complete text, for Coding History; undefined when there is none. */
   readonly answerText: (runId: string, messageId: string) => string | undefined;
@@ -504,6 +543,7 @@ interface MutableMessage {
   messageId: string;
   role: CodingSafeActivityMessageRole;
   origin?: CodingSafeActivityMessageOrigin;
+  outputLimitReached?: true;
   occurredAt: string;
   segments: CodingSafeActivityTextSegment[];
   truncated: boolean;
@@ -548,15 +588,22 @@ interface MutableFeed {
 interface PriorState {
   readonly feed: StoredFeed | undefined;
   readonly messageTurns: Map<string, string> | undefined;
+  readonly toolOwners: Map<string, string> | undefined;
   readonly texts: RetainedTexts | undefined;
 }
 
-const NO_ROLLBACK: PriorState = { feed: undefined, messageTurns: undefined, texts: undefined };
+const NO_ROLLBACK: PriorState = {
+  feed: undefined,
+  messageTurns: undefined,
+  toolOwners: undefined,
+  texts: undefined,
+};
 
 function rollbackSnapshot(entry: ProjectionEntry): PriorState {
   return {
     feed: structuredClone(entry.feed),
     messageTurns: new Map(entry.messageTurns),
+    toolOwners: new Map(entry.toolOwners),
     texts: cloneRetainedTexts(entry.texts),
   };
 }
@@ -582,12 +629,14 @@ interface ProjectionEntry {
   readonly expiresAtMs: number;
   readonly signalIds: Set<string>;
   readonly messageTurns: Map<string, string>;
+  /** The message each tool row belongs to (callId to messageId), so a message leaves with its calls. */
+  readonly toolOwners: Map<string, string>;
   /** The complete text of every assistant answer and reasoning the feed lists, beside the feed. */
   readonly texts: RetainedTexts;
   /** The run's failed tool calls: repeated-failure counts and which failures were logged. */
   readonly toolFailures: ToolFailureLedger;
   feed: StoredFeed;
-  /** An explicit Stop or takeover settled the open calls; no new open call is admitted after it. */
+  /** The run ended and its open calls were settled; no new open call is admitted after it. */
   interrupted: boolean;
 }
 
@@ -650,6 +699,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private supersededRestatementCount = 0;
   private nativeToolDenialCount = 0;
   private readonly recordedDenials = new Set<string>();
+  private toolOutputShortenedCount = 0;
+  private readonly recordedShortenings = new Set<string>();
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
@@ -673,6 +724,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       expiresAtMs,
       signalIds: new Set(),
       messageTurns: new Map(),
+      toolOwners: new Map(),
       texts: createRetainedTexts(this.limits.maxRetainedAnswerChars),
       toolFailures: createToolFailureLedger(),
       feed: emptyFeed(input.runId, instant(now)),
@@ -685,6 +737,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       this.supersededRestatementCount = 0;
       this.nativeToolDenialCount = 0;
       this.recordedDenials.clear();
+      this.toolOutputShortenedCount = 0;
+      this.recordedShortenings.clear();
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -719,8 +773,14 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       this.maxDroppedEventCount,
       signal.occurredAt,
     );
-    enforceFeedBounds(entry, this.limits);
-    const finalized = this.finalizeCapacityDrop(runId, entry, signal, { ...prior, capacityDrop });
+    const lost = enforceFeedBounds(entry, this.limits);
+    const finalized = this.finalizeCapacityDrop(runId, entry, signal, {
+      ...prior,
+      capacityDrop: mergeDropChanges(
+        capacityDrop,
+        incrementDroppedCount(entry, this.maxDroppedEventCount, signal.occurredAt, lost),
+      ),
+    });
     releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
     if (finalized) this.recordTextFacts(runId, entry, countsBefore);
     // A call that failed gets its line even when the feed dropped, displaced or refused it.
@@ -850,6 +910,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (prior.feed !== undefined && prior.messageTurns !== undefined) {
       entry.feed = prior.feed;
       replaceMap(entry.messageTurns, prior.messageTurns);
+      if (prior.toolOwners !== undefined) replaceMap(entry.toolOwners, prior.toolOwners);
       // The retained texts roll back with the feed, so the feed names exactly what they hold.
       if (prior.texts !== undefined) restoreRetainedTexts(entry.texts, prior.texts);
       return this.reject(runId, "capacity-rejected");
@@ -916,6 +977,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       expiresAtMs: this.now() + this.ttlMs,
       signalIds: new Set(),
       messageTurns: new Map(),
+      toolOwners: new Map(),
       texts: createRetainedTexts(0),
       toolFailures: createToolFailureLedger(),
       feed,
@@ -927,11 +989,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   }
 
   /**
-   * An explicit Stop or takeover ends the run the way OpenCode aborts a session: the feed and its
+   * A run's end (Stop, takeover or any other terminal state) ends the run the way OpenCode aborts a session: the feed and its
    * tool rows stay, and every call that had not settled is shown as cancelled. The calls the run
    * made remain readable after it ended (owner decision 2026-10-30, #3907).
    */
-  public interrupt(runId: string, reason: "stop" | "takeover"): void {
+  public interrupt(runId: string, reason: "stop" | "takeover" | "run-ended"): void {
     const entry = this.liveEntry(runId);
     if (entry?.feed.availability !== "available") return;
     const occurredAt = instant(this.now());
@@ -941,7 +1003,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       entry.feed.updatedAt = occurredAt;
       // Each settled call gains its origin; the feed is brought back under its bounds, as after an
       // ingest, before any subscriber reads it.
-      enforceFeedBounds(entry, this.limits);
+      const lost = enforceFeedBounds(entry, this.limits);
+      const change = incrementDroppedCount(entry, this.maxDroppedEventCount, occurredAt, lost);
+      if (change !== undefined) {
+        this.emitDropMilestones(runId, "capacity-rejected", change.previous, change.next);
+      }
       releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
       this.notify();
     }
@@ -1129,8 +1195,38 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   ): SignalApplication {
     const denial = newNativeToolDenial(entry, signal);
     const application = applySignal(entry, signal, this.limits);
-    if (projectionRejection(application) === undefined) this.recordNativeToolDenial(runId, denial);
+    if (projectionRejection(application) === undefined) {
+      this.recordNativeToolDenial(runId, denial);
+      this.recordToolOutputShortened(runId, entry, signal);
+    }
     return application;
+  }
+
+  // Once per call: the first update that reports the runtime kept only the start of a result.
+  private recordToolOutputShortened(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+  ): void {
+    if (signal.kind !== "tool") return;
+    const shortened = signal.presentation?.outputShortened;
+    const digest = callIdDigest(signal.callId);
+    if (shortened === undefined || this.recordedShortenings.has(digest)) return;
+    rememberBoundedIdentity(this.recordedShortenings, digest, this.maxSignalIdentities);
+    this.toolOutputShortenedCount += 1;
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_TOOL_OUTPUT_SHORTENED_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          tool: toolLogClass(signal.tool ?? knownToolName(entry, signal)),
+          keptBytes: shortened.keptBytes,
+          ...(shortened.keptLines === undefined ? {} : { keptLines: shortened.keptLines }),
+          ...(shortened.totalLines === undefined ? {} : { totalLines: shortened.totalLines }),
+          occurrenceCount: this.toolOutputShortenedCount,
+        },
+      ),
+    );
   }
 
   // Once per call: the first OpenCode update that reports the call rejected is recorded, also when
@@ -1279,7 +1375,12 @@ function applyMessage(
 ): SignalApplication {
   if (entry.feed.availability !== "available") return "feed-unavailable";
   const knownTurn = entry.messageTurns.get(signal.messageId);
-  if (knownTurn !== undefined) return "accepted";
+  if (knownTurn !== undefined) {
+    // The finish reason arrives with a later update of a message already shown.
+    const known = signal.outputLimit === true ? locateMessage(entry, signal.messageId) : undefined;
+    if (known !== undefined) known.message.outputLimitReached = true;
+    return "accepted";
+  }
   const turn = turnForMessage(entry, signal);
   if (turn === undefined) return "parent-message-unknown";
   let application: SignalApplication = "accepted";
@@ -1333,6 +1434,7 @@ function newMessage(
     messageId: signal.messageId,
     role: signal.role,
     ...(signal.origin === undefined ? {} : { origin: signal.origin }),
+    ...(signal.outputLimit === true ? { outputLimitReached: true as const } : {}),
     occurredAt: signal.occurredAt,
     segments: [],
     truncated: false,
@@ -1624,7 +1726,7 @@ function applyTool(
       callId: existing.callId,
       tool: existing.tool,
       state: signal.state,
-      occurredAt: signal.occurredAt,
+      occurredAt: toolOccurredAt(existing, signal),
       ...(presentation === undefined ? {} : { presentation }),
     };
     return "accepted";
@@ -1632,6 +1734,18 @@ function applyTool(
   if (signal.tool === undefined) return "tool-name-missing";
   if (opensAfterInterrupt(entry, signal)) return "tool-transition-refused";
   return insertTool(entry, located.turn, signal, signal.tool, limits);
+}
+
+/**
+ * A call keeps the instant it entered its state: a restatement or heartbeat in the same state
+ * (running again) neither restarts the row's elapsed time nor moves it after later rows. A change
+ * of state takes the instant of that change, which is when the call settled for a terminal one.
+ */
+function toolOccurredAt(
+  existing: { readonly state: CodingSafeActivityToolState; readonly occurredAt: string },
+  signal: { readonly state: CodingSafeActivityToolState; readonly occurredAt: string },
+): string {
+  return existing.state === signal.state ? existing.occurredAt : signal.occurredAt;
 }
 
 /** A failed call's presentation names how often its command has failed in this run. */
@@ -1650,7 +1764,7 @@ function withFailureCount(
 }
 
 /**
- * A delayed tool signal that arrives after Stop or takeover cannot add an open call to the retained
+ * A delayed tool signal that arrives after the run ended cannot add an open call to the retained
  * feed: the run ended, so nothing it shows may still look pending or running (#3907).
  */
 function opensAfterInterrupt(
@@ -1677,8 +1791,9 @@ function insertTool(
   const saturated = turn.tools.length >= limits.maxToolsPerTurn;
   if (saturated) {
     turn.truncated = true;
-    if (!evictOldestSettledTool(turn)) return "capacity-dropped";
+    if (!evictOldestSettledTool(entry, turn)) return "capacity-dropped";
   }
+  if (signal.messageId !== undefined) entry.toolOwners.set(signal.callId, signal.messageId);
   turn.tools.push({
     callId: signal.callId,
     tool,
@@ -1700,8 +1815,16 @@ function settledPresentation(
   newer: CodingSafeActivityToolPresentation | undefined,
 ): CodingSafeActivityToolPresentation | undefined {
   const merged: CodingSafeActivityToolPresentation = { ...earlier, ...newer };
-  const { failureOrigin, refusalCause, command, output, errorText, detailOmitted, ...facts } =
-    merged;
+  const {
+    failureOrigin,
+    refusalCause,
+    command,
+    output,
+    errorText,
+    taskPrompt,
+    detailOmitted,
+    ...facts
+  } = merged;
   const origin = settledFailureOrigin(state, failureOrigin, facts);
   const presentation: CodingSafeActivityToolPresentation = {
     ...facts,
@@ -1709,7 +1832,7 @@ function settledPresentation(
     ...(origin === undefined || refusalCause === undefined ? {} : { refusalCause }),
     ...(keepsOmission(detailOmitted, newer)
       ? { detailOmitted: true }
-      : toolText(command, output, errorText)),
+      : toolText(command, output, errorText, taskPrompt)),
   };
   return Object.keys(presentation).length === 0 ? undefined : Object.freeze(presentation);
 }
@@ -1722,8 +1845,8 @@ function keepsOmission(
 ): boolean {
   if (detailOmitted !== true) return false;
   if (newer?.detailOmitted === true) return true;
-  return (
-    newer?.command === undefined && newer?.output === undefined && newer?.errorText === undefined
+  return ![newer?.command, newer?.output, newer?.errorText, newer?.taskPrompt].some(
+    (text) => text !== undefined,
   );
 }
 
@@ -1747,8 +1870,10 @@ function toolText(
   command: CodingSafeActivityToolPresentation["command"],
   output: CodingSafeActivityToolPresentation["output"],
   errorText: CodingSafeActivityToolPresentation["errorText"],
-): Pick<CodingSafeActivityToolPresentation, "command" | "output" | "errorText"> {
+  taskPrompt: CodingSafeActivityToolPresentation["taskPrompt"],
+): Pick<CodingSafeActivityToolPresentation, "command" | "output" | "errorText" | "taskPrompt"> {
   return {
+    ...(taskPrompt === undefined ? {} : { taskPrompt }),
     ...(command === undefined ? {} : { command }),
     ...(output === undefined ? {} : { output }),
     ...(errorText === undefined ? {} : { errorText }),
@@ -1782,10 +1907,11 @@ function cancelOpenTools(turns: readonly MutableTurn[], occurredAt: string): num
  * displacement is a capacity drop, so the feed's bounded loss counter keeps advancing; a call that
  * has not settled is never displaced.
  */
-function evictOldestSettledTool(turn: MutableTurn): boolean {
+function evictOldestSettledTool(entry: ProjectionEntry, turn: MutableTurn): boolean {
   const index = turn.tools.findIndex(({ state }) => state !== "pending" && state !== "running");
   if (index < 0) return false;
-  turn.tools.splice(index, 1);
+  const removed = turn.tools.splice(index, 1)[0];
+  if (removed !== undefined) entry.toolOwners.delete(removed.callId);
   return true;
 }
 
@@ -1846,6 +1972,17 @@ function isSettledToolState(state: CodingSafeActivityToolState): state is Settle
 
 function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
   return RESTATED_TOOL_STATES.has(state);
+}
+
+// The name the feed already holds for a call whose update did not name its tool; empty if none.
+function knownToolName(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): string {
+  const call = locateToolTurn(entry, signal)?.turn.tools.find(
+    ({ callId }) => callId === signal.callId,
+  );
+  return call?.tool ?? "";
 }
 
 function callIdDigest(callId: string): string {
@@ -1940,18 +2077,26 @@ function isFeedNearProjectionLimit(entry: ProjectionEntry, limits: ResolvedLimit
   return false;
 }
 
-function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void {
-  if (entry.feed.availability !== "available") return;
+// Returns the number of whole events (messages and tool rows) the byte bounds removed: a loss the
+// caller counts and logs, never a silent one (AGENTS.md §8). Trimming content inside a kept message
+// or row only sets the `truncated` flag.
+function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): number {
+  if (entry.feed.availability !== "available") return 0;
   const feed = entry.feed;
-  for (const turn of feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
+  let lost = 0;
+  for (const turn of feed.turns) lost += shrinkTurn(entry, turn, limits.maxTurnBytes);
   shedRetainedSegments(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   shedToolDetail(feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   shedSettledReasoning(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   while (bytes(feed) > limits.maxTotalBytes && feed.turns.length > 0) {
     const removed = feed.turns.shift();
-    if (removed !== undefined) releaseTurn(entry, removed);
+    if (removed !== undefined) {
+      releaseTurn(entry, removed);
+      lost += removed.messages.length + removed.tools.length;
+    }
     feed.truncated = true;
   }
+  return lost;
 }
 
 // #3878: under byte pressure the model's reasoning yields first. The reasoning of every message but
@@ -1989,11 +2134,11 @@ function shedToolDetail(turns: readonly MutableTurn[], over: () => boolean): voi
   for (const keepFailures of [true, false]) {
     for (const turn of turns) {
       for (let index = 0; index < turn.tools.length; index += 1) {
-        if (!over()) return;
         const tool = turn.tools[index];
-        if (tool !== undefined && sheddable(tool, keepFailures)) {
-          turn.tools[index] = withoutToolDetail(tool);
-        }
+        // Only a call with detail to shed costs a size check, so a turn of plain calls pays nothing.
+        if (tool === undefined || !sheddable(tool, keepFailures)) continue;
+        if (!over()) return;
+        turn.tools[index] = withoutToolDetail(tool);
       }
     }
   }
@@ -2009,7 +2154,8 @@ function hasToolDetail(tool: CodingSafeActivityTool): boolean {
   return (
     presentation?.command !== undefined ||
     presentation?.output !== undefined ||
-    presentation?.errorText !== undefined
+    presentation?.errorText !== undefined ||
+    presentation?.taskPrompt !== undefined
   );
 }
 
@@ -2018,6 +2164,7 @@ function withoutToolDetail(tool: CodingSafeActivityTool): CodingSafeActivityTool
     command: _command,
     output: _output,
     errorText: _error,
+    taskPrompt: _prompt,
     ...rest
   } = tool.presentation ?? {};
   return { ...tool, presentation: Object.freeze({ ...rest, detailOmitted: true as const }) };
@@ -2055,11 +2202,13 @@ function shedAnswerSegments(
 
 // #4546: a turn over its byte bound sheds its oldest content, never its messages. The turn's user
 // message is the parent every later answer names, and a message whose text was shed may still
-// stream; a message without content costs a few bytes, and `maxMessagesPerTurn` bounds how many.
+// stream; a message without content costs a few bytes, so only when the shells alone are still over
+// the bound does the oldest assistant message go (#4491), after everything above.
 // Retained answer text, settled tool detail and settled reasoning go first: they lose nothing a
 // page or the row's `detailOmitted` does not name.
-function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
-  if (bytes(turn) <= maxBytes) return;
+function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): number {
+  if (bytes(turn) <= maxBytes) return 0;
+  let lost = 0;
   shedRetainedSegments(entry, [turn], () => bytes(turn) > maxBytes);
   shedToolDetail([turn], () => bytes(turn) > maxBytes);
   shedSettledReasoning(entry, [turn], () => bytes(turn) > maxBytes);
@@ -2069,10 +2218,118 @@ function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number)
       turn.truncated = true;
     }
   }
-  while (bytes(turn) > maxBytes && turn.tools.length > 0) {
-    turn.tools.shift();
-    turn.truncated = true;
+  // Last, whole events go, oldest first (#4491). Order: an older assistant message whose calls
+  // are all settled leaves together with them (the user anchor and the newest message stay); then
+  // single settled calls; then the body-free detail of calls that have not settled; only when a
+  // runaway of unsettled calls alone still exceeds the bound does the oldest such call go, counted
+  // like every other loss (the alternative is a purged feed). A call with no message id is owned
+  // by no message and leaves only as a single settled call.
+  const stages: readonly (() => Iterable<EvictionStep>)[] = [
+    (): EvictionStep[] => settledStepSteps(entry, turn),
+    (): EvictionStep[] => settledToolSteps(turn),
+  ];
+  for (const stage of stages) lost += evictWhileOver(entry, turn, maxBytes, stage);
+  if (bytes(turn) > maxBytes) shedUnsettledToolDetail(turn, () => bytes(turn) > maxBytes);
+  lost += evictWhileOver(entry, turn, maxBytes, (): EvictionStep[] => allToolSteps(turn));
+  if (lost > 0) turn.truncated = true;
+  return lost;
+}
+
+interface EvictionStep {
+  readonly messages: readonly MutableMessage[];
+  readonly tools: readonly CodingSafeActivityTool[];
+}
+
+// One pass indexes the calls by their message, so choosing a victim never rescans the turn.
+function settledStepSteps(entry: ProjectionEntry, turn: MutableTurn): EvictionStep[] {
+  const byOwner = new Map<string, CodingSafeActivityTool[]>();
+  for (const tool of turn.tools) {
+    const owner = entry.toolOwners.get(tool.callId);
+    if (owner !== undefined) byOwner.set(owner, [...(byOwner.get(owner) ?? []), tool]);
   }
+  const newest = turn.messages.at(-1);
+  const steps: EvictionStep[] = [];
+  for (const message of turn.messages) {
+    if (message.role !== "assistant" || message === newest) continue;
+    const calls = byOwner.get(message.messageId) ?? [];
+    if (calls.every(settledTool)) steps.push({ messages: [message], tools: calls });
+  }
+  return steps;
+}
+
+function settledToolSteps(turn: MutableTurn): EvictionStep[] {
+  return turn.tools.filter(settledTool).map((tool) => ({ messages: [], tools: [tool] }));
+}
+
+function allToolSteps(turn: MutableTurn): EvictionStep[] {
+  return turn.tools.map((tool) => ({ messages: [], tools: [tool] }));
+}
+
+interface EvictionVictims {
+  readonly messages: Set<MutableMessage>;
+  readonly tools: Set<CodingSafeActivityTool>;
+}
+
+// Picks steps in order until the estimated size fits.
+function chooseVictims(
+  stage: () => Iterable<EvictionStep>,
+  startEstimate: number,
+  maxBytes: number,
+): EvictionVictims {
+  let estimate = startEstimate;
+  const victims: EvictionVictims = { messages: new Set(), tools: new Set() };
+  for (const step of stage()) {
+    if (estimate <= maxBytes) break;
+    for (const message of step.messages) {
+      victims.messages.add(message);
+      estimate -= bytes(message) + 1;
+    }
+    for (const tool of step.tools) {
+      victims.tools.add(tool);
+      estimate -= bytes(tool) + 1;
+    }
+  }
+  return victims;
+}
+
+function removeVictims(entry: ProjectionEntry, turn: MutableTurn, victims: EvictionVictims): void {
+  turn.messages = turn.messages.filter((message) => !victims.messages.has(message));
+  turn.tools = turn.tools.filter((tool) => !victims.tools.has(tool));
+  for (const message of victims.messages) entry.messageTurns.delete(message.messageId);
+  for (const tool of victims.tools) entry.toolOwners.delete(tool.callId);
+}
+
+// Removes steps in order until the turn fits, tracking the size incrementally (an element and its
+// separator); the turn is then re-measured, and the stage repeats while the estimate fell short.
+function evictWhileOver(
+  entry: ProjectionEntry,
+  turn: MutableTurn,
+  maxBytes: number,
+  stage: () => Iterable<EvictionStep>,
+): number {
+  let lost = 0;
+  for (;;) {
+    const estimate = bytes(turn);
+    if (estimate <= maxBytes) return lost;
+    const victims = chooseVictims(stage, estimate, maxBytes);
+    const count = victims.messages.size + victims.tools.size;
+    if (count === 0) return lost;
+    removeVictims(entry, turn, victims);
+    lost += count;
+  }
+}
+
+function shedUnsettledToolDetail(turn: MutableTurn, over: () => boolean): void {
+  for (let index = 0; index < turn.tools.length; index += 1) {
+    const tool = turn.tools[index];
+    if (tool === undefined || settledTool(tool) || !hasToolDetail(tool)) continue;
+    if (!over()) return;
+    turn.tools[index] = withoutToolDetail(tool);
+  }
+}
+
+function settledTool({ state }: CodingSafeActivityTool): boolean {
+  return state !== "pending" && state !== "running";
 }
 
 function enforceTurnCount(entry: ProjectionEntry, maxTurns: number): void {
@@ -2086,6 +2343,7 @@ function enforceTurnCount(entry: ProjectionEntry, maxTurns: number): void {
 
 function releaseTurn(entry: ProjectionEntry, turn: MutableTurn): void {
   for (const message of turn.messages) entry.messageTurns.delete(message.messageId);
+  for (const { callId } of turn.tools) entry.toolOwners.delete(callId);
 }
 
 function markMessageTruncated(message: MutableMessage, turn: MutableTurn): void {
@@ -2185,12 +2443,20 @@ function validMessageOrigin(
   );
 }
 
+// An output limit is the finish of an assistant turn, stated as the closed word `true`.
+function validOutputLimit(
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
+): boolean {
+  return signal.outputLimit === undefined || signal.role === "assistant";
+}
+
 function validMessageSignal(
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
 ): boolean {
   return (
     safeId(signal.messageId) &&
     validMessageOrigin(signal) &&
+    validOutputLimit(signal) &&
     (signal.parentMessageId === undefined || safeId(signal.parentMessageId)) &&
     (signal.nativeRetry === undefined ||
       (signal.role === "assistant" && isCodingWorkbenchNativeRetry(signal.nativeRetry)))
@@ -2281,7 +2547,7 @@ const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
 
 /** Extra keys admitted per signal kind; anything else makes the signal structurally invalid. */
 const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
-  message: ["messageId", "role", "origin", "parentMessageId", "nativeRetry"],
+  message: ["messageId", "role", "origin", "outputLimit", "parentMessageId", "nativeRetry"],
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
   "text-cut": ["messageId", "part"],
@@ -2325,10 +2591,11 @@ function incrementDroppedCount(
   entry: ProjectionEntry,
   maximum: number,
   updatedAt: string,
+  by = 1,
 ): DropCountChange | undefined {
-  if (entry.feed.availability !== "available") return undefined;
+  if (entry.feed.availability !== "available" || by <= 0) return undefined;
   const previous = entry.feed.droppedEventCount;
-  const next = Math.min(maximum, previous + 1);
+  const next = Math.min(maximum, previous + by);
   if (next === previous) return undefined;
   entry.feed = withDroppedCount(entry.feed, next, updatedAt);
   return { previous, next };
@@ -2337,6 +2604,14 @@ function incrementDroppedCount(
 interface DropCountChange {
   readonly previous: number;
   readonly next: number;
+}
+
+function mergeDropChanges(
+  first: DropCountChange | undefined,
+  second: DropCountChange | undefined,
+): DropCountChange | undefined {
+  if (first === undefined || second === undefined) return first ?? second;
+  return { previous: first.previous, next: second.next };
 }
 
 function capacityDropForApplication(

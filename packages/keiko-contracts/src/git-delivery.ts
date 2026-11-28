@@ -475,6 +475,42 @@ export interface GitDeliveryPartialDetail {
   readonly succeededUnitCount: number;
 }
 
+// How a governed commit decided about signing (ADR-0006), one source for the type, the guard and the
+// log vocabularies. `configured` signs because Git's effective `commit.gpgsign` is true;
+// `required-by-branch-protection` signs because the trusted branch-protection read says the target
+// branch requires signatures although `commit.gpgsign` is not true; `not-configured` commits as Git
+// itself would, unsigned; `not-configured-protection-unavailable` is the same unsigned commit made
+// while the branch-protection read could not answer (unknown is never "required", but the log says
+// the verdict was missing); `unknown-fail-closed` could not read a trustworthy value and therefore
+// attempts to sign.
+export const GIT_COMMIT_SIGNING_DECISIONS = [
+  "configured",
+  "required-by-branch-protection",
+  "not-configured",
+  "not-configured-protection-unavailable",
+  "unknown-fail-closed",
+] as const;
+export type GitCommitSigningDecision = (typeof GIT_COMMIT_SIGNING_DECISIONS)[number];
+
+// Why the `commit.gpgsign` read yielded no usable answer (closed, body-free).
+export const GIT_COMMIT_SIGNING_READ_FAILURES = [
+  "timeout",
+  "cancelled",
+  "denied",
+  "spawn",
+  "truncated",
+  "exit",
+  "malformed",
+] as const;
+export type GitCommitSigningReadFailure = (typeof GIT_COMMIT_SIGNING_READ_FAILURES)[number];
+
+/**
+ * A closed note on a success the person should still see: `recorded-despite-late-error` means the
+ * commit is on the branch although Git reported a late error after writing the ref.
+ */
+export const GIT_DELIVERY_EXECUTION_NOTES = ["recorded-despite-late-error"] as const;
+export type GitDeliveryExecutionNote = (typeof GIT_DELIVERY_EXECUTION_NOTES)[number];
+
 export interface GitDeliveryExecutionResult {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
   readonly outcome: GitDeliveryExecutionOutcome;
@@ -483,6 +519,12 @@ export interface GitDeliveryExecutionResult {
   readonly externalId?: string | undefined;
   readonly errorCode?: GitDeliveryExecutionErrorCode | undefined;
   readonly partialDetail?: GitDeliveryPartialDetail | undefined;
+  // Set by a commit execution only: which signing branch it took. Closed value, never config text.
+  readonly signing?: GitCommitSigningDecision | undefined;
+  // Set with `signing: "unknown-fail-closed"`: the closed class of the failed configuration read.
+  readonly signingReadFailure?: GitCommitSigningReadFailure | undefined;
+  // Set on a success only: a closed fact the person is told about (never text).
+  readonly completionNote?: GitDeliveryExecutionNote | undefined;
 }
 
 // Content-free evidence reference. Never raw diffs, command output, or secrets. Field naming aligns
@@ -743,8 +785,23 @@ export function isGitDeliveryExecutionResult(value: unknown): value is GitDelive
     isNonNegativeInteger(value.durationMs) &&
     isUndefinedOr(isNonEmptyString)(value.externalId) &&
     isUndefinedOr(isGitDeliveryExecutionErrorCode)(value.errorCode) &&
-    isUndefinedOr(isPartialDetail)(value.partialDetail)
+    isUndefinedOr(isPartialDetail)(value.partialDetail) &&
+    isUndefinedOr(isCommitSigningDecision)(value.signing) &&
+    isUndefinedOr(isCommitSigningReadFailure)(value.signingReadFailure) &&
+    isUndefinedOr(isExecutionNote)(value.completionNote)
   );
+}
+
+function isExecutionNote(value: unknown): value is GitDeliveryExecutionNote {
+  return (GIT_DELIVERY_EXECUTION_NOTES as readonly unknown[]).includes(value);
+}
+
+function isCommitSigningDecision(value: unknown): value is GitCommitSigningDecision {
+  return (GIT_COMMIT_SIGNING_DECISIONS as readonly unknown[]).includes(value);
+}
+
+function isCommitSigningReadFailure(value: unknown): value is GitCommitSigningReadFailure {
+  return (GIT_COMMIT_SIGNING_READ_FAILURES as readonly unknown[]).includes(value);
 }
 
 function isActionPreview(value: unknown): value is GitDeliveryActionPreview {
@@ -982,21 +1039,30 @@ export function gitDeliveryRiskClassForInputs(
 
 // ─── Branch matchers ─────────────────────────────────────────────────────────────
 
+// `foldCase` compares without regard to letter case. A DENY decision must fold on every platform:
+// on a case-insensitive filesystem (macOS, Windows) `Main` and `main` are the same ref file, so a
+// case-sensitive denial is bypassed by a name that differs only in case. An ALLOW stays exact.
 export function gitDeliveryBranchNameMatchesPattern(
   branchName: string,
   pattern: GitDeliveryBranchPattern,
+  foldCase = false,
 ): boolean {
+  const name = foldCase ? branchName.toLowerCase() : branchName;
+  const value = foldCase ? pattern.value.toLowerCase() : pattern.value;
   if (pattern.matchKind === "exact") {
-    return branchName === pattern.value;
+    return name === value;
   }
-  return branchName.startsWith(pattern.value);
+  return name.startsWith(value);
 }
 
 export function gitDeliveryBranchNameMatchesAny(
   branchName: string,
   patterns: readonly GitDeliveryBranchPattern[],
+  foldCase = false,
 ): boolean {
-  return patterns.some((pattern) => gitDeliveryBranchNameMatchesPattern(branchName, pattern));
+  return patterns.some((pattern) =>
+    gitDeliveryBranchNameMatchesPattern(branchName, pattern, foldCase),
+  );
 }
 
 // Evaluates a `protected-branch` DENY constraint for one policy target. Every gateway calls this
@@ -1007,6 +1073,7 @@ export function gitDeliveryTargetIsProtectedBranch(
   patterns: readonly GitDeliveryBranchPattern[],
 ): boolean {
   return (
-    targetBranchName === undefined || gitDeliveryBranchNameMatchesAny(targetBranchName, patterns)
+    targetBranchName === undefined ||
+    gitDeliveryBranchNameMatchesAny(targetBranchName, patterns, true)
   );
 }

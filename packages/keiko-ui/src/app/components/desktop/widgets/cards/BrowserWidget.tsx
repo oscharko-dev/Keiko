@@ -22,6 +22,8 @@ import {
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
+import { admitDirectBrowserStream } from "../../../../../lib/browser-stream-capacity";
+import { reportClientDiagnostic } from "../../../../../lib/client-diagnostics";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   BrowserEventEnvelope,
@@ -221,6 +223,7 @@ function useBrowserEventStream(
   setError: (error: ErrorState) => void,
   eventSourceRef: RefObject<EventSource | null>,
   t: OptionalWidgetTranslate,
+  onResumed: () => void,
 ): void {
   useEffect(() => {
     if (session === null) {
@@ -228,16 +231,46 @@ function useBrowserEventStream(
       eventSourceRef.current = null;
       return;
     }
-    const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
-    if (source === null) return;
-    attachBrowserEventListeners(source, pushEvent);
-    attachBrowserStreamErrorHandler(source, setError, t);
-    eventSourceRef.current = source;
-    return (): void => {
-      source.close();
+    let source: EventSource | null = null;
+    const closeSource = (): void => {
+      source?.close();
+      source = null;
       eventSourceRef.current = null;
     };
-  }, [session, pushEvent, setError, eventSourceRef, t]);
+    // A direct stream outside the shared pool: it opens only once an origin-wide slot admits it, so
+    // finite requests keep a connection however many tabs and widgets stream. It is a background
+    // stream: it yields its slot to an essential one and asks for it again until it is granted.
+    // The server keeps no replay for it and exposes no state read, so a yield is made visible: the
+    // widget says events may be missing from the gap instead of showing a silently shorter log.
+    let yielded = false;
+    const admission = admitDirectBrowserStream(
+      () => {
+        closeSource();
+        source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
+        if (source === null) return;
+        attachBrowserEventListeners(source, pushEvent);
+        attachBrowserStreamErrorHandler(source, setError, t);
+        eventSourceRef.current = source;
+        if (!yielded) return;
+        yielded = false;
+        reportClientDiagnostic(
+          "[keiko] browser event stream reopened after yielding its connection",
+        );
+        onResumed();
+      },
+      {
+        priority: "background",
+        onYield: () => {
+          closeSource();
+          yielded = true;
+        },
+      },
+    );
+    return (): void => {
+      closeSource();
+      admission.release();
+    };
+  }, [session, pushEvent, setError, eventSourceRef, t, onResumed]);
 }
 
 function browserEventError(event: BrowserEventEnvelope): ErrorState | null {
@@ -277,6 +310,7 @@ interface BrowserStatusLinesProps {
   readonly lastOrigin: string | null;
   readonly pendingShot: PendingShot | null;
   readonly persistedPath: string | null;
+  readonly eventsGap: boolean;
   readonly error: ErrorState | null;
   readonly t: OptionalWidgetTranslate;
 }
@@ -304,6 +338,9 @@ function BrowserStatusLines(props: BrowserStatusLinesProps): ReactNode {
           {props.t("browserWidget.status.currentOriginPrefix")}{" "}
           <span className="mono">{props.lastOrigin}</span>
         </p>
+      ) : null}
+      {props.eventsGap ? (
+        <p className="bw-status">{props.t("browserWidget.status.eventsGap")}</p>
       ) : null}
       {props.pendingShot !== null ? (
         <p className="bw-status">{props.t("browserWidget.status.screenshotReady")}</p>
@@ -391,8 +428,16 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
   );
 
   const pushEvent = useBrowserEventHandler(setEvents, setLastOrigin, setError);
+  const [eventsGap, setEventsGap] = useState(false);
+  const markEventsGap = useCallback((): void => {
+    setEventsGap(true);
+  }, []);
+  // A new event, or another session, ends the notice.
+  useEffect(() => {
+    setEventsGap(false);
+  }, [events, session]);
 
-  useBrowserEventStream(session, pushEvent, setError, eventSourceRef, t);
+  useBrowserEventStream(session, pushEvent, setError, eventSourceRef, t, markEventsGap);
 
   const handleCheckStatus = useCallback(async (): Promise<void> => {
     clearError();
@@ -667,6 +712,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         lastOrigin={lastOrigin}
         pendingShot={pendingShot}
         persistedPath={persistedPath}
+        eventsGap={eventsGap}
         error={error}
         t={t}
       />

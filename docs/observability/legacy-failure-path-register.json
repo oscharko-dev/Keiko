@@ -2337,12 +2337,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "CodingRuntimeManagerImpl.runShutdownBarrier",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
       "owner": "CodingRuntimeManagerImpl.startLifecycleMonitor",
       "kind": "unregistered-catch",
       "count": 1
@@ -2374,12 +2368,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
       "owner": "proveSpawnWorkspaceRoot",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "qualifyCodexEgress",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2619,12 +2607,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
-      "owner": "reconcile",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "owner": "runCleanup",
       "kind": "unregistered-catch",
       "count": 1
@@ -2638,18 +2620,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
       "owner": "configMaterialized",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "createAbortTask",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "handshake",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2692,12 +2662,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePermissionPort.ts",
       "owner": "resolveRuntimePermission",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
-      "owner": "abortRuntimeTask",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -3809,7 +3773,7 @@
       "path": "packages/keiko-server/src/editor/patchApplyRoutes.ts",
       "owner": "mutateThroughReprovedRoot",
       "kind": "unregistered-catch",
-      "count": 2
+      "count": 1
     },
     {
       "path": "packages/keiko-server/src/editor/processHardening.ts",
@@ -4246,12 +4210,6 @@
     {
       "path": "packages/keiko-server/src/gitDelivery/ciObservationService.ts",
       "owner": "CiObservationController.observe",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gitDelivery/commitPolicySettings.ts",
-      "owner": "resolveGovernedCommitMessagePolicy",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -6807,12 +6765,6 @@
     },
     {
       "path": "packages/keiko-tools/src/git-mutation-node.ts",
-      "owner": "execCommit",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-tools/src/git-mutation-node.ts",
       "owner": "execPlan",
       "kind": "unregistered-catch",
       "count": 1
@@ -7413,12 +7365,6 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useEditorVerificationRun.ts",
-      "owner": "createSharedSource",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useEditorVerificationRun.ts",
       "owner": "onMessage",
       "kind": "unregistered-catch",
       "count": 1
@@ -7480,12 +7426,6 @@
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/panels/useRelationshipActivityStream.ts",
       "owner": "handleRawData",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/panels/useRelationshipActivityStream.ts",
-      "owner": "startSSE",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -7610,12 +7550,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/coding-workbench-event-retention.ts",
-      "owner": "useCodingWorkbenchRuntimeEventStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
       "owner": "useCodexSetup",
       "kind": "unregistered-catch",
@@ -7718,12 +7652,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/useSSE.ts",
-      "owner": "openSharedEventSource",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/verified-task-workspace-binding.ts",
       "owner": "bindVerifiedTaskWorkspace",
       "kind": "unregistered-catch",
@@ -7756,12 +7684,6 @@
     {
       "path": "packages/keiko-verification/src/dependencies.ts",
       "owner": "statOrUndefined",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-verification/src/detect.ts",
-      "owner": "detectScripts",
       "kind": "unregistered-catch",
       "count": 1
     },

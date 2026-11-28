@@ -20,6 +20,11 @@ export interface TaskActionsInput {
   readonly actions: CodingWorkbenchRuntimeActions;
   readonly issueIntake: ReturnType<typeof useCodingWorkbenchIssueIntake>;
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
+  /**
+   * The repository the Workbench shows, which the start states to the server; the server refuses
+   * the start when its active workspace is another folder. Null (nothing shown) starts nothing.
+   */
+  readonly expectedRoot: string | null;
   readonly promptDelivery: PromptDeliveryNoticeController;
   /** The composer's draft, which a retry of the last start is compared with. */
   readonly taskIntent: string;
@@ -84,13 +89,15 @@ function beginStart(
   draft: string,
   inputs: TaskStartInputs | undefined,
 ): void {
-  const { actions, issueIntake, runWorkspace } = input;
+  const { actions, expectedRoot, issueIntake, runWorkspace } = input;
+  if (expectedRoot === null) return;
   const submitted = draft.trim();
   const intakeText = inputs?.command === undefined ? submitted : "";
   void issueIntake.submit(intakeText, async (issue): Promise<void> => {
     runWorkspace.captureSubmission();
     await actions.start(submitted, {
       projectMemoryEnabled: input.projectMemoryEnabled,
+      expectedWorkspaceRoot: expectedRoot,
       ...startedFrom(input),
       issue,
       ...startPromptInputs(inputs),

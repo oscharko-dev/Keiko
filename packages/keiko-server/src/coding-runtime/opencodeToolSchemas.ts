@@ -409,7 +409,11 @@ const GIT_STAGE_SCHEMA = {
       minItems: 1,
       maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
       items: { type: "string", minLength: 1, maxLength: 512 },
-      description: "Workspace-relative paths to propose staging, or unstaging.",
+      description:
+        "Workspace-relative paths to propose staging, or unstaging. A path may name a file or a " +
+        'directory: a directory selects every change below it, and "." selects every change in ' +
+        "the workspace. One request takes at most 50 entries; the proposal binds all the files " +
+        "they select.",
     },
     // #3902 AC2: unstaging is staging's inverse under the same proposal and approval.
     unstage: {

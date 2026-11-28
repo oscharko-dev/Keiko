@@ -7,8 +7,14 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  createInitialCodingWorkbenchRuntimeState,
+  type CodingWorkbenchRuntimeState,
+} from "@/lib/coding-workbench-live-state";
 import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
+  activeSubagentCount,
+  answeredWithoutTools,
   formatRunDuration,
   modelGatewayRetrying,
   nativeRunRetry,
@@ -335,5 +341,144 @@ describe("native physical retry facts", () => {
     expect(
       nativeRunRetry(snapshot(), [fact, { ...fact, nativeRetry: null, sequence: 3 }]),
     ).toBeNull();
+  });
+});
+
+// A Build run that settled successfully without one tool call answered in words only. Plan answers
+// without edits by design, a run with any tool did its work, and a feed that lost turns or belongs
+// to another run proves nothing.
+describe("answeredWithoutTools", () => {
+  // The picker is the agent of the next turn and is free once a run settles; only the run's own
+  // agent says what the settled run was.
+  function stateOf(
+    run: CodingWorkbenchRuntimeSnapshot,
+    picker: CodingWorkbenchRuntimeState["agent"] = "build",
+  ): CodingWorkbenchRuntimeState {
+    return {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      agent: picker,
+      run: { status: "ready", value: run, error: null },
+    };
+  }
+
+  const succeeded = snapshot({ state: "succeeded", agent: "build" });
+  // The feed is read after the run settled unless a test says otherwise.
+  const settledNoTools = (
+    state: CodingWorkbenchRuntimeState,
+    activity: Parameters<typeof answeredWithoutTools>[1],
+  ): boolean => answeredWithoutTools(state, activity, true);
+
+  it("is false while the feed was not read after the run settled, however empty it is", () => {
+    expect(answeredWithoutTools(stateOf(succeeded), feed([[]]), false)).toBe(false);
+    expect(answeredWithoutTools(stateOf(succeeded), feed([[]]), true)).toBe(true);
+  });
+
+  it("is true for a succeeded Build run whose whole feed holds no tool", () => {
+    expect(settledNoTools(stateOf(succeeded), feed([[], []]))).toBe(true);
+  });
+
+  it("follows the run's agent, not the picker, in both directions", () => {
+    expect(settledNoTools(stateOf(succeeded, "plan"), feed([[]]))).toBe(true);
+    const planRun = snapshot({ state: "succeeded", agent: "plan" });
+    expect(settledNoTools(stateOf(planRun, "build"), feed([[]]))).toBe(false);
+  });
+
+  it("is false for a custom agent and for a run that reports no agent", () => {
+    expect(
+      settledNoTools(stateOf(snapshot({ state: "succeeded", agent: "reviewer" })), feed([[]])),
+    ).toBe(false);
+    expect(settledNoTools(stateOf(snapshot({ state: "succeeded" })), feed([[]]))).toBe(false);
+  });
+
+  it("is false once any turn used a tool, whatever the tool did", () => {
+    expect(settledNoTools(stateOf(succeeded), feed([[], [tool("keiko_read", "failed")]]))).toBe(
+      false,
+    );
+  });
+
+  it("is false when signals were dropped, whose tools would be missing from the feed", () => {
+    expect(settledNoTools(stateOf(succeeded), { ...feed([[]]), droppedEventCount: 2 })).toBe(false);
+  });
+
+  it("is false when the run planned, because a plan tool becomes a plan and not a tool", () => {
+    const planned = {
+      ...feed([[]]),
+      plan: {
+        revision: 1,
+        anchorMessageId: "msg",
+        updatedAt: STARTED,
+        steps: [],
+        truncated: false,
+      },
+    } as AvailableCodingSafeActivityFeed;
+    expect(settledNoTools(stateOf(succeeded), planned)).toBe(false);
+  });
+
+  it.each(["running", "failed", "cancelled", "paused"] as const)(
+    "is false for a run in state %s",
+    (state) => {
+      expect(settledNoTools(stateOf(snapshot({ state, agent: "build" })), feed([[]]))).toBe(false);
+    },
+  );
+
+  it("is false without a feed of this run, without a turn, or with a feed that lost turns", () => {
+    expect(settledNoTools(stateOf(succeeded), null)).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), feed([[]], "run-other"))).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), feed([]))).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), { ...feed([[]]), truncated: true })).toBe(false);
+    expect(
+      settledNoTools(stateOf(succeeded), {
+        schemaVersion: "1",
+        availability: "unavailable",
+      } as never),
+    ).toBe(false);
+  });
+});
+
+// U-52: a background subagent keeps working after its parent went idle, so "Waiting for the model"
+// was wrong for as long as the children ran. The server publishes the active count when it changes.
+function subagentFact(
+  sequence: number,
+  activeSubagentCount: number,
+  runId = "run-1",
+): CodingWorkbenchRuntimeSseEvent {
+  return {
+    schemaVersion: "1",
+    cursor: `${runId}:${String(sequence)}`,
+    sequence,
+    occurredAt: STARTED,
+    kind: "runtime-event",
+    runId,
+    state: "running",
+    revision: 4,
+    eventKind: "native-subagents-changed",
+    activeSubagentCount,
+  };
+}
+
+describe("subagent waiting phase (U-52)", () => {
+  const input = { snapshot: snapshot(), feed: null, pendingDecision: false };
+
+  it("counts the newest fact of the run and nothing from another run or a settled one", () => {
+    expect(activeSubagentCount(snapshot(), [subagentFact(1, 3), subagentFact(2, 2)])).toBe(2);
+    expect(activeSubagentCount(snapshot(), [subagentFact(1, 3, "run-2")])).toBe(0);
+    expect(activeSubagentCount(snapshot({ state: "succeeded" }), [subagentFact(1, 3)])).toBe(0);
+    expect(activeSubagentCount(null, [subagentFact(1, 3)])).toBe(0);
+  });
+
+  it("names the phase while subagents work and returns to the model when they finish", () => {
+    expect(runPhase({ ...input, events: [subagentFact(1, 2)] })).toBe("subagents");
+    expect(runPhase({ ...input, events: [subagentFact(1, 2), subagentFact(2, 0)] })).toBe("model");
+  });
+
+  it("lets a running tool and a gateway outage speak first", () => {
+    const running = feed([[tool("shell", "running")]]);
+    expect(runPhase({ ...input, feed: running, events: [subagentFact(1, 2)] })).toBe("tool");
+    expect(
+      runPhase({
+        ...input,
+        events: [subagentFact(1, 2), gatewayFact(2, "model-gateway-retrying")],
+      }),
+    ).toBe("gateway");
   });
 });

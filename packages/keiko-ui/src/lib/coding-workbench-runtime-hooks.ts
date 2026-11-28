@@ -89,7 +89,7 @@ export interface RuntimeMutationActions {
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
-  readonly retry: (taskIntent: string) => Promise<void>;
+  readonly retry: (taskIntent: string, expectedWorkspaceRoot: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
@@ -386,37 +386,48 @@ function useRunRefresh(
   runSequence: RefObject<number>,
   runRefresh: RefObject<Promise<void> | null>,
   dispatch: RuntimeDispatch,
-): () => Promise<void> {
+): (quiet?: boolean) => Promise<void> {
   const followUp = useRef(false);
-  return useCallback((): Promise<void> => {
-    if (runRefresh.current !== null) {
-      followUp.current = true;
-      return runRefresh.current;
-    }
-    dispatch({ kind: "resource-loading", resource: "run" });
-    const pending = (async (): Promise<void> => {
-      do {
-        followUp.current = false;
-        runSequence.current += 1;
-        await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
-          runSequence.current,
-          runSequence,
-          dispatch,
-        );
-      } while (followUp.current);
-    })();
-    runRefresh.current = pending;
-    void pending.then(() => {
-      if (runRefresh.current === pending) runRefresh.current = null;
-    });
-    return pending;
-  }, [dispatch, runRefresh, runSequence]);
+  // A read is quiet only while every caller that joined it asked for one.
+  const quietRead = useRef(false);
+  return useCallback(
+    (quiet = false): Promise<void> => {
+      if (runRefresh.current !== null) {
+        followUp.current = true;
+        quietRead.current &&= quiet;
+        return runRefresh.current;
+      }
+      quietRead.current = quiet;
+      if (!quiet) dispatch({ kind: "resource-loading", resource: "run" });
+      const pending = (async (): Promise<void> => {
+        do {
+          followUp.current = false;
+          runSequence.current += 1;
+          await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
+            runSequence.current,
+            runSequence,
+            dispatch,
+            quietRead.current,
+          );
+        } while (followUp.current);
+      })();
+      runRefresh.current = pending;
+      void pending.then(() => {
+        if (runRefresh.current === pending) runRefresh.current = null;
+      });
+      return pending;
+    },
+    [dispatch, runRefresh, runSequence],
+  );
 }
 
+// A quiet read is the background re-read when the person returns to the window: its failure is
+// recorded but never replaces what the window already shows with an error banner (U-14).
 async function readRun(
   sequence: number,
   runSequence: RefObject<number>,
   dispatch: RuntimeDispatch,
+  quiet: boolean,
 ): Promise<void> {
   try {
     const snapshot = await getCodingWorkbenchRuntimeStatus();
@@ -434,6 +445,7 @@ async function readRun(
         ...(mapped.correlationId === undefined ? {} : { correlationId: mapped.correlationId }),
       });
     }
+    if (quiet) return;
     dispatch({
       kind: "resource-failed",
       resource: "run",
@@ -533,11 +545,16 @@ async function failMutation(
   { refreshRun, dispatch }: RuntimeMutationQueueInput,
   error: unknown,
   signal: AbortSignal,
+  requestId: string | undefined,
 ): Promise<void> {
   // A request Stop took the place of is neither a failure nor a timeout: no alert, no report.
   if (wasPreempted(signal)) return;
   const failure = codingWorkbenchRuntimeApiError(error);
-  dispatch({ kind: "mutation-failed", error: failure });
+  dispatch({
+    kind: "mutation-failed",
+    error: failure,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
   if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
   // A request that hit its deadline has an unknown outcome, and a start whose run already exists
   // keeps going on the server: only a re-read shows it (#4271).
@@ -567,17 +584,24 @@ async function runMutation(
 ): Promise<void> {
   // Stop took this mutation's place while it still waited for its turn: it is never sent.
   if (wasPreempted(signal)) return;
+  // The attempt a late failure is bound to, so it never lands on whatever the window shows later.
+  let requestId: string | undefined;
   try {
     const command = prepare(context.stateRef.current);
+    requestId = command.requestId;
     context.dispatch({ kind: "mutation-start", mutation: kind, requestId: command.requestId });
     const snapshot = await command.run(signal);
     if (wasPreempted(signal)) return;
     await applyMutationResult(context, command, snapshot, signal);
     if (wasPreempted(signal)) return;
-    context.dispatch({ kind: "mutation-complete" });
+    // The run the response acknowledged, whichever run the re-read above went on to show.
+    context.dispatch({
+      kind: "mutation-complete",
+      ...(snapshot.runId === undefined ? {} : { acknowledgedRunId: snapshot.runId }),
+    });
   } catch (error) {
     reportMutationFailure(error, signal);
-    await failMutation(context, error, signal);
+    await failMutation(context, error, signal, requestId);
   }
 }
 
@@ -697,8 +721,10 @@ export function useCodingWorkbenchRuntimeMutations(
     [enqueueMutation, input.stateRef],
   );
   const retry = useCallback(
-    (taskIntent: string): Promise<void> =>
-      enqueueMutation("retry", (current) => createRetryMutation(taskIntent, current)),
+    (taskIntent: string, expectedWorkspaceRoot: string): Promise<void> =>
+      enqueueMutation("retry", (current) =>
+        createRetryMutation(taskIntent, current, expectedWorkspaceRoot),
+      ),
     [enqueueMutation],
   );
   const stop = useCallback((): Promise<void> => runBoundMutation("stop"), [runBoundMutation]);

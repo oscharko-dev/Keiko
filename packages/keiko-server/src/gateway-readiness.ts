@@ -19,12 +19,19 @@ import {
   GATEWAY_SILENCE_FLOOR_MS,
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  isInconclusiveReadinessProbe,
+  PROBE_GATEWAY_BUSY_WARNING,
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   GatewayReadinessOptions,
   GatewayReadinessProbeName,
   GatewayReadinessProbeResult,
   GatewayReadinessReport,
   GatewayReadinessRequest,
+  GatewayReadinessSurface,
   GatewayToolCallingOutcome,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -335,6 +342,12 @@ const GATEWAY_READINESS_BUSY_RETAINED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// Where a person started an explicit activation (U-12): the route is the same, the surface is the
+// one closed fact the log adds. Absent on the wire means the Settings > Models list.
+const READINESS_WIRE_SURFACES: readonly GatewayReadinessSurface[] = ["coding-workbench", "chat"];
+const READINESS_LOG_SURFACES = ["settings", "coding-workbench", "chat"] as const;
+type ReadinessLogSurface = (typeof READINESS_LOG_SURFACES)[number];
+
 // Readiness checks explicitly started in Settings use these operations. Configuration-owned
 // startup chat checks and the Workbench's separate capability checks retain the automatic
 // operations (`gateway.readiness.automatic.*`); conversation entry points start no probes.
@@ -352,6 +365,12 @@ const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["settings"],
+    },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: READINESS_LOG_SURFACES,
     },
     ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
@@ -378,6 +397,12 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["settings"],
+    },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: READINESS_LOG_SURFACES,
     },
     overallStatus: {
       type: "string",
@@ -528,7 +553,14 @@ function parseReadinessOptions(raw: Record<string, unknown>): GatewayReadinessOp
     ...(includeDeepProbes !== undefined ? { includeDeepProbes } : {}),
     ...(maxContextTokens !== undefined ? { maxContextTokens } : {}),
     ...(purpose !== undefined ? { purpose } : {}),
+    ...readinessSurfaceOption(raw.surface),
   };
+}
+
+// Only a closed value is accepted from the wire; anything else leaves the surface absent.
+function readinessSurfaceOption(value: unknown): { readonly surface?: GatewayReadinessSurface } {
+  const surface = READINESS_WIRE_SURFACES.find((candidate) => candidate === value);
+  return surface === undefined ? {} : { surface };
 }
 
 function uniqueProbeNames(values: readonly unknown[]): readonly GatewayReadinessProbeName[] {
@@ -644,6 +676,27 @@ function logAutomaticReadinessStarted(
   );
 }
 
+// What the one-line readiness outcome operations below share: who owns them and how they project.
+const READINESS_OUTCOME_OPERATION_IDENTITY = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "gateway",
+  owner: "keiko-server",
+} as const;
+const READINESS_OUTCOME_OPERATION_SHAPE = {
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  releaseImpact: "patch",
+} as const;
+
+// The completeness and loss accounting that each one-line outcome operation below states.
+const OUTCOME_LINE_ACCOUNTING = {
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const;
+
 // #4351: what a person's explicit pick of a model did, under the pick's own correlation id.
 const SELECTION_CHECK_OUTCOMES = [
   "started",
@@ -657,11 +710,8 @@ const SELECTION_CHECK_OUTCOMES = [
 type SelectionCheckOutcome = (typeof SELECTION_CHECK_OUTCOMES)[number];
 
 const GATEWAY_READINESS_SELECTION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...READINESS_OUTCOME_OPERATION_IDENTITY,
   op: "gateway.readiness.selection",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "gateway-readiness.logSelectionOutcome",
   fields: {
     outcome: {
@@ -670,15 +720,39 @@ const GATEWAY_READINESS_SELECTION_OPERATION = defineActivityLogOperation({
       required: true,
       values: SELECTION_CHECK_OUTCOMES,
     },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...OUTCOME_LINE_ACCOUNTING,
   },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["gateway-readiness"],
   proofIds: ["gateway.readiness.selection.line"],
-  releaseImpact: "patch",
+  ...READINESS_OUTCOME_OPERATION_SHAPE,
+});
+
+// Manual model activation (ADR-0171 D2, amended 2026-11-16): what a person's deactivation of a
+// chat model did, under the request's own correlation id.
+const DEACTIVATION_OUTCOMES = [
+  "deactivated",
+  "not-activated",
+  "check-running",
+  "unknown-model",
+  "bad-request",
+  "record-failed",
+] as const;
+type DeactivationOutcome = (typeof DEACTIVATION_OUTCOMES)[number];
+
+const GATEWAY_READINESS_DEACTIVATION_OPERATION = defineActivityLogOperation({
+  ...READINESS_OUTCOME_OPERATION_IDENTITY,
+  op: "gateway.readiness.deactivation",
+  emitter: "gateway-readiness.logDeactivationOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: DEACTIVATION_OUTCOMES,
+    },
+    ...OUTCOME_LINE_ACCOUNTING,
+  },
+  proofIds: ["gateway.readiness.deactivation.line"],
+  ...READINESS_OUTCOME_OPERATION_SHAPE,
 });
 
 function logSelectionOutcome(
@@ -694,42 +768,6 @@ function logSelectionOutcome(
     ),
   );
 }
-
-// Manual model activation (ADR-0171 D2, amended 2026-11-16): what a person's deactivation of a
-// chat model did, under the request's own correlation id.
-const DEACTIVATION_OUTCOMES = [
-  "deactivated",
-  "not-activated",
-  "check-running",
-  "unknown-model",
-  "bad-request",
-] as const;
-type DeactivationOutcome = (typeof DEACTIVATION_OUTCOMES)[number];
-
-const GATEWAY_READINESS_DEACTIVATION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "gateway.readiness.deactivation",
-  category: "gateway",
-  owner: "keiko-server",
-  emitter: "gateway-readiness.logDeactivationOutcome",
-  fields: {
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: DEACTIVATION_OUTCOMES,
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["gateway-readiness"],
-  proofIds: ["gateway.readiness.deactivation.line"],
-  releaseImpact: "patch",
-});
 
 function logDeactivationOutcome(
   deps: UiHandlerDeps,
@@ -900,6 +938,7 @@ function logReadinessStarted(
   deps: UiHandlerDeps,
   correlationId: string,
   trigger: GatewayReadinessTrigger,
+  surface: ReadinessLogSurface,
   modelId: string,
   probeCount: number,
   timeouts: ProbeTimeoutEvidence,
@@ -908,7 +947,7 @@ function logReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), ...timeouts, trigger, probeCount },
+      { ...modelIdEvidence(modelId), ...timeouts, trigger, surface, probeCount },
     ),
   );
 }
@@ -917,6 +956,7 @@ function logReadinessCompleted(
   deps: UiHandlerDeps,
   correlationId: string,
   trigger: GatewayReadinessTrigger,
+  surface: ReadinessLogSurface,
   report: GatewayReadinessReport,
   durationMs: number,
 ): void {
@@ -927,6 +967,7 @@ function logReadinessCompleted(
       {
         ...modelIdEvidence(report.modelId),
         trigger,
+        surface,
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
         inconclusiveProbeCount: inconclusiveProbeCount(report),
@@ -985,7 +1026,15 @@ function logReadinessRunStarted(
     return;
   }
   if (run.trigger === undefined) return;
-  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, names.length, timeouts);
+  logReadinessStarted(
+    deps,
+    run.correlationId,
+    run.trigger,
+    run.surface,
+    modelId,
+    names.length,
+    timeouts,
+  );
 }
 
 // The legacy-named initialization helper records one configuration-owned startup chat check.
@@ -1034,13 +1083,21 @@ function logReadinessRunCompleted(
     return;
   }
   if (run.trigger === undefined) return;
-  logReadinessCompleted(deps, run.correlationId, run.trigger, report, Date.now() - run.startedAtMs);
+  logReadinessCompleted(
+    deps,
+    run.correlationId,
+    run.trigger,
+    run.surface,
+    report,
+    Date.now() - run.startedAtMs,
+  );
 }
 
 interface ReadinessRunEvidence {
   readonly correlationId: string;
   readonly automatic: boolean;
   readonly trigger: GatewayReadinessTrigger | undefined;
+  readonly surface: ReadinessLogSurface;
   // Set only for a run the Workbench's own verification started (`runWorkbenchProbe`).
   readonly workbench: WorkbenchRunEvidence | undefined;
   readonly startedAtMs: number;
@@ -1382,19 +1439,12 @@ function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayRead
 
 // #3591 (1.1.7): a probe the gateway never answered (timed out, aborted, unreachable) is
 // INCONCLUSIVE — it proves nothing about the model and must not be held against it the way an
-// answered failure is. The two sentences are this module's own closed vocabulary; the Workbench
-// re-probe policy reads them back through `probeInconclusive`.
-const PROBE_TIMED_OUT_WARNING = "The probe timed out before the provider answered.";
-const PROBE_UNREACHABLE_WARNING = "The provider could not be reached for this probe.";
-// A gateway at peak load answers 429/503 for a while; that is no verdict on the model either
-// (#3591 review). 408 and every other 5xx but 501 (not implemented) count the same way.
-export const PROBE_GATEWAY_BUSY_WARNING =
-  "The gateway answered with a transient overload or timeout status.";
-const INCONCLUSIVE_PROBE_WARNINGS: ReadonlySet<string> = new Set([
-  PROBE_TIMED_OUT_WARNING,
-  PROBE_UNREACHABLE_WARNING,
-  PROBE_GATEWAY_BUSY_WARNING,
-]);
+// answered failure is. The three warning sentences (timed out, unreachable, busy) are a closed
+// vocabulary defined in keiko-contracts; the Workbench re-probe policy reads them back through
+// `probeInconclusive`.
+// The warnings and the predicate that reads them back live in keiko-contracts, shared with the
+// browser's activation, so neither side can drift.
+export { PROBE_GATEWAY_BUSY_WARNING };
 
 function transientStatusWarning(response: Response): string | undefined {
   return transientGatewayStatus(response.status) ? PROBE_GATEWAY_BUSY_WARNING : undefined;
@@ -1428,11 +1478,7 @@ function busySignal(
 }
 
 export function probeInconclusive(probe: GatewayReadinessProbeResult): boolean {
-  return (
-    probe.status === "failed" &&
-    probe.warning !== undefined &&
-    INCONCLUSIVE_PROBE_WARNINGS.has(probe.warning)
-  );
+  return isInconclusiveReadinessProbe(probe);
 }
 
 function providerWarning(errorValue: unknown): string {
@@ -2357,7 +2403,7 @@ function recordReadinessObservation(
     observedGeneration,
   );
   if (report.overallStatus === "failed") {
-    recordFailedReadinessObservation(deps, report, observedGeneration);
+    recordFailedReadinessObservation(deps, report, observedGeneration, correlationId);
     return;
   }
   const observation = verifiedCapabilityObservation(report.probes);
@@ -2377,6 +2423,8 @@ function recordReadinessObservation(
       retained.checkedAt,
       observedGeneration,
       report.checkedAt,
+      undefined,
+      { correlationId },
     );
     return;
   }
@@ -2385,6 +2433,9 @@ function recordReadinessObservation(
     fields,
     report.checkedAt,
     observedGeneration,
+    undefined,
+    undefined,
+    { correlationId },
   );
 }
 
@@ -2422,6 +2473,8 @@ function retainBusyConversationReadiness(
     previous.checkedAt,
     observedGeneration,
     report.checkedAt,
+    undefined,
+    { correlationId },
   );
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -2473,13 +2526,28 @@ function recordFailedReadinessObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  correlationId: string,
 ): void {
   const chat = report.probes.find((probe) => probe.name === "chat");
   const failure =
     chat?.status === "failed" && busySignal(chat.warning) !== undefined ? "transient" : undefined;
-  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration, failure)) return;
-  if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
-  deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+  if (
+    preserveUnexecutedCapabilityObservation(
+      deps,
+      report,
+      observedGeneration,
+      failure,
+      correlationId,
+    )
+  )
+    return;
+  if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration, correlationId))
+    return;
+  // A proven failure also removes the durable activation record (owner decision 2026-11-28).
+  deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration, {
+    cause: "invalidated",
+    correlationId,
+  });
   if (failure !== undefined)
     deps.gatewayConfig?.recordVerifiedCapability(
       report.modelId,
@@ -2488,7 +2556,7 @@ function recordFailedReadinessObservation(
       observedGeneration,
       undefined,
       undefined,
-      failure,
+      { conversationReadinessFailure: failure, correlationId },
     );
 }
 
@@ -2497,6 +2565,7 @@ function preserveUnexecutedCapabilityObservation(
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
   conversationReadinessFailure: "transient" | undefined,
+  correlationId: string,
 ): boolean {
   if (executedCategoricalFeatureProbe(report.probes)) return false;
   const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
@@ -2510,7 +2579,7 @@ function preserveUnexecutedCapabilityObservation(
     observedGeneration,
     report.checkedAt,
     undefined,
-    conversationReadinessFailure,
+    { conversationReadinessFailure, correlationId },
   );
   return true;
 }
@@ -2519,6 +2588,7 @@ function preserveVerifiedToolCallingObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  correlationId: string,
 ): boolean {
   const toolCallingProbe = report.probes.find((probe) => probe.name === "tool_calling");
   if (toolCallingProbe?.status !== "skipped") return false;
@@ -2539,6 +2609,8 @@ function preserveVerifiedToolCallingObservation(
     previous.checkedAt,
     observedGeneration,
     report.checkedAt,
+    undefined,
+    { correlationId },
   );
   return true;
 }
@@ -2577,6 +2649,7 @@ function readinessRunEvidence(
     correlationId,
     automatic: request.options?.purpose === "coding-workbench-auto",
     trigger,
+    surface: request.options?.surface ?? "settings",
     workbench,
     startedAtMs: Date.now(),
   };
@@ -4237,25 +4310,43 @@ export async function handleGatewayDeactivation(
   });
   if ("status" in request) return request;
   const { correlationId, modelId } = request;
-  const outcome = deactivateConversationModel(deps, modelId);
+  const outcome = deactivateConversationModel(deps, modelId, correlationId);
   logDeactivationOutcome(deps, correlationId, outcome);
   if (outcome === "unknown-model")
     return error("NOT_FOUND", "The model is not a configured chat model.", 404);
   if (outcome === "check-running")
     return error("CONFLICT", "The model's readiness check is still running.", 409);
+  if (outcome === "record-failed")
+    return error(
+      "RECORD_FAILED",
+      "The model is deactivated, but Keiko could not update its record of activated models. Try again.",
+      500,
+    );
   return { status: 200, body: { modelId, outcome } };
 }
 
-function deactivateConversationModel(deps: UiHandlerDeps, modelId: string): DeactivationOutcome {
+function deactivateConversationModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): DeactivationOutcome {
   const holder = deps.gatewayConfig;
   const config = currentGatewayConfig(deps);
   if (holder === undefined || config === undefined) return "unknown-model";
   if (!configuredChatModels(config).some((model) => model.id === modelId)) return "unknown-model";
-  if (isConversationReadinessCheckRunning(deps, modelId) || isExplicitCheckRunning(deps, modelId))
-    return "check-running";
-  if (!currentConversationReady(deps, modelId)) return "not-activated";
-  holder.clearVerifiedCapability(modelId, holder.generation());
-  return "deactivated";
+  if (isCheckPendingInAnyGeneration(deps, modelId)) return "check-running";
+  const activated = currentConversationReady(deps, modelId);
+  // The durable record of the activation goes with it (owner decision 2026-11-28). A removal the
+  // record could not take is never reported as done: it would come back at the next start. The
+  // repeat of a deactivation retries the record even though the model is already inactive.
+  if (activated)
+    holder.clearVerifiedCapability(modelId, holder.generation(), {
+      cause: "deactivated",
+      correlationId,
+    });
+  if (holder.settleActivationRecord?.("deactivated", correlationId) === false)
+    return "record-failed";
+  return activated ? "deactivated" : "not-activated";
 }
 
 function selectionCheckState(
@@ -4311,6 +4402,14 @@ function explicitChecksFor(
   return checks;
 }
 
+function effectiveReadinessModelId(
+  parsed: GatewayReadinessRequest,
+  deps: UiHandlerDeps,
+): string | undefined {
+  const selection = chooseProvider(currentGatewayConfig(deps), parsed.modelId, parsed.options);
+  return "status" in selection ? parsed.modelId : selection.provider.modelId;
+}
+
 async function trackExplicitCheck<T>(
   deps: UiHandlerDeps,
   modelId: string | undefined,
@@ -4330,11 +4429,15 @@ async function trackExplicitCheck<T>(
   }
 }
 
-function isExplicitCheckRunning(deps: UiHandlerDeps, modelId: string): boolean {
+// A check that started in an earlier configuration generation can still be adopted by a later one
+// whose connection did not change, so a deactivation must wait for it too.
+function isCheckPendingInAnyGeneration(deps: UiHandlerDeps, modelId: string): boolean {
   const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const ofModel = (key: string): boolean => key.slice(key.indexOf(":") + 1) === modelId;
   return (
-    holder !== undefined &&
-    explicitChecksFor(holder).has(`${String(holder.generation())}:${modelId}`)
+    [...readinessProbesFor(holder).keys()].some(ofModel) ||
+    [...explicitChecksFor(holder).keys()].some(ofModel)
   );
 }
 
@@ -4343,7 +4446,9 @@ async function settleExplicitReadiness(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const report = await trackExplicitCheck(deps, parsed.modelId, () =>
+  // A request without a model id checks the default chat model: track the model the run will
+  // really check, so a deactivation cannot be undone by its verdict.
+  const report = await trackExplicitCheck(deps, effectiveReadinessModelId(parsed, deps), () =>
     runGatewayReadiness(parsed, deps, correlationId, "settings"),
   );
   if ("status" in report) return report;

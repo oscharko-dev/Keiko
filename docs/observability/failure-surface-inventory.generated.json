@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8fcbac381d3d6575524265912229252318d229da17bdd3a067cc1b268e645940"
+    "catalogDigest": "4227ac7548e3b95f1b8f7e084558fea12b74383f97647fe9cde87d802c508a19"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 735,
-    "proofCount": 759,
-    "resolvedProofCount": 759,
-    "failureClassCount": 418,
+    "operationCount": 745,
+    "proofCount": 771,
+    "resolvedProofCount": 771,
+    "failureClassCount": 420,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -94,6 +94,7 @@
         "cli.lifecycle.native-owner",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
+        "cli.lifecycle.stop-exited-unverified",
         "cli.lifecycle.stop-request-failed",
         "cli.lifecycle.stop-requested",
         "native-file-dialog.selection.projected",
@@ -283,6 +284,7 @@
         "embedding.scalar-ladder.deadline-expired",
         "embedding.scalar-ladder.item-completed",
         "embedding.scalar-ladder.item-failed",
+        "gateway.activation.persistence",
         "gateway.catalog.automatic.completed",
         "gateway.catalog.metadata.wait",
         "gateway.chat.completed",
@@ -308,6 +310,7 @@
         "gateway.prompt.admission-failed",
         "gateway.prompt.counter-cooldown",
         "gateway.prompt.counter-failed",
+        "gateway.prompt.usage-rejected",
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
@@ -500,6 +503,7 @@
         "coding-runtime.task-replacement",
         "coding-runtime.tool-authority.denied",
         "coding-runtime.tool-availability.failed",
+        "coding-runtime.tool-output.shortened",
         "coding-runtime.tool-result",
         "coding-runtime.tool-result-rendered",
         "coding-runtime.tool.failed",
@@ -704,6 +708,7 @@
         "editor.producer-turn.completed",
         "editor.verification.dependencies",
         "editor.verification.execute",
+        "editor.verification.script-binding",
         "editor.verification.windows-step-copy",
         "editor.verification.windows-step-drives",
         "editor.verification.windows-step-node",
@@ -723,6 +728,7 @@
         "git.delivery.authority.admitted",
         "git.delivery.authority.denied",
         "git.delivery.buffers.checked",
+        "git.delivery.commit-refused",
         "git.delivery.commit.approval.minted",
         "git.delivery.commit.approval.required",
         "git.delivery.dispatch.no-spawn",
@@ -750,13 +756,17 @@
         "git.draft-remote.observed",
         "git.draft-target.resolved",
         "git.draft-template",
+        "git.index-transaction.cleanup-incomplete",
         "git.journey-observation",
         "git.journey-outcome.recorded",
         "git.journey-readiness.refreshed",
+        "git.large-files-streamed",
         "git.pr-description",
         "git.pr-description.receipt",
         "git.process.failed",
         "git.process.refused",
+        "git.raw-status.conversion-failed",
+        "git.raw-status.conversion-settled",
         "git.raw-status.denied-paths-excluded",
         "git.repository.initialize",
         "git.runtime-action",
@@ -947,7 +957,7 @@
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
     "gateway-setup-target": ["model-gateway.dependency-failure"],
     "gateway-setup-metadata": ["model-gateway.dependency-failure"],
-    "gateway-context-admission": ["model-gateway.dependency-failure"],
+    "gateway-context-admission": ["model-gateway.rejection"],
     "coding-history-persistence": ["tools-workflows.dependency-failure"],
     "activity-log-contract": ["lifecycle-crash.loss"],
     "activity-log-loss": ["lifecycle-crash.loss"],
@@ -1161,10 +1171,12 @@
     "git-delivery-authority-gap": ["editor-delivery.dependency-failure"],
     "git-delivery-dirty-buffer": ["editor-delivery.dependency-failure"],
     "git-delivery-mutation": ["editor-delivery.dependency-failure"],
-    "git-delivery-precondition": ["editor-delivery.dependency-failure"],
+    "git-delivery-precondition": ["editor-delivery.rejection"],
     "git-delivery-readiness-provider": ["editor-delivery.dependency-failure"],
     "git-delivery-repository-binding": ["editor-delivery.rejection"],
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
+    "git-large-file-streaming": ["editor-delivery.dependency-failure"],
+    "git-raw-conversion-settlement": ["editor-delivery.dependency-failure"],
     "files-copy-containment-refusal": ["bff.rejection"],
     "files-search-availability": ["bff.dependency-failure"],
     "git-diff-search-bounded": ["editor-delivery.loss"],
@@ -1600,6 +1612,9 @@
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
     ],
     "cli.lifecycle.stop-escalation-failed.kind": [
+      "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
+    ],
+    "cli.lifecycle.stop-exited-unverified.outcome": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
     ],
     "cli.lifecycle.stop-request-failed.kind": [
@@ -2114,6 +2129,9 @@
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.omitted-evidence.test.ts",
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
+    "coding-runtime.tool-output.shortened.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
+    ],
     "coding-runtime.tool-result.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts",
       "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.test.ts",
@@ -2234,6 +2252,9 @@
     ],
     "editor.verification.execute.emitted-line": [
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/editor/verificationRunner.test.ts"
+    ],
+    "editor.verification.script-binding.emitted-line": [
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.windows-step-copy.credentials-skipped": [
@@ -2396,6 +2417,9 @@
     "folder.files.turn-selected.line": [
       "packages/keiko-server/src/connected-folder-chat-turn.test.ts"
     ],
+    "gateway.activation.persistence.line": [
+      "packages/keiko-server/src/gateway-activation-restart.test.ts"
+    ],
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],
@@ -2470,6 +2494,15 @@
     ],
     "gateway.prompt.counter-failed.fallback": [
       "packages/keiko-model-gateway/src/provider-token-counter.test.ts"
+    ],
+    "gateway.prompt.usage-rejected.implausibly-low": [
+      "packages/keiko-model-gateway/src/prompt-calibration.test.ts"
+    ],
+    "gateway.prompt.usage-rejected.implausibly-high": [
+      "packages/keiko-model-gateway/src/prompt-calibration.test.ts"
+    ],
+    "gateway.prompt.usage-rejected.ambiguous-cache-layout": [
+      "packages/keiko-model-gateway/src/prompt-calibration.test.ts"
     ],
     "gateway.readiness.automatic.completed.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
@@ -2615,6 +2648,9 @@
     "git.delivery.buffers.checked.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionVerifiedCommitDependencies.test.ts"
     ],
+    "git.delivery.commit-refused.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/commitRefusalLog.test.ts"
+    ],
     "git.delivery.commit.approval.minted.emitted-line": [
       "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
     ],
@@ -2696,6 +2732,9 @@
     "git.draft-template.emitted-line": [
       "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.test.ts"
     ],
+    "git.index-transaction.cleanup-incomplete.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/indexCleanupLog.test.ts"
+    ],
     "git.journey-observation.emitted-line": [
       "packages/keiko-server/src/gitDelivery/journeyObservationService.test.ts"
     ],
@@ -2704,6 +2743,9 @@
     ],
     "git.journey-readiness.refreshed.emitted-line": [
       "packages/keiko-server/src/gitDelivery/journeyRoutes.test.ts"
+    ],
+    "git.large-files-streamed.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],
     "git.pr-description.emitted-line": [
       "packages/keiko-server/src/gitDelivery/prDescriptionProjection.test.ts",
@@ -2714,6 +2756,12 @@
     ],
     "git.process.failed.line": ["packages/keiko-server/src/gitProcessActivity.test.ts"],
     "git.process.refused.line": ["packages/keiko-server/src/gitProcessActivity.test.ts"],
+    "git.raw-status.conversion-failed.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
+    ],
+    "git.raw-status.conversion-settled.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
+    ],
     "git.raw-status.denied-paths-excluded.emitted-line": [
       "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],

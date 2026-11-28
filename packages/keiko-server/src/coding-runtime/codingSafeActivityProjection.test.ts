@@ -141,6 +141,73 @@ describe("coding safe-activity projection: the origin of a user message", () => 
   });
 });
 
+// An assistant turn the runtime ended at the model's output limit carries that fact in the feed,
+// also when the finish arrives after the message was first shown; nothing else carries it.
+describe("coding safe-activity projection: the output limit of an assistant turn", () => {
+  function openFeed(): ReturnType<typeof createCodingSafeActivityProjection> {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    return projection;
+  }
+
+  function assistant(
+    projection: ReturnType<typeof createCodingSafeActivityProjection>,
+  ): { readonly outputLimitReached?: true } | undefined {
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new Error("expected a feed");
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    return feed.turns.flatMap((turn) => turn.messages).find(({ role }) => role === "assistant");
+  }
+
+  const limited = (id: string): CodingSafeActivitySignal => ({
+    kind: "message",
+    messageId: id,
+    role: "assistant",
+    parentMessageId: "msg_user",
+    occurredAt: "2026-07-18T17:00:00.000Z",
+    outputLimit: true,
+  });
+
+  it("marks a message that first arrives with the finish", () => {
+    const projection = openFeed();
+    expect(projection.ingest(RUN_ID, limited("msg_a"))).toBe(true);
+    expect(assistant(projection)).toMatchObject({ outputLimitReached: true });
+  });
+
+  it("marks a message already shown when the finish arrives later", () => {
+    const projection = openFeed();
+    projection.ingest(RUN_ID, message("msg_a", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, text("msg_a", "Partial answer"));
+    expect(assistant(projection)).not.toHaveProperty("outputLimitReached");
+    projection.ingest(RUN_ID, limited("msg_a"));
+    expect(assistant(projection)).toMatchObject({ outputLimitReached: true });
+  });
+
+  it("leaves a message without the finish unmarked and refuses it on a user message", () => {
+    const projection = openFeed();
+    projection.ingest(RUN_ID, message("msg_a", "assistant", "msg_user"));
+    expect(assistant(projection)).not.toHaveProperty("outputLimitReached");
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "message",
+        messageId: "msg_u2",
+        role: "user",
+        occurredAt: "2026-07-18T17:00:00.000Z",
+        outputLimit: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("bounded coding safe-activity projection", () => {
   it("owns canonical tool facts across native restatement and replay without logging paths", () => {
     const log = createBufferedServerLogSink();
@@ -1588,7 +1655,7 @@ describe("bounded coding safe-activity projection", () => {
   // Owner decision 2026-10-30 (#3907 F3): Stop and takeover used to purge the feed, so a stopped
   // run lost every tool row while standalone OpenCode keeps an aborted session's steps. The feed now
   // stays; only the calls still open settle as cancelled, as OpenCode marks them aborted.
-  it.each(["stop", "takeover"] as const)(
+  it.each(["stop", "takeover", "run-ended"] as const)(
     "keeps the tool rows on %s and settles only the open calls as cancelled",
     (reason) => {
       const activityLog = createBufferedServerLogSink();
@@ -2806,6 +2873,48 @@ describe("failed tool rows", () => {
     }
   });
 
+  // PERF-2: a result the runtime shortened for the model is shown on its row and written once, with
+  // its counts and closed tool class, under the run's correlation and without any body.
+  it("shows a shortened result on its row and writes one body-free line per call", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    const shortened = { keptBytes: 51_200, keptLines: 380, totalLines: 200_000 };
+    const signal = shellCall("call_long", "succeeded", {
+      exitCode: 0,
+      command: { text: PRIVATE_COMMAND, truncated: false },
+      outputShortened: shortened,
+    });
+    projection.ingest(RUN_ID, shellCall("call_long", "running"));
+    projection.ingest(RUN_ID, signal);
+    projection.ingest(RUN_ID, signal);
+    projection.ingest(RUN_ID, shellCall("call_other", "succeeded", { exitCode: 0 }));
+    expect(toolOf(projection, "call_long").presentation?.outputShortened).toEqual(shortened);
+    expect(toolOf(projection, "call_other").presentation).not.toHaveProperty("outputShortened");
+    const lines = log.events.filter((event) => event.op === "coding-runtime.tool-output.shortened");
+    expect(lines.map((line) => line.extra)).toEqual([
+      {
+        tool: "shell",
+        keptBytes: 51_200,
+        keptLines: 380,
+        totalLines: 200_000,
+        occurrenceCount: 1,
+        completeness: "complete",
+        loss: "none",
+      },
+    ]);
+    const first = lines[0];
+    if (first === undefined) throw new Error("expected a tool-output.shortened line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.tool-output.shortened.emitted-line",
+        formatActivityLogProofLine(first),
+      ),
+    ).toMatchObject({ correlationId: RUN_ID, tool: "shell", totalLines: 200_000 });
+    const logged = JSON.stringify(log.events);
+    expect(logged).not.toContain("private-case");
+    expect(logged).not.toContain("call_long");
+  });
+
   it("lets a later update bring back a row's shed detail once the feed has room", () => {
     const projection = assistantTurn({
       limits: { maxTurns: 2, maxTurnBytes: 3_000, maxTotalBytes: 3_400 },
@@ -2926,5 +3035,83 @@ describe("failed tool rows", () => {
     expect(toolOf(projection, "call_ok").presentation).toMatchObject({ detailOmitted: true });
     expect(toolOf(projection, "call_ok").presentation).not.toHaveProperty("command");
     expect(toolOf(projection, "call_bad").presentation?.command?.text).toContain("call_bad");
+  });
+});
+
+describe("a running call's start in the live feed (U-18)", () => {
+  function openProjection(): ReturnType<typeof createCodingSafeActivityProjection> {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    return projection;
+  }
+
+  function toolSignal(
+    callId: string,
+    state: "running" | "succeeded",
+    occurredAt: string,
+    tool?: string,
+  ): CodingSafeActivitySignal {
+    return {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId,
+      state,
+      occurredAt,
+      ...(tool === undefined ? {} : { tool }),
+    };
+  }
+
+  function toolsOf(projection: ReturnType<typeof openProjection>): readonly {
+    readonly callId: string;
+    readonly state: string;
+    readonly occurredAt: string;
+  }[] {
+    const content = projection.currentContent();
+    if (content?.kind !== "safe-activity" || content.feed.availability !== "available") return [];
+    return content.feed.turns.flatMap((turn) => turn.tools);
+  }
+
+  function openedWithRunningCall(): ReturnType<typeof openProjection> {
+    const projection = openProjection();
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    projection.ingest(
+      RUN_ID,
+      toolSignal("call_verify", "running", "2026-07-18T17:00:01.000Z", "keiko_verify"),
+    );
+    return projection;
+  }
+
+  it("keeps the first start across running heartbeats, so the row neither restarts nor reorders", () => {
+    const projection = openedWithRunningCall();
+    projection.ingest(
+      RUN_ID,
+      toolSignal("call_later", "running", "2026-07-18T17:00:02.000Z", "keiko_workspace_read"),
+    );
+    expect(
+      projection.ingest(RUN_ID, toolSignal("call_verify", "running", "2026-07-18T17:00:30.000Z")),
+    ).toBe(true);
+    const [verify, later] = toolsOf(projection);
+    expect(verify).toMatchObject({ callId: "call_verify", occurredAt: "2026-07-18T17:00:01.000Z" });
+    expect(later).toMatchObject({ callId: "call_later", occurredAt: "2026-07-18T17:00:02.000Z" });
+    expect(verify?.occurredAt.localeCompare(later?.occurredAt ?? "")).toBeLessThan(0);
+  });
+
+  it("takes the instant of the change when the call settles", () => {
+    const projection = openedWithRunningCall();
+    projection.ingest(RUN_ID, toolSignal("call_verify", "running", "2026-07-18T17:00:30.000Z"));
+    projection.ingest(RUN_ID, toolSignal("call_verify", "succeeded", "2026-07-18T17:00:45.000Z"));
+    expect(toolsOf(projection)[0]).toMatchObject({
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:45.000Z",
+    });
   });
 });

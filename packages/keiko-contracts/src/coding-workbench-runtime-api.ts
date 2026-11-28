@@ -40,20 +40,28 @@ import {
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
 import {
+  CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAP_DETAILS,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
+  type CodingWorkbenchStopCause,
   type CodingWorkbenchTurnFailureCode,
   type CodingWorkbenchVerificationGap,
+  type CodingWorkbenchVerificationGapDetail,
 } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
 import { isChatJiraPodId } from "./bff-wire.js";
 import { isMcpServerName, MCP_SERVER_MAX } from "./mcp-servers.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAP_DETAILS,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
+  type CodingWorkbenchStopCause,
   type CodingWorkbenchTurnFailureCode,
   type CodingWorkbenchVerificationGap,
+  type CodingWorkbenchVerificationGapDetail,
 } from "./coding-workbench-runtime-constants.js";
 import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
@@ -628,6 +636,13 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly requestedMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
+  /**
+   * `true` only while a live run holds a minted Authority Envelope and `effectiveMode` is that
+   * run's own posture rather than the clamp of `requestedMode`. A reloaded window that selects a
+   * lower mode than its live run must be told the truth (the run still holds the wider authority),
+   * so only an anchored answer may exceed `requestedMode`; it never exceeds `deploymentCeiling`.
+   */
+  readonly liveRunAnchored?: true | undefined;
   readonly runtimeAvailable: boolean;
   /** Present exactly when `runtimeAvailable` is false; names the first failed prerequisite. */
   readonly runtimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
@@ -750,6 +765,29 @@ export interface CodingWorkbenchRuntimeForkRequest {
   readonly beforeMessageId?: string | undefined;
 }
 
+export interface CodingWorkbenchExpectedWorkspace {
+  readonly root: string;
+}
+
+const CODING_WORKBENCH_EXPECTED_WORKSPACE_ROOT_MAX_BYTES = 4096;
+
+function validateExpectedWorkspace(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("expectedWorkspace must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["root"], "expectedWorkspace"));
+  const root = value.root;
+  if (
+    typeof root !== "string" ||
+    root.trim() === "" ||
+    root.includes("\0") ||
+    new TextEncoder().encode(root).length > CODING_WORKBENCH_EXPECTED_WORKSPACE_ROOT_MAX_BYTES
+  ) {
+    errors.push("expectedWorkspace.root must be a bounded, non-empty path");
+  }
+}
+
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
@@ -759,6 +797,14 @@ export interface CodingWorkbenchRuntimeStartRequest {
   /** Forks another task into a new one; never combined with `conversationId`. */
   readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
   readonly requestedMode: CodingWorkbenchMode;
+  /**
+   * The repository the person sees when they start: the root the Workbench shows, as the client
+   * knows it. The server launches in its own active workspace and refuses the start with
+   * `workspace-selection-mismatch` when that is another folder, so a run starts in exactly the
+   * repository on screen or not at all. A statement, never authority: it cannot select, widen or
+   * replace the server's binding.
+   */
+  readonly expectedWorkspace: CodingWorkbenchExpectedWorkspace;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
@@ -863,6 +909,18 @@ export type CodingWorkbenchRuntimeRevertAction = "undo" | "restore";
 export const CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS: readonly CodingWorkbenchRuntimeRevertAction[] =
   Object.freeze(["undo", "restore"] as const);
 
+/**
+ * The run states a revert is admitted in, one owner for the server's admission and the browser's
+ * gate (U-41): a live run (`running`, `paused`) and a settled run whose healthy runtime the server
+ * holds for the post-completion undo window (`succeeded`, `failed`, #3904 AC3). A failed run keeps
+ * its edits, so it keeps the undo too.
+ */
+export const CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES: readonly CodingWorkbenchRuntimeStateName[] =
+  Object.freeze(["running", "paused"] as const);
+
+export const CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES: readonly CodingWorkbenchRuntimeStateName[] =
+  Object.freeze(["succeeded", "failed"] as const);
+
 export function isCodingWorkbenchRuntimeRevertAction(
   value: unknown,
 ): value is CodingWorkbenchRuntimeRevertAction {
@@ -889,7 +947,33 @@ export interface CodingWorkbenchRuntimeRevertState {
   readonly fileCount: number;
   readonly additions: number;
   readonly deletions: number;
+  /** What the undo did to the Git index; absent when the turn staged nothing (U-34b). */
+  readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
+  /**
+   * How many Git index paths the newest turn staged through Keiko's governed staging and an undo
+   * can still take back; absent when none. A turn that only changed the index has no file change,
+   * and this count is what keeps its Undo available.
+   */
+  readonly indexPathCount?: number | undefined;
 }
+
+/**
+ * What an undo did to the paths the undone turn staged through Keiko's governed staging (U-34b).
+ * `restored`: they are unstaged again, back to their state when the turn began. `partial`: some
+ * could not be put back. `changed-after-turn`: the index changed after the turn, so it was left as
+ * it is. `head-moved`: the turn committed, so the index was left as it is. `unavailable`: the index
+ * could not be read or written. Everything but `restored` means staged changes may remain.
+ */
+export const CODING_WORKBENCH_RUNTIME_REVERT_INDEX_OUTCOMES = [
+  "restored",
+  "partial",
+  "changed-after-turn",
+  "head-moved",
+  "unavailable",
+] as const;
+
+export type CodingWorkbenchRuntimeRevertIndexOutcome =
+  (typeof CODING_WORKBENCH_RUNTIME_REVERT_INDEX_OUTCOMES)[number];
 
 /** Session facet of the revert channel: the status of the presented cookie only (ADR-0141). */
 export const CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES = ["active", "unpaired"] as const;
@@ -926,12 +1010,23 @@ function validateRevertState(value: unknown, errors: string[]): void {
     return;
   }
   errors.push(
-    ...exactKeys(value, ["staged", "fileCount", "additions", "deletions"], "revertChannelPayload"),
+    ...exactKeys(
+      value,
+      ["staged", "fileCount", "additions", "deletions", "index", "indexPathCount"],
+      "revertChannelPayload",
+    ),
   );
   if (typeof value.staged !== "boolean") errors.push("revertChannelPayload.staged is invalid");
+  if (
+    value.index !== undefined &&
+    !isOneOf(value.index, CODING_WORKBENCH_RUNTIME_REVERT_INDEX_OUTCOMES)
+  )
+    errors.push("revertChannelPayload.index is invalid");
   for (const key of ["fileCount", "additions", "deletions"] as const) {
     if (!revertCountValid(value[key])) errors.push(`revertChannelPayload.${key} is invalid`);
   }
+  if (value.indexPathCount !== undefined && !revertCountValid(value.indexPathCount))
+    errors.push("revertChannelPayload.indexPathCount is invalid");
 }
 
 /** Exact keys, a valid session facet, bounded counts, and no revert state for an unpaired caller. */
@@ -1134,6 +1229,7 @@ export type CodingWorkbenchRuntimePendingPermission = Pick<
   | "connectorScopes"
   | "commandLabel"
   | "nativePermission"
+  | "callId"
   | "expiresAt"
 >;
 
@@ -1240,6 +1336,18 @@ export interface CodingWorkbenchRuntimeSnapshot {
    * concrete gap (#4491); absent on a run settled by an older Keiko, which reads as a generic gap.
    */
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+  /**
+   * Present only with the `check-failed` gap when Keiko asked the model to look at the failing check
+   * and the model changed no code afterwards (U-38): the check is still red and this run did not
+   * change it. Absent on every other settlement.
+   */
+  readonly verificationGapDetail?: CodingWorkbenchVerificationGapDetail | undefined;
+  /**
+   * Present only on a `cancelled` run that Keiko's own shutdown ended (U-31): the person did not
+   * press Stop, so the Workbench says Keiko was closed and whether work was in flight. Absent on a
+   * person's own Stop and on a run settled by an older Keiko.
+   */
+  readonly stopCause?: CodingWorkbenchStopCause | undefined;
   /** Honest runtime/provider accounting; unavailable never implies a guessed model limit. */
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
   /** Present only when durable server truth records acknowledgement for a recovery-required run. */
@@ -1331,6 +1439,10 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
       /** Required only on native-retry-changed; null reports the native producer's clear. */
       readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
+      /** Required only on native-subagents-changed (U-52): the run's active subagent sessions. */
+      readonly activeSubagentCount?: number | undefined;
+      /** Required only on native-agent-models-refused (U-53): repository agent models not used. */
+      readonly refusedAgentModelCount?: number | undefined;
     };
 
 // The text of a request. A slash command takes its arguments from it, and a command such as
@@ -1446,6 +1558,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
+  validateExpectedWorkspace(value.expectedWorkspace, errors);
   validateRuntimePreference(value.runtimePreference, errors);
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
@@ -1473,6 +1586,7 @@ const START_REQUEST_KEYS: readonly string[] = [
   "taskIntent",
   "conversationId",
   "requestedMode",
+  "expectedWorkspace",
   "runtimePreference",
   "modelId",
   "reasoningEffort",
@@ -1748,6 +1862,8 @@ const CODING_WORKBENCH_RUNTIME_SNAPSHOT_KEYS = [
   "agent",
   "failureCode",
   "verificationGap",
+  "verificationGapDetail",
+  "stopCause",
   "contextUsage",
   "recoveryAcknowledged",
   "pendingPermission",
@@ -2064,6 +2180,7 @@ const CODING_WORKBENCH_RUNTIME_READINESS_KEYS = [
   "requestedMode",
   "deploymentCeiling",
   "effectiveMode",
+  "liveRunAnchored",
   "runtimeAvailable",
   "runtimeUnavailableReason",
   "runtimeEvidenceClass",
@@ -2097,22 +2214,33 @@ export function validateCodingWorkbenchRuntimeReadiness(
   );
   validateRuntimeVersion(value, errors);
   validateExecutionLocations(value.executionLocations, errors);
-  // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
-  // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
-  // clamp is the fail-closed contract boundary.
-  if (
-    isOneOf(value.requestedMode, CODING_WORKBENCH_MODES) &&
-    isOneOf(value.deploymentCeiling, CODING_WORKBENCH_MODES) &&
-    isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES) &&
-    isCodingWorkbenchModeWidening(
-      resolveEffectiveCodingWorkbenchMode(value.requestedMode, value.deploymentCeiling),
-      value.effectiveMode,
-    )
-  ) {
-    errors.push("effectiveMode must not widen past requestedMode and deploymentCeiling");
-  }
+  validateReadinessEffectiveMode(value, errors);
   if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
   return result(value, errors);
+}
+
+// The confirmed mode never exceeds the deployment ceiling, and never widens past the request unless
+// the server says the answer is anchored to the live run's own minted envelope (#2386, 0.3.0 audit):
+// a window reloaded with a lower selection than its live run is told what the run actually holds.
+function validateReadinessEffectiveMode(value: Record<string, unknown>, errors: string[]): void {
+  if (value.liveRunAnchored !== undefined && value.liveRunAnchored !== true) {
+    errors.push("liveRunAnchored is invalid");
+  }
+  const { requestedMode, deploymentCeiling, effectiveMode } = value;
+  if (
+    !isOneOf(requestedMode, CODING_WORKBENCH_MODES) ||
+    !isOneOf(deploymentCeiling, CODING_WORKBENCH_MODES) ||
+    !isOneOf(effectiveMode, CODING_WORKBENCH_MODES)
+  ) {
+    return;
+  }
+  const bound =
+    value.liveRunAnchored === true
+      ? deploymentCeiling
+      : resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
+  if (isCodingWorkbenchModeWidening(bound, effectiveMode)) {
+    errors.push("effectiveMode must not widen past requestedMode and deploymentCeiling");
+  }
 }
 
 /** A nonempty list of distinct known work locations, when present. */
@@ -2277,6 +2405,8 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateOptionalSnapshotFields(value, errors);
   validateFailureCode(value.failureCode, errors);
   validateVerificationGap(value, errors);
+  validateVerificationGapDetail(value, errors);
+  validateStopCause(value, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
   validatePauseReason(value, errors);
@@ -2374,6 +2504,28 @@ function validateVerificationGap(value: Record<string, unknown>, errors: string[
   if (value.failureCode !== "verification-not-evidenced") {
     errors.push("verificationGap is only allowed with failureCode verification-not-evidenced");
   }
+}
+
+// A gap detail refines the `check-failed` gap alone; beside any other gap it would contradict it.
+function validateVerificationGapDetail(value: Record<string, unknown>, errors: string[]): void {
+  if (value.verificationGapDetail === undefined) return;
+  if (!isOneOf(value.verificationGapDetail, CODING_WORKBENCH_VERIFICATION_GAP_DETAILS)) {
+    errors.push("verificationGapDetail is invalid");
+    return;
+  }
+  if (value.verificationGap !== "check-failed")
+    errors.push("verificationGapDetail is only allowed with verificationGap check-failed");
+}
+
+// A stop cause explains a cancellation; on any other state it would describe an ending the run did
+// not have.
+function validateStopCause(value: Record<string, unknown>, errors: string[]): void {
+  if (value.stopCause === undefined) return;
+  if (!isOneOf(value.stopCause, CODING_WORKBENCH_STOP_CAUSES)) {
+    errors.push("stopCause is invalid");
+    return;
+  }
+  if (value.state !== "cancelled") errors.push("stopCause is only allowed on a cancelled run");
 }
 
 function validateFailureCode(value: unknown, errors: string[]): void {

@@ -165,6 +165,9 @@ export type ToolLifecycleStarted = ToolLifecycleIdentity & {
   readonly state: "started";
   readonly reason: "none";
   readonly reservationId: string;
+  // The effective per-call deadline (ms from admission): the smaller of the descriptor budget and the
+  // authority expiry. Lets an aborted or timed-out call be located from the log alone.
+  readonly deadlineMs?: number;
 };
 interface ToolLifecycleSettlement {
   readonly op: typeof TOOL_LIFECYCLE_OPERATIONS.terminal;
@@ -175,6 +178,8 @@ interface ToolLifecycleSettlement {
   readonly durationMs: number;
   readonly effectStarted: boolean;
   readonly budgetDisposition: ToolBudgetDisposition;
+  /** The settlement budget this call ran under; a `deadline-exceeded` line names the bound it hit. */
+  readonly budgetMs?: number;
   readonly inputBytes?: number;
   readonly outputBytes?: number;
   readonly resultCount?: number;

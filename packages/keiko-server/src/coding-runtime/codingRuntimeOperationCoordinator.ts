@@ -11,6 +11,8 @@ import type { OpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthori
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   isCodingWorkbenchAgent,
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+  CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
   isCodingWorkbenchRuntimeRevertAction,
   parseCodingWorkbenchRuntimeFollowUpRequest,
   parseCodingWorkbenchRuntimeInboxRequest,
@@ -325,11 +327,21 @@ function reservedGeneration(
   return reservation === undefined ? undefined : reservation.generation;
 }
 
+// Follow-ups, inbox and questions need a live turn: a separate rule from the revert states, which
+// the shared contract owns and which also include the held ones.
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
 ]);
-const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(["succeeded", "failed"]);
+const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+);
+
+/** Every state a revert is admitted in: the shared contract owns the list the browser also gates on. */
+const REVERT_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
+  ...CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
+  ...CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+]);
 
 const REVERT_KEYS = ["requestId", "expectedRevision", "action"] as const;
 const INBOX_KEYS = ["requestId", "expectedRevision", "action", "itemId"] as const;
@@ -518,8 +530,8 @@ export class CodingRuntimeOperationCoordinator {
   }
 
   /**
-   * Undo or restore of the run's newest turn (B3, S04), admitted while the run is running or paused
-   * like a follow-up. An undo stops the turn in flight, so it reserves the next task generation
+   * Undo or restore of the run's newest turn (B3, S04), admitted while the run is running or paused, or
+   * settled and held for its undo window (succeeded or failed). An undo stops the turn in flight, so it reserves the next task generation
    * first: the cancelled outcome of the interrupted turn is then dropped instead of settling the
    * run the human keeps. The run stays live and idle; the human restores the undo, or stops it.
    */
@@ -1430,7 +1442,7 @@ function admittedRevertAction(
 ): CodingWorkbenchRuntimeRevertAction | undefined {
   if (!operation.ok) return undefined;
   const { state } = operation.current;
-  if (!FOLLOW_UP_STATES.has(state) && !HELD_STATES.has(state)) return undefined;
+  if (!REVERT_STATES.has(state)) return undefined;
   const action = operation.value.action;
   return isCodingWorkbenchRuntimeRevertAction(action) ? action : undefined;
 }

@@ -1,4 +1,12 @@
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -386,9 +394,19 @@ describe("native policy asks", () => {
     expect(event.nativeAction).toEqual({ permission: "shell", resources: ["npm run lint"] });
     expect(event.commandLabel).toBe("native-shell");
     expect(decision.actionId).toBe("ses_native0000000000001:call_1");
+    // The ask names the tool call it holds back, so the Workbench can mark exactly that row.
+    expect(event.callId).toBe("call_1");
     expect(Date.parse(event.expiresAt)).toBeGreaterThan(NOW);
     const { nativeAction: _native, type: _type, ...projected } = event;
     expect(validateCodingWorkbenchPermissionRequest(projected)).toMatchObject({ ok: true });
+    const unbound = decideOpenCodeNativePolicy({
+      mode: "governed-assist",
+      workspaceRoot: WORKSPACE,
+      request: { ...request("shell", ["npm run lint"]), source: undefined },
+      nowMs: NOW,
+    });
+    if (unbound.effect !== "ask") throw new Error("expected an ask");
+    expect(unbound.event).not.toHaveProperty("callId");
     const edit = decide("governed-assist", "edit", ["src/a.ts", "src/b.ts"]);
     if (edit.effect !== "ask") throw new Error("expected an ask");
     expect(edit.event.kind).toBe("workspace-write");
@@ -448,6 +466,7 @@ describe("native policy evidence", () => {
     ).toMatchObject({
       mode: "supervised-coding",
       permission: "shell",
+      toolKind: "bash",
       effect: "deny",
       outcome: "delivery-reserved",
       resourceCount: 1,
@@ -458,22 +477,78 @@ describe("native policy evidence", () => {
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(second),
       ),
-    ).toMatchObject({ permission: "edit", effect: "ask", outcome: "approved" });
+    ).toMatchObject({
+      permission: "edit",
+      toolKind: "edit",
+      effect: "ask",
+      outcome: "approved",
+    });
     expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(third),
       ),
-    ).toMatchObject({ permission: "other", effect: "deny", outcome: "unsupported-action" });
+    ).toMatchObject({
+      permission: "other",
+      toolKind: "other",
+      effect: "deny",
+      outcome: "unsupported-action",
+    });
     expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",
         formatActivityLogProofLine(fourth),
       ),
-    ).toMatchObject({ permission: "todowrite", effect: "allow", outcome: "allowed" });
+    ).toMatchObject({
+      permission: "todowrite",
+      toolKind: "todo",
+      effect: "allow",
+      outcome: "allowed",
+    });
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain("git push");
     expect(serialized).not.toContain("example.com");
+  });
+});
+
+// O-13: the line names the native tool in one closed vocabulary, never a path or command.
+describe("the native tool a decision was about (O-13)", () => {
+  it.each([
+    ["read", "read"],
+    ["glob", "glob"],
+    ["grep", "grep"],
+    ["list", "list"],
+    ["edit", "edit"],
+    ["shell", "bash"],
+    ["webfetch", "webfetch"],
+    ["websearch", "websearch"],
+    ["skill", "skill"],
+    ["subagent", "task"],
+    ["question", "question"],
+    ["todowrite", "todo"],
+    ["execute", "program"],
+    ["opencode_schedule", "schedule"],
+    ["opencode_session_move", "session"],
+    ["opencode_worktree_create", "worktree"],
+    ["constructor", "other"],
+    ["teleport", "other"],
+  ] as const)("logs permission %s as toolKind %s", (permission, toolKind) => {
+    const records: ServerLogEvent[] = [];
+    recordOpenCodeNativePolicyDecision({ write: (event) => void records.push(event) }, "run-kind", {
+      mode: "supervised-coding",
+      request: request(permission, ["PRIVATE_RESOURCE"]),
+      decision: decide("supervised-coding", permission, ["PRIVATE_RESOURCE"]),
+      outcome: "allowed",
+    });
+    const [record] = records;
+    if (record === undefined) throw new Error("log");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.native-policy.decided.emitted-line",
+        formatActivityLogProofLine(record),
+      ),
+    ).toMatchObject({ toolKind });
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_RESOURCE");
   });
 });
 
@@ -1374,6 +1449,180 @@ describe("accepted external references (#3900 AC5)", () => {
         expect(effect(paths, mode, "read", [join(paths.reference, "guide.md")], {}, [])).toBe(
           "deny:workspace-escape",
         );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+});
+
+// PERF-2: the runtime saves the full output of a result it shortened under the run's private tool
+// output directory and tells the model where. Reading it back is the model's own output, so it is a
+// plain read in every mode; nothing else outside the workspace opens, it is never writable, and the
+// sensitive-path, link and hard-link refusals hold inside it.
+describe("the saved full output of a shortened tool result (PERF-2)", () => {
+  function saved(): { readonly root: string; readonly output: string; readonly workspace: string } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-tool-output-")));
+    const output = join(root, "home", ".local", "share", "opencode", "tool-output");
+    const workspace = join(root, "workspace");
+    mkdirSync(output, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(output, "tool_0123456789ab"), "line 1\n");
+    writeFileSync(join(output, ".env"), "TOKEN=x\n");
+    writeFileSync(join(root, "outside.txt"), "outside\n");
+    linkSync(join(root, "outside.txt"), join(output, "linked.txt"));
+    return { root, output, workspace };
+  }
+
+  function effect(
+    paths: { readonly output: string; readonly workspace: string },
+    mode: string,
+    permission: string,
+    resources: readonly string[],
+    overrides: Partial<OpenCodeNativePolicyRequest> = {},
+    toolOutputRoot: string | null = paths.output,
+  ): string {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: paths.workspace,
+      ...(toolOutputRoot === null ? {} : { toolOutputRoot }),
+      request: request(permission, resources, overrides),
+      nowMs: NOW,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  }
+
+  it("reads and searches it without asking in every mode", () => {
+    const paths = saved();
+    try {
+      const file = join(paths.output, "tool_0123456789ab");
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "external_directory", [`${paths.output}/*`]), mode).toBe(
+          "allow",
+        );
+        expect(effect(paths, mode, "read", [file]), mode).toBe("allow");
+        expect(effect(paths, mode, "grep", ["needle"], { searchPath: paths.output }), mode).toBe(
+          "allow",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("never writes there and refuses credential files, hard links and every other directory", () => {
+    const paths = saved();
+    try {
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "edit", [join(paths.output, "tool_0123456789ab")])).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [join(paths.output, ".env")])).toBe(
+          "deny:sensitive-path",
+        );
+        expect(effect(paths, mode, "read", [join(paths.output, "linked.txt")])).toBe(
+          "deny:linked-file",
+        );
+        expect(effect(paths, mode, "read", [join(paths.root, "outside.txt")])).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "external_directory", [`${paths.root}/*`])).toBe(
+          "deny:workspace-escape",
+        );
+        // Without the admitted directory the same read is outside the workspace.
+        expect(
+          effect(paths, mode, "read", [join(paths.output, "tool_0123456789ab")], {}, null),
+        ).toBe("deny:workspace-escape");
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a dot-dot path out of it, for the directory check and for a read", () => {
+    const paths = saved();
+    try {
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "external_directory", [`${paths.output}/../*`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [`${paths.output}/../../outside.txt`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [`${paths.output}/sub/../../x`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("admits the directory in its Windows resource form with a backslash wildcard", () => {
+    const paths = saved();
+    try {
+      expect(effect(paths, "governed-assist", "external_directory", [`${paths.output}\\*`])).toBe(
+        "allow",
+      );
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  // The directory's parents are inside the private state a shell may write: a link put in place of
+  // the directory, or inside it, must not name a place outside it.
+  it("refuses it when the directory itself, or a file in it, is a link", () => {
+    const paths = saved();
+    try {
+      const elsewhere = join(paths.root, "elsewhere");
+      mkdirSync(elsewhere);
+      writeFileSync(join(elsewhere, "secret.txt"), "secret\n");
+      const inner = join(paths.output, "leak.txt");
+      symlinkSync(join(paths.root, "outside.txt"), inner);
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+        expect(effect(paths, mode, "read", [inner]), mode).toBe("deny:workspace-escape");
+      rmSync(paths.output, { recursive: true, force: true });
+      symlinkSync(elsewhere, paths.output);
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "read", [join(paths.output, "secret.txt")]), mode).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "external_directory", [`${paths.output}/*`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  // A shell naming the directory by its absolute path may read it with a viewer and nothing else.
+  it("refuses a shell command that writes, deletes or chains in it, in every mode", () => {
+    const paths = saved();
+    try {
+      const file = join(paths.output, "tool_0123456789ab");
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        for (const command of [
+          `echo x > ${file}`,
+          `rm ${file}`,
+          `cp /etc/hosts ${file}`,
+          `cat ${file}; rm ${file}`,
+          `cat ${file} > ${file}.copy`,
+          `sed -i s/a/b/ ${file}`,
+          `cat ${file} | tee ${file}`,
+          `echo $(rm ${file})`,
+          `cat ${file}\nrm ${file}`,
+          `cat ${file}\r\nrm ${file}`,
+          `cat ${file} | sh -c 'rm ${file}'`,
+          `echo x | dd of=${file}`,
+        ])
+          expect(effect(paths, mode, "shell", [command]), `${mode}: ${command}`).toBe(
+            "deny:workspace-escape",
+          );
+        for (const command of [`cat ${file}`, `tail -n 50 ${file}`, `grep needle ${file}`])
+          expect(effect(paths, mode, "shell", [command]), `${mode}: ${command}`).not.toBe(
+            "deny:workspace-escape",
+          );
       }
     } finally {
       rmSync(paths.root, { recursive: true, force: true });

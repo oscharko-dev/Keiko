@@ -42,6 +42,8 @@ import {
   rethrowSnapshotPathError,
   rethrowSnapshotRaceError,
   optionsWithDefaults,
+  DEFAULT_MAX_CHANGES,
+  parseStatus,
   selectedRootPathspecArgs,
   type GitProcessRunner,
 } from "./gitRoutes.js";
@@ -980,6 +982,49 @@ describe("GET /api/git/branches", () => {
     expect(runner.mock.calls[1]?.[0]).toEqual(
       expect.arrayContaining(["for-each-ref", "refs/heads"]),
     );
+  });
+
+  async function branchesBody(
+    ...replies: readonly Awaited<ReturnType<GitProcessRunner>>[]
+  ): Promise<{
+    readonly body: unknown;
+    readonly runner: ReturnType<typeof vi.fn<GitProcessRunner>>;
+  }> {
+    const runner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(ok(`${root}\n`));
+    for (const reply of replies) runner.mockResolvedValueOnce(reply);
+    const result = await handleGitBranches(
+      ctx(`/api/git/branches?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+    return { body: result.body, runner };
+  }
+  const exit1 = { ...ok(""), exitCode: 1 };
+
+  it("names the unborn branch of a repository with no commit, apart from the branch list", async () => {
+    const { body, runner } = await branchesBody(ok(""), exit1, ok("refs/heads/main\n"));
+    expect(body).toMatchObject({ available: true, branches: [], unbornBranch: "main" });
+    expect(runner.mock.calls[2]?.[0]).toEqual(
+      expect.arrayContaining(["rev-parse", "--verify", "--quiet", "HEAD"]),
+    );
+    expect(runner.mock.calls[3]?.[0]).toEqual(expect.arrayContaining(["symbolic-ref", "HEAD"]));
+  });
+
+  it("reports no unborn branch when HEAD resolves, as with a truncated list", async () => {
+    const { body } = await branchesBody(
+      { ...ok("other\0aaa111\0\0"), truncated: true },
+      ok("a1\n"),
+    );
+    expect(body).not.toHaveProperty("unbornBranch");
+  });
+
+  it("reports no unborn branch when HEAD is symbolic on something other than a local branch", async () => {
+    const { body } = await branchesBody(ok(""), exit1, ok("refs/remotes/origin/main\n"));
+    expect(body).not.toHaveProperty("unbornBranch");
+  });
+
+  it("reports no unborn branch for a detached HEAD", async () => {
+    const { body } = await branchesBody(ok(""), exit1, exit1);
+    expect(body).not.toHaveProperty("unbornBranch");
   });
 });
 
@@ -2492,5 +2537,49 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
 
     expect(normalized.runnerIdentity).toBe(raw);
     expect(normalized.runner).not.toBe(raw);
+  });
+});
+
+describe("status total change count (#4491 U-7)", () => {
+  it("reports the exact total beyond the list bound instead of the bound", () => {
+    const total = DEFAULT_MAX_CHANGES + 100;
+    const records = [
+      "## main",
+      ...Array.from({ length: total }, (_, index) => `?? src/file-${String(index)}.ts`),
+    ];
+    const status = parseStatus(
+      `${records.join("\0")}\0`,
+      "/repo",
+      "/repo",
+      "",
+      DEFAULT_MAX_CHANGES,
+      false,
+    );
+    expect(status.changes).toHaveLength(DEFAULT_MAX_CHANGES);
+    expect(status.truncated).toBe(true);
+    expect(status.totalChanges).toBe(total);
+  });
+
+  it("omits the total when git's output was cut by the byte cap", () => {
+    const records = [
+      "## main",
+      ...Array.from({ length: DEFAULT_MAX_CHANGES + 100 }, (_, i) => `?? src/f-${String(i)}.ts`),
+    ];
+    const status = parseStatus(
+      `${records.join("\0")}\0`,
+      "/repo",
+      "/repo",
+      "",
+      DEFAULT_MAX_CHANGES,
+      true,
+    );
+    expect(status.truncated).toBe(true);
+    expect(status).not.toHaveProperty("totalChanges");
+  });
+
+  it("reports the listed count as the total when nothing is cut", () => {
+    const status = parseStatus("## main\0 M a.ts\0?? b.ts\0", "/repo", "/repo", "", 10, false);
+    expect(status.truncated).toBe(false);
+    expect(status.totalChanges).toBe(2);
   });
 });

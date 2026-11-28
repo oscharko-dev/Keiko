@@ -1,3 +1,5 @@
+import type { VerificationCommandPreview } from "../editor/verificationRunner.js";
+import { verificationPlanDigest } from "./verificationApprovalPreview.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createHash } from "node:crypto";
@@ -30,7 +32,11 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { matchesOverallStatus } from "@oscharko-dev/keiko-contracts/runtime/verification";
-import { runVerification } from "@oscharko-dev/keiko-verification";
+import {
+  buildAppliedLimits,
+  runVerification,
+  scriptTableDigest,
+} from "@oscharko-dev/keiko-verification";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -40,7 +46,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { codingToolVerificationPresentation } from "./codingToolFacade.js";
+import {
+  codingToolHumanDecisionPresentation,
+  codingToolVerificationPresentation,
+} from "./codingToolFacade.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
@@ -64,6 +73,7 @@ import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import { CODING_TOOL_MAX_READ_BYTES, CODING_TOOL_READ_MAX_WINDOW_LINES } from "./codingToolIpc.js";
 import {
   PackageSelectionRequiredError,
+  VerificationPlanChangedError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
@@ -251,6 +261,18 @@ describe("production managed worktree tools", () => {
     expect(probe.matchesApproval).not.toHaveBeenCalled();
   });
 
+  it("settles a proposal wait as unavailable, never denied, when the system refused it", async () => {
+    const probe = {
+      review: vi.fn(() => ({})),
+      matchesApproval: vi.fn(() => false),
+      declined: vi.fn(() => false),
+      refused: vi.fn(() => true),
+    };
+
+    await expect(waitForRuntimeProposalApproval(probe, "commit-full")).resolves.toBe("unavailable");
+    expect(probe.review).not.toHaveBeenCalled();
+  });
+
   // PR #3625: a commit proposal's ask is raised by the server itself, so a denial had nothing to
   // reply to. Before ADR-0124 D6 the denial ended the whole run and its abort released the wait; with
   // the run going on, the call held until the approval ceiling. The run's decline now settles it at
@@ -280,7 +302,7 @@ describe("production managed worktree tools", () => {
         capability: "opaque-capability",
         body: JSON.stringify({
           action: "delivery",
-          actionId: "delivery-1",
+          actionId: "ses_1:call_commit_1",
           idempotencyKey: "delivery-key",
           intent: "commit",
           phase: "propose",
@@ -288,7 +310,8 @@ describe("production managed worktree tools", () => {
         }),
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith(proposalId);
+      // The ask names the call that waits for it, so that call's row reads "Waiting for approval".
+      expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith(proposalId, "call_commit_1");
       let settled = false;
       void pending.then((): void => {
         settled = true;
@@ -349,12 +372,12 @@ describe("production managed worktree tools", () => {
           operation: "stage",
           phase: "propose",
           paths: ["src/index.ts"],
-          actionId: "stage-1",
+          actionId: "ses_1:call_stage_1",
           idempotencyKey: "stage-1",
         }),
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(requestStageApproval).toHaveBeenCalledExactlyOnceWith("stage-3384");
+      expect(requestStageApproval).toHaveBeenCalledExactlyOnceWith("stage-3384", "call_stage_1");
       let settled = false;
       void pending.then((): void => {
         settled = true;
@@ -382,6 +405,55 @@ describe("production managed worktree tools", () => {
           },
         }),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The proposal's own ask can lapse too: nobody decided in time. That is the expired decision, not
+  // a revoked Git authority, so the row names the same closed cause as every other approval source.
+  it("answers a stage proposal nobody decided in time with the expired decision", async () => {
+    vi.useFakeTimers();
+    try {
+      const proposal = {
+        kind: "stage" as const,
+        proposalId: "stage-expired-1",
+        status: "approval-required" as const,
+        reason: "approval-required" as const,
+        pathCount: 1,
+      };
+      const service = {
+        execute: vi.fn(() => Promise.resolve(proposal)),
+        review: vi.fn(() => proposal),
+        matchesApproval: vi.fn(() => false),
+      } as unknown as RuntimeGitService;
+      const approvals = createCodingToolApprovalBridge(undefined, service);
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+        requestStageApproval: vi.fn(),
+        approvalProofVerifier: approvals,
+        log: [],
+      });
+      const pending = facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src/index.ts"],
+          actionId: "stage-1",
+          idempotencyKey: "stage-1",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(MAX_APPROVAL_CHALLENGE_TTL_MS + 1_000);
+      const result = await pending;
+      expect(result).toEqual(humanDecisionToolResult("expired"));
+      expect(codingToolHumanDecisionPresentation(result)).toEqual({
+        failureOrigin: "keiko-refused",
+        refusalCause: "approval-expired",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1884,6 +1956,196 @@ describe("production managed worktree tools", () => {
     expect(JSON.stringify(records)).not.toContain("server-side workspace trust");
   });
 
+  // ADR-0124 D6: the person approved the command lines the card showed. The run plans the call
+  // again; a project that changed after approval (another script body, another package folder) is
+  // refused with a closed reason, and nothing runs.
+  describe("a verification approved on a shown plan", () => {
+    const stepsOf = (scriptBody: string): VerificationCommandPreview => ({
+      kind: "steps",
+      probeFailures: 0,
+      steps: [{ command: "npm", args: ["run", "test"], scriptName: "test", scriptBody }],
+    });
+
+    async function runApproved(options: {
+      readonly approved: string;
+      readonly now: string;
+      readonly packageDir?: string;
+      readonly targetPath?: string;
+      readonly planner?: "absent" | "throws";
+      readonly runnerRefuses?: "plan-changed";
+    }): Promise<{
+      readonly result: unknown;
+      readonly runToReport: ReturnType<typeof vi.fn>;
+      readonly records: ServerDiagnosticRecord[];
+      readonly replanned: Parameters<
+        NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>
+      >[0][];
+    }> {
+      const records: ServerDiagnosticRecord[] = [];
+      const replanned: Parameters<
+        NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>
+      >[0][] = [];
+      const runToReport = vi.fn((_input: VerificationRunInput, _signal: AbortSignal) =>
+        Promise.reject(
+          options.runnerRefuses === "plan-changed"
+            ? new VerificationPlanChangedError()
+            : new VerificationRunnerError("NO_RUNNABLE_STEPS", "stop after the check"),
+        ),
+      );
+      const digest = verificationPlanDigest(
+        (stepsOf(options.approved) as Extract<VerificationCommandPreview, { kind: "steps" }>).steps,
+      );
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+        },
+        authorityRef: { runId: "run-verification-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode: "autonomous-delivery",
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => ({
+          ...FACTS,
+          actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+        }),
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+        },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        approvalProofVerifier: {
+          matches: () => false,
+          consume: () => false,
+          takeApprovedPlan: ({ runId, request }) =>
+            runId === "run-verification-1" && request.actionId === "verification-1"
+              ? digest
+              : undefined,
+        },
+        verificationRunner: {
+          runToReport,
+          ...(options.planner === "absent"
+            ? {}
+            : {
+                previewCommands: (input): VerificationCommandPreview => {
+                  replanned.push(input);
+                  if (options.planner === "throws") {
+                    throw new Error(`cannot plan rm -rf ${options.now}`);
+                  }
+                  return stepsOf(options.now);
+                },
+              }),
+        },
+        diagnostics: { record: (record): void => void records.push(record) },
+        onRuntimeEvent: vi.fn(),
+      });
+      const result = await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-1",
+          idempotencyKey: "verification-key",
+          verifierId: "test",
+          ...(options.packageDir === undefined ? {} : { packageDir: options.packageDir }),
+          ...(options.targetPath === undefined ? {} : { targetPath: options.targetPath }),
+        }),
+      });
+      return { result, runToReport, records, replanned };
+    }
+
+    it("refuses when package.json changed after approval, runs nothing and logs body-free", async () => {
+      const { result, runToReport, records } = await runApproved({
+        approved: "vitest run",
+        now: "rm -rf / && vitest run",
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+      expect(runToReport).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          operation: "coding-runtime.verification",
+          message: "verification-refused",
+          errorClass: "verification-plan-changed",
+          correlationId: "run-verification-1",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("rm -rf");
+    });
+
+    it("hands the approved digest to the runner and maps its plan-changed refusal at the effect", async () => {
+      const { result, runToReport } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        runnerRefuses: "plan-changed",
+      });
+      const expected = verificationPlanDigest(
+        (stepsOf("vitest run") as Extract<VerificationCommandPreview, { kind: "steps" }>).steps,
+      );
+      expect(runToReport).toHaveBeenCalledTimes(1);
+      expect(runToReport.mock.calls[0]?.[0]).toMatchObject({ expectedPlanDigest: expected });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+    });
+
+    it("fails closed when the card showed commands but the runner cannot plan them again", async () => {
+      const { result, runToReport } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        planner: "absent",
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+      expect(runToReport).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the plan cannot be made, with a body-free line", async () => {
+      const { result, runToReport, records } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        planner: "throws",
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+      expect(runToReport).not.toHaveBeenCalled();
+      expect(records.length).toBeGreaterThan(0);
+      expect(JSON.stringify(records)).not.toContain("rm -rf");
+      expect(JSON.stringify(records)).not.toContain("vitest run");
+    });
+
+    it("a test call cannot carry a targetPath, so the re-plan never refuses spuriously for one", async () => {
+      const { result, runToReport, replanned } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        targetPath: "packages/app/src/a.test.ts",
+      });
+      // The request parser rejects it before any plan exists; nothing is planned, bound or run.
+      expect(JSON.stringify(result)).not.toContain("verification-plan-changed");
+      expect(replanned).toEqual([]);
+      expect(runToReport).not.toHaveBeenCalled();
+    });
+
+    it("re-plans with the package folder the call names and runs when nothing changed", async () => {
+      const { runToReport, replanned } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        packageDir: "packages/app",
+      });
+      expect(replanned).toEqual([
+        { projectId: "/managed/worktree", kinds: ["test"], packageDir: "packages/app" },
+      ]);
+      expect(runToReport).toHaveBeenCalledOnce();
+    });
+  });
+
   // The two refusals BEFORE the runner is called. Both returned a bare `{ status: "failed" }` with
   // no reason code and no log line, so the model could not tell "do not retry, report this" from
   // "try again" and the activity log had nothing to reconstruct (cursor review, PR #3381).
@@ -1999,6 +2261,41 @@ describe("production managed worktree tools", () => {
           }),
         }),
       ).resolves.toMatchObject({ status: "failed", reasonCode });
+    },
+  );
+
+  // A step that reached a limit tells the model which one, in a closed word: the dimension the
+  // orchestrator's own appliedLimits marked breached, never a number or a path (defect V-1).
+  it.each([
+    ["resource-exceeded", "output-size", "output-limit"],
+    ["resource-exceeded", "memory", "memory-limit"],
+    ["timed-out", "wall-time", "time-limit"],
+  ] as const)(
+    "names the closed limit of a %s step that breached %s",
+    async (stepStatus, dimension, word) => {
+      const [template] = failedVerificationReport().results;
+      if (template === undefined) throw new TypeError("fixture result missing");
+      const report: VerificationReport = {
+        ...verificationReport(stepStatus),
+        results: [
+          {
+            ...template,
+            status: stepStatus,
+            exitCode: null,
+            locations: undefined,
+            appliedLimits: buildAppliedLimits(DEFAULT_VERIFICATION_LIMITS, dimension),
+          },
+        ],
+      };
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(report),
+        records: [],
+      });
+
+      await expect(executeVerification(facade, `limit-${dimension}`)).resolves.toMatchObject({
+        status: "failed",
+        detail: `Limit reached: ${word}.`,
+      });
     },
   );
 
@@ -2853,6 +3150,9 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         plan: {
           workspaceRoot,
+          // The plan carries the digest of the script table it was built on (a fixture without
+          // scripts), so the effect can re-prove it before any package-script step.
+          approvedScriptsDigest: scriptTableDigest({}),
           steps: [
             expect.objectContaining({
               kind: "targeted-test",
@@ -3254,6 +3554,7 @@ describe("production managed worktree tools", () => {
             commitProof: "unavailable",
             reasonCode: "proof-unavailable",
             nextAction: "verify-again",
+            cause: "read-failed",
           },
         },
       });
@@ -3273,12 +3574,54 @@ describe("production managed worktree tools", () => {
         errorKind: "unavailable",
         proofStage: stage,
         commitProofReason: "proof-unavailable",
+        commitProofCause: "read-failed",
         frames: ["packages/keiko-server/dist/gitDelivery/verifiedCommitFacts.js:40:8"],
         causeChain: ["TypeError"],
       });
       expect(JSON.stringify({ records, log, result })).not.toContain("PRIVATE_");
     },
   );
+
+  it("names a permanent read failure's closed cause and stops telling the model to verify again", async () => {
+    const log: ServerLogEvent[] = [];
+    const service = verificationService();
+    service.beginVerification = vi.fn(() =>
+      Promise.reject(
+        Object.assign(new Error("git-raw-unborn-head"), { code: "git-raw-unborn-head" }),
+      ),
+    );
+    const result = await verificationFacade({
+      runToReport: vi.fn(() => Promise.resolve(verificationReport("passed"))),
+      records: [],
+      log,
+      verifiedCommitService: service,
+    }).execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "proof-permanent",
+        idempotencyKey: "proof-permanent",
+        verifierId: "test",
+      }),
+    });
+    expect(result).toMatchObject({
+      verification: {
+        commit: {
+          commitProof: "unavailable",
+          reasonCode: "proof-unavailable",
+          nextAction: "resolve-then-verify",
+          cause: "unborn-head",
+        },
+      },
+    });
+    const failed = log.find((event) => event.extra?.state === "proof-unavailable");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(failed ?? {}),
+      ),
+    ).toMatchObject({ commitProofCause: "unborn-head", commitProofReason: "proof-unavailable" });
+  });
 
   // `Error.name` is a writable own property; a library that assigns a message or a path to it would
   // put that text on the `[keiko-server:diagnostic]` stderr line and the activity log's `errorKind`
@@ -3588,11 +3931,11 @@ describe("production managed worktree tools", () => {
         message: "feat: approved",
         allowEmpty: false,
         verified: {
-          headSha: approvalRequiredResult.parentSha,
+          head: { kind: "born", sha: approvalRequiredResult.parentSha },
           stagedTreeDigest: approvalRequiredResult.stagedTreeDigest,
           branchName: "codex/task",
           baseRef: "dev",
-          baseSha: approvalRequiredResult.baseSha,
+          base: { kind: "born", sha: approvalRequiredResult.baseSha },
         },
       },
       context: {

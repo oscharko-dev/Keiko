@@ -10,8 +10,10 @@ import type {
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchVerificationGap,
 } from "@oscharko-dev/keiko-contracts";
+import { SELECTION_MISMATCH_ERROR_CODE } from "@/lib/coding-workbench-runtime-mutations";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
+import type { WorkbenchModelReadiness } from "./codingWorkbenchModelReadiness";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 import type {
   CodingWorkbenchResourceStatus,
@@ -101,9 +103,33 @@ function runStateLabel(
   return t(`codingWorkbench.runState.${state}`);
 }
 
-function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchTranslate): string {
+// What the person is waiting for when the run's own state does not say it yet. A start waits for
+// its answer from the server (the runtime is launched first) and no run is shown until it arrives:
+// the line says so at once instead of "No active coding run.". A file change held for review
+// leaves the run `running` on the server (the review travels over the editor bridge, not the
+// permission flow), so the line says what the run waits for.
+function pendingStateLabel(
+  state: CodingWorkbenchRuntimeState,
+  awaitingApproval: boolean,
+  t: CodingWorkbenchTranslate,
+): string | undefined {
+  const runState = state.run.value?.state;
+  const starting = state.mutation.kind === "start" && state.mutation.status === "pending";
+  if (starting && !activeRunState(runState)) return runStateLabel("starting", t);
+  return awaitingApproval && runState === "running"
+    ? runStateLabel("awaiting-approval", t)
+    : undefined;
+}
+
+function runAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  awaitingApproval: boolean,
+): string {
   if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
   const snapshot = state.run.value;
+  const pending = pendingStateLabel(state, awaitingApproval, t);
+  if (pending !== undefined) return pending;
   if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
   if (snapshot.state === "idle" && !state.canStart) {
     return t("codingWorkbench.header.notReady");
@@ -190,6 +216,7 @@ export function runStatusAnnouncement(
   t: CodingWorkbenchTranslate,
   researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
   phase: CodingWorkbenchRunPhase | null = null,
+  awaitingApproval = false,
 ): string {
   const snapshot = state.run.value;
   const recovery =
@@ -197,7 +224,7 @@ export function runStatusAnnouncement(
       ? t("codingWorkbench.announcement.recoveryComplete")
       : "";
   return joinedAnnouncements([
-    runAnnouncement(state, t),
+    runAnnouncement(state, t, awaitingApproval),
     phaseAnnouncement(phase, t),
     recovery,
     researchAnnouncement(researchGrant, t),
@@ -391,11 +418,22 @@ export function eventTitle(
   t: CodingWorkbenchTranslate,
 ): string {
   if (event.kind !== "status") return t(`codingWorkbench.event.${event.eventKind}`);
-  // A verification gap names what is missing, as its sentence does, not a generic failure (#4491).
-  if (isVerificationGapEvent(event)) return t("codingWorkbench.event.runUnverified");
   return event.state === "failed"
     ? t("codingWorkbench.event.runFailed")
     : runStateLabel(event.state, t);
+}
+
+// U-53: how many repository agent models the run did not use, as a count with the reason.
+function eventAgentModelsDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.eventKind !== "native-agent-models-refused")
+    return "";
+  const count = event.refusedAgentModelCount ?? 0;
+  return count === 1
+    ? t("codingWorkbench.event.agentModelsRefused.one")
+    : t("codingWorkbench.event.agentModelsRefused", { count });
 }
 
 export function eventDetail(
@@ -408,6 +446,7 @@ export function eventDetail(
     eventStoppedDetail(event, t),
     eventOutcomeDetail(event, t),
     eventContentTrustDetail(event, t),
+    eventAgentModelsDetail(event, t),
   ]
     .filter((part) => part.length > 0)
     .join(" ");
@@ -461,11 +500,10 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
 
 // F9 (#3873): a run that settles `cancelled` was stopped, which is not a failure, so its terminal
 // entry says so instead of leaving a bare "Stopped" a reader could take for one. It never says WHO
-// stopped it: the operator's Stop and `CodingRuntimeOrchestrator.shutdown()` (an update, a restart
-// or a machine shutdown) take the same stop path, and the settled snapshot and its terminal status
-// event are identical for both — only `coding-runtime.run.shutdown` in the server's Activity Log
-// names a shutdown. An attribution here would blame the operator for a stop they never asked for
-// (#3873 review).
+// stopped it: the terminal status event is identical for the operator's Stop and for
+// `CodingRuntimeOrchestrator.shutdown()` (an update, a restart or a machine shutdown), and an
+// attribution here would blame the operator for a stop they never asked for (#3873 review). The
+// settled snapshot does tell them apart (`stopCause`, U-31), and the run status line says so there.
 function eventStoppedDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
@@ -514,9 +552,9 @@ const identityTranslate: CodingWorkbenchTranslate = (key) => key;
  * action that is not there.
  */
 export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): boolean {
-  // A run whose changes were not checked has nothing broken to report, with or without a check to
-  // offer, so it never offers the error report.
-  if (isVerificationGapEvent(event)) return false;
+  // A run whose changes were not checked or whose check failed has nothing broken inside Keiko to
+  // report, so it never offers the error report.
+  if (isVerificationGapFailure(event)) return false;
   if (event.kind === "status" && event.state === "failed") return true;
   if (turnFailureDetail(event, identityTranslate).length > 0) return false;
   const key = runFailureMessageKey(event);
@@ -527,24 +565,12 @@ export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): b
 }
 
 /** True exactly when the event is a run settled `failed` with `verification-not-evidenced` (#4491). */
-function isVerificationGapEvent(event: CodingWorkbenchRuntimeSseEvent): boolean {
+function isVerificationGapFailure(event: CodingWorkbenchRuntimeSseEvent): boolean {
   return (
     event.kind === "status" &&
     event.state === "failed" &&
     event.failureCode === "verification-not-evidenced"
   );
-}
-
-/**
- * True when the card of a verification gap can offer "Run the check now": only while a new request
- * can be sent (`runCheckAvailable`). The card's sentence names the gap and the next step without
- * naming a control, so it reads correctly with or without the button.
- */
-export function eventOffersRunCheck(
-  event: CodingWorkbenchRuntimeSseEvent,
-  runCheckAvailable: boolean,
-): boolean {
-  return runCheckAvailable && isVerificationGapEvent(event);
 }
 
 function turnFailureDetail(
@@ -613,8 +639,9 @@ export function actionFailureAlert(
   summaryKey: CodingWorkbenchMessageKey,
   failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
+  extraValues: Readonly<Record<string, string>> = {},
 ): string {
-  const generic = t(summaryKey, { code: failure.code });
+  const generic = t(summaryKey, { ...extraValues, code: failure.code });
   const issueSummary =
     failure.issueBindingFailure === undefined
       ? ""
@@ -653,10 +680,31 @@ const REFRESH_FAILURE_ALERTS = [
   ["stream", "codingWorkbench.alert.eventStreamRefreshFailed"],
 ] as const;
 
+// U-55: the refusal a window gets when its app session no longer exists, as after the server
+// restarted under an open tab. Once the Workbench knows the window is unpaired, the pairing note
+// says what to do; a red alert naming this code beside it tells the person nothing more. Any other
+// refusal, and the same refusal of a paired or not yet checked window, stays an alert. The body-free
+// diagnostic of the failed repair is written where the repair fails, not here.
+const UNPAIRED_AUTHORITY_REFUSAL = "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED";
+
+function isUnpairedRefusal(
+  state: CodingWorkbenchRuntimeState,
+  error: CodingWorkbenchClientError | null,
+): boolean {
+  return state.pairing === "unpaired" && error?.code === UNPAIRED_AUTHORITY_REFUSAL;
+}
+
+function shownMutationError(state: CodingWorkbenchRuntimeState): CodingWorkbenchClientError | null {
+  return isUnpairedRefusal(state, state.mutation.error) ? null : state.mutation.error;
+}
+
 function refreshFailureResource(
   state: CodingWorkbenchRuntimeState,
 ): (typeof REFRESH_FAILURE_ALERTS)[number] | undefined {
-  return REFRESH_FAILURE_ALERTS.find(([resource]) => state[resource].status === "error");
+  return REFRESH_FAILURE_ALERTS.find(
+    ([resource]) =>
+      state[resource].status === "error" && !isUnpairedRefusal(state, state[resource].error),
+  );
 }
 
 function refreshFailureAlert(
@@ -671,7 +719,8 @@ function refreshFailureAlert(
 export function visibleAlertFailure(
   state: CodingWorkbenchRuntimeState,
 ): CodingWorkbenchClientError | null {
-  if (state.mutation.error !== null) return state.mutation.error;
+  const mutationError = shownMutationError(state);
+  if (mutationError !== null) return mutationError;
   const failure = refreshFailureResource(state);
   return failure === undefined ? null : state[failure[0]].error;
 }
@@ -683,7 +732,13 @@ export function visibleAlertFailure(
 export function visibleStatusNotice(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
+  activityWaiting = false,
 ): string | null {
+  if (state.streamCapacityWaiting && state.streamCapacityHeldElsewhere) {
+    return t("codingWorkbench.status.eventStreamWaitingForConnectionElsewhere");
+  }
+  if (state.streamCapacityWaiting || activityWaiting)
+    return t("codingWorkbench.status.eventStreamWaitingForConnection");
   return state.stream.status === "loading"
     ? t("codingWorkbench.status.eventStreamReconnecting")
     : null;
@@ -771,6 +826,25 @@ function readinessStartBlocker(
   );
 }
 
+const MODEL_READINESS_KEYS: Readonly<
+  Record<WorkbenchModelReadiness["kind"], CodingWorkbenchMessageKey>
+> = {
+  "not-activated": "codingWorkbench.source.unavailableReason.conversation-not-activated",
+  "check-failed": "codingWorkbench.source.unavailableReason.conversation-check-failed",
+  "request-failed": "codingWorkbench.source.unavailableReason.conversation-request-failed",
+};
+
+// "Not activated yet" is the normal state until a person activates the model (and again after an update or a changed connection); "did not pass its readiness check" is a
+// failure. The server reports both as one reason, so the sentence is chosen from the catalog's fact.
+function modelReadinessText(
+  readiness: WorkbenchModelReadiness | null,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  return readiness === null
+    ? null
+    : t(MODEL_READINESS_KEYS[readiness.kind], { model: readiness.modelId });
+}
+
 // The standing conditions: properties of the selected source or of this installation, not a failed
 // action. They come after actionable refresh failures (one alert at a time — reporting a standing
 // condition first would swallow the recoverable error). Pairing remains in the lifecycle narration,
@@ -779,6 +853,7 @@ function standingConditionAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
+  modelReadiness: WorkbenchModelReadiness | null,
 ): string | null {
   // The source's own unavailability reason and next step. It reaches a SIGHTED operator only here:
   // the header chip renders "<label> — unavailable" with no reason, and the only other renderer of
@@ -788,7 +863,7 @@ function standingConditionAlert(
   // says nothing about the model source, so there is nothing to duplicate.
   const sourceReason = sourceVerificationPending(state.source.value)
     ? null
-    : sourceUnavailableReasonText(state.source.value, t);
+    : (modelReadinessText(modelReadiness, t) ?? sourceUnavailableReasonText(state.source.value, t));
   if (sourceReason !== null) return sourceReason;
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
@@ -858,6 +933,61 @@ const START_REFUSAL_SUMMARY_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey>
   ["CODING_RUNTIME_MODEL_CHANGED_DURING_CHECK", "codingWorkbench.alert.startEndedModelChanged"],
 ]);
 
+// #4491: every other closed start-refusal code names its cause and the next step. The word after
+// `startRefused` in the catalog key is all that differs between them; the drift codes share one.
+type StartRefusedAlert =
+  | "ActiveRun"
+  | "RecoveryRequired"
+  | "IssueContext"
+  | "AuthorityExpired"
+  | "AuthorityReplayed"
+  | "AuthorityBudget"
+  | "ApprovalActivation"
+  | "ReplayCap"
+  | "EditsBlocked"
+  | "SelectionMismatch"
+  | "ExpectedWorkspaceMissing";
+
+const START_REFUSED_ALERT_OF_CODE: Readonly<Record<string, StartRefusedAlert>> = {
+  ACTIVE_RUN_CONFLICT: "ActiveRun",
+  RECOVERY_REQUIRED: "RecoveryRequired",
+  ISSUE_CONTEXT_UNAVAILABLE: "IssueContext",
+  AUTHORITY_EXPIRED: "AuthorityExpired",
+  AUTHORITY_REPLAYED: "AuthorityReplayed",
+  AUTHORITY_BUDGET_EXCEEDED: "AuthorityBudget",
+  APPROVAL_ACTIVATION_FAILED: "ApprovalActivation",
+  REPLAY_CAP_EXHAUSTED: "ReplayCap",
+  EDITS_BLOCKED: "EditsBlocked",
+  WORKSPACE_SELECTION_MISMATCH: "SelectionMismatch",
+  EXPECTED_WORKSPACE_MISSING: "ExpectedWorkspaceMissing",
+};
+
+// The runtime supervisor's refusals and a refused intent already have a sentence of their own, keyed
+// by the code in lower case with dashes.
+const START_REFUSAL_EVENT_CODE = /^(INVALID_INTENT|RUNTIME_SUPERVISOR_[A-Z_]+)$/u;
+type StartRefusalEventKey =
+  | "codingWorkbench.event.failure.invalid-intent"
+  | `codingWorkbench.event.failure.runtime-supervisor-${
+      | "grants-acl"
+      | "grants-directory"
+      | "grants-capability"
+      | "gateway-connect"
+      | "gateway-admit"
+      | "no-desktop"
+      | "image-path"
+      | "refused"}`;
+
+function startRefusalDetailKey(code: string): CodingWorkbenchMessageKey | undefined {
+  const name = code.replace("CODING_RUNTIME_", "");
+  if (name.endsWith("_DRIFT")) return "codingWorkbench.alert.startRefusedDrift";
+  const alert = START_REFUSED_ALERT_OF_CODE[name];
+  if (alert !== undefined) return `codingWorkbench.alert.startRefused${alert}`;
+  if (!START_REFUSAL_EVENT_CODE.test(name)) return undefined;
+  const slug = name.toLowerCase().replaceAll("_", "-");
+  const key = `codingWorkbench.event.failure.${slug}` as StartRefusalEventKey;
+  return key;
+}
+
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
 // tells the operator what to do, not the generic "review the live state and retry". #3603: a model
 // whose window cannot hold a coding run's prompt, or whose window is still being verified, says so.
@@ -872,7 +1002,11 @@ function startRefusalSummaryKey(
       return "codingWorkbench.alert.startRefusedModelVerificationPending";
     return "codingWorkbench.alert.startRefusedModelUnavailable";
   }
-  return START_REFUSAL_SUMMARY_KEYS.get(code) ?? "codingWorkbench.alert.actionFailedCode";
+  return (
+    START_REFUSAL_SUMMARY_KEYS.get(code) ??
+    startRefusalDetailKey(code) ??
+    "codingWorkbench.alert.actionFailedCode"
+  );
 }
 
 export function visibleAlert(
@@ -880,18 +1014,31 @@ export function visibleAlert(
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
   authorityError: string | null = null,
+  modelReadiness: WorkbenchModelReadiness | null = null,
+  checkoutBranchChangedTo: string | null = null,
 ): string | null {
-  if (state.mutation.error) {
+  const mutationError = shownMutationError(state);
+  if (mutationError) {
+    // U-39 (#4491): a start refused for the selection, where the same repository's checkout moved
+    // to another branch outside Keiko, says so instead of naming another repository.
+    if (checkoutBranchChangedTo !== null && mutationError.code === SELECTION_MISMATCH_ERROR_CODE) {
+      return actionFailureAlert(
+        "codingWorkbench.alert.startRefusedBranchChanged",
+        mutationError,
+        t,
+        { branch: checkoutBranchChangedTo },
+      );
+    }
     return actionFailureAlert(
-      startRefusalSummaryKey(state.mutation.error.code, state.mutation.error.modelRefusalReason),
-      state.mutation.error,
+      startRefusalSummaryKey(mutationError.code, mutationError.modelRefusalReason),
+      mutationError,
       t,
     );
   }
   const refreshAlert = refreshFailureAlert(state, t);
   if (refreshAlert !== null) return refreshAlert;
   if (!setupVisible && authorityError !== null) return authorityError;
-  return standingConditionAlert(state, t, setupVisible);
+  return standingConditionAlert(state, t, setupVisible, modelReadiness);
 }
 
 export function startBlockedReason(
@@ -899,10 +1046,11 @@ export function startBlockedReason(
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
   authorityError: string | null = null,
+  modelReadiness: WorkbenchModelReadiness | null = null,
 ): string | null {
   if (state.canStart) return null;
   if (state.mutation.status === "pending") return t("codingWorkbench.composer.blocked.busy");
-  const alert = visibleAlert(state, t, setupVisible, authorityError);
+  const alert = visibleAlert(state, t, setupVisible, authorityError, modelReadiness);
   if (alert !== null) return alert;
   if (state.pairing === "unknown") return t("codingWorkbench.composer.blocked.pairing");
   if (state.pairing === "unpaired") return t("codingWorkbench.composer.blocked.unpaired");

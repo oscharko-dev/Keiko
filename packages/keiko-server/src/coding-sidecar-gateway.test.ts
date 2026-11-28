@@ -9,6 +9,7 @@ import {
   ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
+import { _resetRoutePromptCalibrationForTests } from "./coding-sidecar-prompt-estimate.js";
 import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeRuntimeVersions.js";
 import {
   MAX_RUNTIME_MAX_DURATION_MINUTES,
@@ -534,6 +535,8 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 
 // The consecutive-unavailable count is per run id and these tests reuse one: each starts clean.
 beforeEach(resetProviderUnavailableWindowsForTests);
+// The route's prompt calibration is process-wide state: every case starts without it.
+beforeEach(_resetRoutePromptCalibrationForTests);
 
 describe("coding-sidecar gateway", () => {
   afterEach(resetServerLogger);
@@ -1215,7 +1218,7 @@ describe("coding-sidecar gateway", () => {
       ["keiko_git_execute", "e4f2a410a7b4af87cc0f81faa436eab0e109dbcf33ae050c45cccb64e4dc127a"],
       ["keiko_git_push", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
       // #3902 AC2: staging carries the explicit `unstage` choice.
-      ["keiko_git_stage", "f8a74e3d1d15960a9252ea9471a03e55ab92f544e8d2c4286ff645e428f9328a"],
+      ["keiko_git_stage", "eaa36b867c5ea7c8721ccd17b973124195c6361182dd44ed935963341ee74f69"],
       ["keiko_git_status", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
       // #3902 AC2: the governed fetch / fast-forward pull, captured from the producer.
       ["keiko_git_sync", "fa0f6ff1b09f36182eceb06bd3b72e028f5d71accf1a597c24ab3549f060b228"],
@@ -3446,6 +3449,86 @@ describe("coding-sidecar gateway", () => {
     ).toMatchObject({ runId: "run-stream-empty", failureCode: "empty-answer", published: true });
   });
 
+  // O-11: an empty turn must say what the provider's own usage reported, so "it generated output
+  // that never arrived" is told apart from "it generated nothing" from the log alone. The outcome
+  // line also names a completion count that no provider or estimate produced.
+  async function streamedEmptyAnswerLines(
+    runId: string,
+    failure: ProviderEmptyAnswerError,
+  ): Promise<{
+    readonly turnFailed: Record<string, unknown> | undefined;
+    readonly outcome: Record<string, unknown> | undefined;
+  }> {
+    const sink = captureServerLog("info");
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw failure;
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "empty answer" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+      correlationId: "sidecar-corr-0003",
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      codingRuntimeEventHub: new CodingRuntimeEventHub(),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    return {
+      turnFailed: sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")
+        ?.extra,
+      outcome: sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    };
+  }
+
+  it("names provider-reported output on an empty turn the provider counted tokens for (O-11)", async () => {
+    const failure = new ProviderEmptyAnswerError("coding");
+    failure.providerUsage = { completionTokens: 1800, reasoningTokens: 1700 };
+    failure.emptyAnswerEvidence = "provider-reported-output";
+
+    const { turnFailed, outcome } = await streamedEmptyAnswerLines("run-empty-counted", failure);
+
+    expect(turnFailed).toMatchObject({
+      failureCode: "empty-answer",
+      emptyAnswerEvidence: "provider-reported-output",
+      providerCompletionTokens: 1800,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "failed",
+      completionTokens: 0,
+      completionTokensMeasured: false,
+      providerCompletionTokens: 1800,
+    });
+  });
+
+  it("marks the completion count of an unmeasured empty turn instead of reporting a bare 0 (O-11)", async () => {
+    const failure = new ProviderEmptyAnswerError("coding");
+    failure.emptyAnswerEvidence = "usage-unavailable";
+
+    const { turnFailed, outcome } = await streamedEmptyAnswerLines("run-empty-unmeasured", failure);
+
+    expect(turnFailed).toMatchObject({ emptyAnswerEvidence: "usage-unavailable" });
+    expect(turnFailed).not.toHaveProperty("providerCompletionTokens");
+    expect(outcome).toMatchObject({ outcome: "failed", completionTokensMeasured: false });
+    expect(outcome).not.toHaveProperty("providerCompletionTokens");
+  });
+
   // Regression: a mid-stream failure without a request correlation once produced bare "unknown",
   // which the diagnostic sanitizer rewrote to "invalid-correlation-id". The authenticated run id
   // is always available and now anchors the diagnostic directly in support analyze's run timeline.
@@ -4001,7 +4084,9 @@ describe("coding-sidecar gateway", () => {
         try {
           await Promise.resolve();
           pulls += 1;
-          yield { type: "delta", token: "first" };
+          // The first line is held until the next line begins, so the token that carries both
+          // settles the preface as prose and streams at once.
+          yield { type: "delta", token: "first\nnext" };
           pulls += 1;
           yield { type: "delta", token: "must-not-be-pulled" };
         } finally {
@@ -4033,7 +4118,7 @@ describe("coding-sidecar gateway", () => {
       expect(pulls).toBe(1);
       expect(returned).toBe(false);
       expect(response.res.destroyed).toBe(false);
-      expect(response.body()).toContain('"content":"first"');
+      expect(response.body()).toContain('"content":"first\\nnext"');
 
       await vi.advanceTimersByTimeAsync(1);
       expect(await pending).toBe(STREAMING);
@@ -4054,7 +4139,7 @@ describe("coding-sidecar gateway", () => {
   it("resumes the provider iterator when the reader drains", async () => {
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
       await Promise.resolve();
-      yield { type: "delta", token: "first" };
+      yield { type: "delta", token: "first\nnext" };
       yield { type: "delta", token: "second" };
       yield { type: "done", response: assistantResponse("azure-coding-model") };
     };
@@ -4080,7 +4165,7 @@ describe("coding-sidecar gateway", () => {
       ),
     );
     await vi.waitFor(() => {
-      expect(response.body()).toContain('"content":"first"');
+      expect(response.body()).toContain('"content":"first\\nnext"');
     });
     expect(response.body()).not.toContain('"content":"second"');
     response.drain();
@@ -5872,12 +5957,52 @@ describe("coding sidecar gateway turn failure projection", () => {
       const response = mockResponse({ captureBody: true });
       const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
         await Promise.resolve();
-        yield { type: "delta", token: "I will search now." };
+        yield { type: "delta", token: "I will search now.\nThen read." };
         throw new MalformedToolCallError("private-malformed-invocation-canary");
       };
       const deps = {
         ...runtimeGatewayDeps(
           () => ({ ok: true, binding: { runId: "run-stream-malformed" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "synthetic" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain("I will search now.");
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(response.body()).not.toContain("private-malformed-invocation-canary");
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "invalid-tool-call",
+        runtimeRetry: "refused",
+      });
+    });
+    it("ends a malformed invocation after delivered text without an identical runtime retry when the answer is a single line", async () => {
+      const sink = captureServerLog("warn");
+      const response = mockResponse({ captureBody: true });
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "I will search now." };
+        throw new MalformedToolCallError("private-malformed-invocation-canary");
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-malformed-single" } }),
           undefined,
           createOpenCodeGatewayReadinessRegistry(),
           (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
@@ -6712,6 +6837,8 @@ describe("coding sidecar gateway rejection activity log", () => {
           reason: "prompt-tokens-exceeded",
           runId: "run-gateway-test",
           estimatedPromptTokens,
+          promptEstimateSource: "local",
+          localPromptTokens: estimatedPromptTokens,
           maxPromptTokens: 16,
           admissiblePromptTokens: admissible,
           inputMessageCount: 1,
@@ -6751,6 +6878,8 @@ describe("coding sidecar gateway rejection activity log", () => {
           reason: "input-messages-exceeded",
           runId: "run-gateway-test",
           estimatedPromptTokens,
+          promptEstimateSource: "local",
+          localPromptTokens: estimatedPromptTokens,
           maxPromptTokens: 128_000,
           admissiblePromptTokens: admissiblePromptTokens({
             maxPromptTokens: 128_000,
@@ -7787,9 +7916,21 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     // of its completed safe unit before finish, rather than terminal-only concatenation.
     expect(response.body()).not.toContain('"content":"First "');
     upstream.push(sseDelta({ content: "public line.\n" }));
+    // The first line may be a preface to a tool call written as text, so it is held until the
+    // next line begins; it is never held beyond that.
+    expect(response.body()).not.toContain("First public line.");
+    // The privacy owner hands the next line over once it is complete; the first line is in the
+    // body from then on, before the provider has finished.
+    upstream.push(sseDelta({ content: "second line.\n" }));
     await vi.waitFor(() => {
-      expect(response.body()).toContain('"content":"First public line.\\n"');
+      expect(response.body()).toContain('"content":"First public line.\\n');
     });
+    // Every later complete line streams before the provider has finished.
+    upstream.push(sseDelta({ content: "third line.\n" }));
+    await vi.waitFor(() => {
+      expect(response.body()).toContain("third line.");
+    });
+    expect(response.body()).not.toContain('"finish_reason":"stop"');
     upstream.push(sseDelta({ content: "second." }));
     upstream.push(sseFinish("stop"));
     upstream.push("data: [DONE]\n\n");
@@ -7798,7 +7939,8 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     expect(await pending).toBe(STREAMING);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { content: "First public line.\n" },
+      { content: "First public line.\nsecond line.\n" },
+      { content: "third line.\n" },
       { content: "second." },
     ]);
     expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
@@ -8320,7 +8462,7 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
         (): (() => AsyncIterable<GatewayStreamChunk>) =>
           async function* (): AsyncGenerator<GatewayStreamChunk> {
             await Promise.resolve();
-            yield { type: "delta", token: "partial" };
+            yield { type: "delta", token: "partial\nanswer" };
             throw new TransportError("connection reset after answer text");
           },
       ),
@@ -8341,6 +8483,72 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
     ).toMatchObject({ runId: "run-after-text", runtimeRetry: "allowed" });
+  });
+  it("ends a live turn whose provider failed after answer text with an error the runtime may retry when the answer is a single line", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-after-text-single" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            throw new TransportError("connection reset after answer text");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).toContain("partial");
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "failed", repairAttempted: false });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runId: "run-after-text-single", runtimeRetry: "allowed" });
+  });
+
+  // A held first line whose flush finds the response already ended settles the turn once, as
+  // cancelled: the provider failure behind it must not record a second outcome.
+  it("records one outcome when the held first line cannot be delivered before a failure", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-after-text-gone" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            Object.defineProperty(response.res, "writableEnded", { get: () => true });
+            throw new TransportError("connection reset after answer text");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    const outcomes = sink.events.filter((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.extra).toMatchObject({ outcome: "cancelled" });
+    expect(response.body()).not.toContain("partial");
   });
 
   // An oversized or unparseable provider answer is the same answer on every attempt: the runtime
@@ -12412,13 +12620,61 @@ it("explains unavailable continuation after a live stream has opened", async () 
   const response = mockResponse({ captureBody: true });
   const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
     await Promise.resolve();
-    yield { type: "delta", token: "Visible partial answer." };
+    yield { type: "delta", token: "Visible partial answer.\nMore." };
     throw new ReasoningHistoryUnavailableError();
   };
   try {
     const deps = {
       ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-live-history-unavailable" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 5 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          tools: modelVisibleTools(),
+          messages: [{ role: "user", content: "synthetic" }],
+        }),
+        res: response.res,
+      },
+      deps,
+    );
+    expect(result).toBe(STREAMING);
+    expect(response.body()).toContain("Visible partial answer.");
+    expect(response.body()).toContain(
+      "Model continuation is unavailable. Start a new coding task.",
+    );
+    expect(response.body()).not.toContain("The model provider rejected this turn.");
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runtimeRetry: "refused" });
+  } finally {
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  }
+});
+it("explains unavailable continuation after a live stream has opened when the answer is a single line", async () => {
+  const sink = captureServerLog("warn");
+  const response = mockResponse({ captureBody: true });
+  const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield { type: "delta", token: "Visible partial answer." };
+    throw new ReasoningHistoryUnavailableError();
+  };
+  try {
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-live-history-unavailable-single" } }),
         undefined,
         createOpenCodeGatewayReadinessRegistry(),
         (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
@@ -12485,4 +12741,574 @@ it("explains unavailable local continuation without calling or blaming the provi
     resetGatewayInstanceCacheForTests();
     resetServerLogger();
   }
+});
+
+// ─── O-1: route admission calibrated from the provider's reported prompt usage ──────────────────
+// The local tokenizer over-counts repetitive tool output (about +65% measured live), so the route
+// used to refuse prompts that fit. A request extending one whose real usage is known is admitted
+// against that usage plus the estimated growth; a true overflow is still refused.
+describe("coding-sidecar gateway route prompt calibration", () => {
+  afterEach(resetServerLogger);
+
+  function repetitive(tokens: number): string {
+    const line = "trace 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+    const sample = 2_000;
+    const perLine =
+      countGatewayPromptTokens({ messages: [{ role: "user", content: line.repeat(sample) }] }) /
+      sample;
+    return line.repeat(Math.ceil(tokens / perLine));
+  }
+
+  interface Message {
+    role: "user" | "assistant";
+    content: string;
+  }
+  const firstTurn = (): Message[] => [
+    { role: "user", content: "run the trace" },
+    { role: "assistant", content: "running" },
+    { role: "user", content: repetitive(95_000) },
+  ];
+  const extend = (messages: Message[], tokens: number): Message[] => [
+    ...messages,
+    { role: "assistant", content: "done" },
+    { role: "user", content: repetitive(tokens) },
+  ];
+
+  function send(
+    messages: Message[],
+    reportedPromptTokens: number,
+  ): ReturnType<typeof handleCodingSidecarGatewayChatCompletions> {
+    const reply = {
+      ...assistantResponse("azure-coding-model"),
+      usage: { ...assistantResponse("x").usage, promptTokens: reportedPromptTokens },
+    };
+    return handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "azure-coding-model", messages, tools: [] }),
+      depsValue(configValue(provider(), capability()), () => vi.fn(() => Promise.resolve(reply))),
+    );
+  }
+
+  it("refuses a prompt over the bound when no usage of its prefix is known", async () => {
+    const sink = captureServerLog("info");
+    const result = await send(extend(firstTurn(), 30_000), 1);
+    expect(result).toMatchObject({
+      status: 400,
+      body: { error: { code: "context_length_exceeded" } },
+    });
+    const rejected = sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+    expect(rejected?.extra).toMatchObject({
+      reason: "prompt-tokens-exceeded",
+      promptEstimateSource: "local",
+    });
+  });
+
+  it("admits the same prompt after one calibrated turn, and refuses a true overflow", async () => {
+    const sink = captureServerLog("info");
+    const first = firstTurn();
+    expect(await send(first, 60_250)).toMatchObject({ status: 200 });
+    const second = extend(first, 30_000);
+    expect(await send(second, 61_000)).toMatchObject({ status: 200 });
+    const validated = sink.events.filter(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated.at(-1)?.extra).toMatchObject({ promptEstimateSource: "usage-calibrated" });
+    const calibrated = validated.at(-1)?.extra?.estimatedPromptTokens as number;
+    expect(calibrated).toBeLessThan(validated.at(-1)?.extra?.localPromptTokens as number);
+    expect(calibrated).toBeGreaterThan(60_250);
+    const overflow = await send(extend(second, 90_000), 1);
+    expect(overflow).toMatchObject({
+      status: 400,
+      body: { error: { code: "context_length_exceeded" } },
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "prompt-tokens-exceeded", promptEstimateSource: "usage-calibrated" });
+  });
+
+  // A cache-exclusive provider reports only the uncached part as prompt_tokens; the adapter puts the
+  // whole footprint in totalPromptTokens. Calibration, the run's context size and the settlement
+  // read that normalized total in the buffered AND the streamed path, and an ambiguous cache layout
+  // is never calibrated from.
+  describe.each([
+    { label: "buffered JSON", stream: false },
+    { label: "streamed SSE", stream: true },
+  ])("cache-exclusive usage, $label", ({ stream }) => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      resetGatewayInstanceCacheForTests();
+    });
+
+    async function turn(
+      messages: Message[],
+      usage: Partial<NormalizedResponse["usage"]>,
+      observed: number[] = [],
+      settled: { reserved: number; actual: number }[] = [],
+    ): Promise<unknown> {
+      resetGatewayInstanceCacheForTests();
+      const reply = {
+        ...assistantResponse("azure-coding-model"),
+        usage: { ...assistantResponse("x").usage, ...usage },
+      };
+      vi.spyOn(Gateway.prototype, "chat").mockImplementation(() => Promise.resolve(reply));
+      vi.spyOn(Gateway.prototype, "chatStream").mockImplementation(() => streamedResponse(reply));
+      const deps = depsValue(configValue(provider(), capability()));
+      return handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "azure-coding-model", stream, messages, tools: [] }),
+        {
+          ...deps,
+          runtimeCapabilityAuthenticator: {
+            ...deps.runtimeCapabilityAuthenticator,
+            observeProviderPromptTokens: (_capability: string, tokens: number): void => {
+              observed.push(tokens);
+            },
+            settlePromptTokens: (_capability: string, reserved: number, actual: number) => {
+              settled.push({ reserved, actual });
+              return { ok: true };
+            },
+          } as unknown as NonNullable<UiHandlerDeps["runtimeCapabilityAuthenticator"]>,
+        },
+      );
+    }
+
+    it("calibrates and observes the total prompt count, not the uncached part", async () => {
+      const sink = captureServerLog("info");
+      const observed: number[] = [];
+      const settled: { reserved: number; actual: number }[] = [];
+      const first = firstTurn();
+      await turn(first, { promptTokens: 5_000, totalPromptTokens: 60_250 }, observed, settled);
+      expect(observed).toEqual([60_250]);
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.actual).toBe(60_250);
+      await turn(extend(first, 30_000), { promptTokens: 5_000, totalPromptTokens: 61_000 });
+      const validated = sink.events.filter(
+        (event) => event.op === "coding-sidecar.gateway.request-validated",
+      );
+      expect(validated.at(-1)?.extra).toMatchObject({ promptEstimateSource: "usage-calibrated" });
+    });
+
+    it("never calibrates from a report whose cache layout is ambiguous", async () => {
+      const sink = captureServerLog("info");
+      const first = firstTurn();
+      const observed: number[] = [];
+      const settled: { reserved: number; actual: number }[] = [];
+      await turn(
+        first,
+        { promptTokens: 60_250, promptCacheLayoutAmbiguous: true },
+        observed,
+        settled,
+      );
+      // The figure is the prompt or only its uncached part: it is not the run's measured context
+      // size, and the call settles on the reserved estimate rather than as provider-reported.
+      expect(observed).toEqual([]);
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.actual).toBe(settled[0]?.reserved);
+      expect(settled[0]?.actual).not.toBe(60_250);
+      const second = await turn(extend(first, 30_000), { promptTokens: 61_000 });
+      expect(second).toMatchObject({ status: 400 });
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+      ).toMatchObject({ promptEstimateSource: "local" });
+    });
+  });
+});
+
+// Live defect M-1: a model that ends its turn with a tool call written as TEXT (`<shell .../>`,
+// `<tool_call>{...}</tool_call>`) and no native tool call. The runtime reads that as the end of the
+// turn, so the gateway re-requests the model once or twice with a fixed hint, never hands the markup
+// to the runtime when that succeeds, and never executes anything parsed from the text.
+describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  // The REAL native catalog the sidecar sees: the pinned OpenCode advertisement, with its own tool
+  // names (`todowrite`, `shell`, …) and parameter schemas.
+  const NATIVE_RECOVERY_TOOLS = (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          `./coding-runtime/opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-advertised.fixture.json`,
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as readonly { readonly name: string; readonly parameters: unknown }[]
+  )
+    .filter((tool) => !tool.name.startsWith("keiko_"))
+    .map((tool) => ({
+      type: "function" as const,
+      function: { name: tool.name, description: "", parameters: tool.parameters },
+    }));
+  // The answer observed live (M-1, Gemma 4 31B): a plan written as `<todo>` elements, then the call.
+  const GEMMA_MARKUP = `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> <todo content="Commit the fix" status="pending"/> </todo>\n<shell command="npm test | tail -n 1" />`;
+  const QWEN_MARKUP = `<tool_call>\n{"name": "shell", "arguments": {"command": "git commit -am fix"}}\n</tool_call>`;
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const TASK_MESSAGES = [
+    { role: "system", content: "You are a coding agent." },
+    { role: "user", content: "fix the bug, run npm test, then commit" },
+  ];
+  const textual = (content: string): NormalizedResponse => ({
+    ...assistantResponse("azure-coding-model"),
+    content,
+  });
+  const nativeCall = (): NormalizedResponse => ({
+    ...assistantResponse("azure-coding-model"),
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [{ id: "call-1", name: "shell", arguments: { command: "git commit -am fix" } }],
+  });
+
+  const settlements = vi.fn(() => ({ ok: true }));
+
+  function recoveryDeps(
+    chat: (request: GatewayRequest) => Promise<NormalizedResponse>,
+    stream: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>,
+  ): UiHandlerDeps {
+    const base = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-textual-recovery" } }),
+      () => chat,
+      createOpenCodeGatewayReadinessRegistry("native"),
+      () => stream,
+    );
+    return {
+      ...base,
+      runtimeCapabilityAuthenticator: {
+        ...base.runtimeCapabilityAuthenticator,
+        settlePromptTokens: settlements,
+      } as unknown as UiHandlerDeps["runtimeCapabilityAuthenticator"],
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 9 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+  }
+
+  interface Sequence {
+    readonly requests: GatewayRequest[];
+    readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>;
+    readonly stream: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>;
+  }
+
+  // An `Error` among the answers is a request that fails (a failing retry).
+  function sequence(answers: readonly (NormalizedResponse | Error)[]): Sequence {
+    const requests: GatewayRequest[] = [];
+    const next = (request: GatewayRequest): NormalizedResponse | Error => {
+      requests.push(request);
+      return answers[Math.min(requests.length, answers.length) - 1] ?? textual("");
+    };
+    return {
+      requests,
+      chat: (request): Promise<NormalizedResponse> => {
+        const answer = next(request);
+        return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+      },
+      stream: (request): AsyncIterable<GatewayStreamChunk> => {
+        const answer = next(request);
+        return answer instanceof Error ? failingStream(answer) : streamedResponse(answer);
+      },
+    };
+  }
+
+  async function* failingStream(error: Error): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield* [];
+    throw error;
+  }
+
+  // The hint rides at the end of the LAST message: no message is added or reordered and every
+  // earlier byte (the prompt prefix the provider caches) is unchanged.
+  const hasHint = (request: GatewayRequest | undefined): boolean =>
+    request?.messages.at(-1)?.content.includes("native tool-calling interface") === true;
+
+  async function buffered(answers: readonly (NormalizedResponse | Error)[]): Promise<{
+    readonly result: RouteResult | typeof STREAMING;
+    readonly seq: Sequence;
+    readonly sink: BufferedServerLogSink;
+  }> {
+    const sink = captureServerLog("info");
+    const seq = sequence(answers);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: TASK_MESSAGES,
+        tools: NATIVE_RECOVERY_TOOLS,
+      }),
+      recoveryDeps(seq.chat, seq.stream),
+    );
+    return { result, seq, sink };
+  }
+
+  async function live(answers: readonly (NormalizedResponse | Error)[]): Promise<{
+    readonly body: string;
+    readonly seq: Sequence;
+    readonly sink: BufferedServerLogSink;
+  }> {
+    const sink = captureServerLog("info");
+    const seq = sequence(answers);
+    const response = mockResponse({ captureBody: true });
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: TASK_MESSAGES,
+          tools: NATIVE_RECOVERY_TOOLS,
+        }),
+        res: response.res,
+      },
+      recoveryDeps(seq.chat, seq.stream),
+    );
+    expect(result).toBe(STREAMING);
+    return { body: response.body(), seq, sink };
+  }
+
+  const bodyText = (result: RouteResult | typeof STREAMING): string =>
+    JSON.stringify((result as { readonly body?: unknown }).body);
+  const liveText = (body: string): string =>
+    frameDeltas(body)
+      .map((delta) => (typeof delta.content === "string" ? delta.content : ""))
+      .join("");
+
+  it.each([
+    ["Gemma-style element markup", GEMMA_MARKUP],
+    ["Qwen-style tool_call wrapper", QWEN_MARKUP],
+  ])(
+    "re-requests a buffered turn that ended with %s and delivers the native call",
+    async (_label, markup) => {
+      const { result, seq, sink } = await buffered([textual(markup), nativeCall()]);
+
+      expect(seq.requests).toHaveLength(2);
+      expect(hasHint(seq.requests[0])).toBe(false);
+      expect(hasHint(seq.requests[1])).toBe(true);
+      expect(seq.requests[1]?.messages).toHaveLength(seq.requests[0]?.messages.length ?? -1);
+      expect(seq.requests[1]?.messages.slice(0, -1)).toEqual(
+        seq.requests[0]?.messages.slice(0, -1),
+      );
+      expect(result).toMatchObject({ status: 200 });
+      expect(bodyText(result)).toContain("tool_calls");
+      expect(bodyText(result)).not.toContain("<shell");
+      expect(bodyText(result)).not.toContain("tool_call>");
+      const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        outcome: "accepted",
+        textualToolCallRecovery: "retried-native",
+        textualToolCallRetries: 1,
+      });
+      expect(JSON.stringify(sink.events)).not.toContain("npm test");
+      expectActivityLogProof(
+        "coding-sidecar.gateway.outcome.line",
+        formatActivityLogProofLine(outcome ?? {}),
+      );
+    },
+  );
+
+  it.each([
+    ["prose that mentions a div", "Use a <div> wrapper and a <span> inside it."],
+    [
+      "a code block with XML",
+      "Example:\n```xml\n<div><span>x</span></div>\n```\nThat renders a box.",
+    ],
+    ["markup that names an unknown tool", `<launch_missiles target="moon" />`],
+    ["a final answer", "All done: the tests pass and the fix is committed."],
+  ])("does not re-request a buffered turn with %s", async (_label, content) => {
+    const { result, seq, sink } = await buffered([textual(content)]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(result).toMatchObject({ status: 200 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).not.toHaveProperty(
+      "textualToolCallRecovery",
+    );
+  });
+
+  it("passes the markup through after two retries and records the exhaustion", async () => {
+    const { result, seq, sink } = await buffered([textual(GEMMA_MARKUP)]);
+
+    expect(seq.requests).toHaveLength(3);
+    expect(hasHint(seq.requests[2])).toBe(true);
+    expect(result).toMatchObject({ status: 200 });
+    // Nothing parsed from the text became a tool call: the runtime still gets plain text.
+    expect(bodyText(result)).not.toContain('"tool_calls"');
+    expect(bodyText(result)).toContain("<shell command");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retry-exhausted",
+      textualToolCallRetries: 2,
+    });
+  });
+
+  it("recovers a live turn without the runtime ever receiving the markup", async () => {
+    const { body, seq, sink } = await live([textual(GEMMA_MARKUP), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(hasHint(seq.requests[1])).toBe(true);
+    expect(body).not.toContain("<shell");
+    expect(body).not.toContain("<todo");
+    expect(body).toContain('"tool_calls"');
+    expect(body.trim().endsWith("data: [DONE]")).toBe(true);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retried-native",
+      textualToolCallRetries: 1,
+    });
+  });
+
+  it.each([
+    ["prose with a div", "Use a <div> wrapper and a <span> inside it."],
+    ["a final answer", "All done: the tests pass."],
+  ])("delivers a live turn with %s whole and does not retry", async (_label, content) => {
+    const { body, seq, sink } = await live([textual(content)]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(content);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).not.toHaveProperty(
+      "textualToolCallRecovery",
+    );
+  });
+
+  it("passes a live turn through once the retries are spent and records the exhaustion", async () => {
+    const { body, seq, sink } = await live([textual(GEMMA_MARKUP)]);
+
+    expect(seq.requests).toHaveLength(3);
+    expect(body).not.toContain('"tool_calls"');
+    expect(liveText(body)).toContain("<shell command");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retry-exhausted",
+      textualToolCallRetries: 2,
+    });
+  });
+
+  it.each([
+    [
+      "a json-labelled fence showing a call",
+      '```json\n{"name":"shell","arguments":{"command":"npm test"}}\n```',
+    ],
+    ["a read element shown inside a fence", 'The model writes:\n```xml\n<read path="a.ts" />\n```'],
+    [
+      "an explanation of a tool call",
+      'To read a file the model writes <read path="a.ts" /> and the runtime answers it.',
+    ],
+    ["a prompt template", "<task>Summarise the repository and list the open risks.</task>"],
+  ])("never re-requests a buffered or live answer that shows %s", async (_label, content) => {
+    const bufferedRun = await buffered([textual(content)]);
+    expect(bufferedRun.seq.requests).toHaveLength(1);
+    expect(
+      lineOf(bufferedRun.sink.events, "coding-sidecar.gateway.outcome")?.extra,
+    ).not.toHaveProperty("textualToolCallRecovery");
+    const liveRun = await live([textual(content)]);
+    expect(liveRun.seq.requests).toHaveLength(1);
+    expect(liveText(liveRun.body)).toBe(content);
+  });
+
+  it("passes a live turn through when a long first line already reached the runtime, so nothing is duplicated", async () => {
+    const preface = "I will run the tests now, then report what they say. ".repeat(4);
+    expect(preface.length).toBeGreaterThan(160);
+    const markup = `${preface}\n<shell command="${"npm test ".repeat(300)}" />`;
+    const { body, seq, sink } = await live([textual(markup), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(markup);
+    expect(body).not.toContain('"tool_calls"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retry-skipped",
+      textualToolCallRetries: 0,
+    });
+  });
+
+  it("delivers a preface and a fenced call once when the detector does not read it as a call", async () => {
+    // The detector reads a fence among prose as an example, so the held answer is released whole.
+    const markup = `Ok.\n\`\`\`\n{"name":"shell","arguments":{"command":"${"npm test ".repeat(30)}"}}\n\`\`\``;
+    const { body, seq } = await live([textual(markup), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(markup);
+  });
+
+  it.each(["Done.", "Done.\n", "Ok.\n   \n"])(
+    "forwards a short single-line live answer %j once when the attempt ends, without a retry",
+    async (content) => {
+      const { body, seq } = await live([textual(content)]);
+
+      expect(seq.requests).toHaveLength(1);
+      expect(liveText(body)).toBe(content);
+    },
+  );
+
+  it("recovers a live tool call that follows a short preface, discarding both unseen", async () => {
+    const markup = `Ok.\n<shell command="${"npm test ".repeat(30)}" />`;
+    const { body, seq, sink } = await live([textual(markup), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(liveText(body)).not.toContain("Ok.");
+    expect(body).toContain('"tool_calls"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retried-native",
+      textualToolCallRetries: 1,
+    });
+  });
+
+  it.each([
+    [
+      "a brace after prose on the same line",
+      'Result: {"name":"shell","arguments":{"command":"ls"}}',
+    ],
+    [
+      "a brace after prose at a line start",
+      'Result:\n{"name":"shell","arguments":{"command":"ls"}}',
+    ],
+    ["a fence after prose on the same line", 'Sample: ```\n<shell command="ls" />\n```'],
+  ])("delivers a live turn with %s once and does not retry", async (_label, content) => {
+    const { body, seq } = await live([textual(content)]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(content);
+  });
+
+  it("settles the spend of the discarded attempt when the buffered retry fails", async () => {
+    settlements.mockClear();
+    const { result, seq, sink } = await buffered([textual(GEMMA_MARKUP), new TransportError("x")]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(result).toMatchObject({ status: 503 });
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      textualToolCallRecovery: "retry-interrupted",
+      textualToolCallRetries: 1,
+    });
+    const [, reserved, settled] = settlements.mock.calls[0] as unknown as [string, number, number];
+    expect(settled).toBe(reserved + 12);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.usage-settled")?.extra).toMatchObject({
+      discardedAttemptCount: 1,
+      discardedPromptTokens: 12,
+      discardedCompletionTokens: 8,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+  });
+
+  it("settles the spend of the discarded attempt when the live retry fails", async () => {
+    settlements.mockClear();
+    const { body, seq, sink } = await live([textual(GEMMA_MARKUP), new TransportError("x")]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(body).not.toContain("<shell");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      textualToolCallRecovery: "retry-interrupted",
+      textualToolCallRetries: 1,
+    });
+    const [, reserved, settled] = settlements.mock.calls[0] as unknown as [string, number, number];
+    expect(settled).toBe(reserved + 12);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.usage-settled")?.extra).toMatchObject({
+      discardedAttemptCount: 1,
+      discardedPromptTokens: 12,
+    });
+  });
 });

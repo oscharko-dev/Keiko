@@ -3,9 +3,11 @@
 import { useId, type KeyboardEvent, type ReactNode } from "react";
 import type {
   CodingSafeActivityFeed,
+  CodingSafeActivityOutputShortened,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
   CodingSafeActivityToolOutput,
+  CodingSafeActivityToolRefusalCause,
   CodingSafeActivityToolText,
 } from "@oscharko-dev/keiko-contracts";
 import { codingSafeActivityStateFailureOrigin } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -84,10 +86,20 @@ export function ToolFailureLabel({
       ) : null}
       <span className={styles.cmpToolFailureOrigin} data-origin={origin}>
         <span className={styles.cmpToolFailureIcon} aria-hidden="true" />
-        {t(`codingWorkbench.activity.failureOrigin.${origin}`)}
+        {t(`codingWorkbench.activity.failureOrigin.${failureOriginLabel(tool, origin)}`)}
       </span>
     </span>
   );
+}
+
+// A step the person declined, or nobody decided in time, was stopped by the person's decision, not by
+// Keiko's policy, so the row names that decision instead of "Blocked by Keiko" (U-36, #4491).
+function failureOriginLabel(
+  tool: CodingSafeActivityTool,
+  origin: CodingSafeActivityToolFailureOrigin,
+): CodingSafeActivityToolFailureOrigin | CodingSafeActivityToolRefusalCause {
+  const cause = tool.presentation?.refusalCause;
+  return origin === "keiko-refused" && cause !== undefined ? cause : origin;
 }
 
 /** How long a settled call ran, muted, from one second on. */
@@ -105,6 +117,41 @@ export function ToolDuration({
     <span className={styles.cmpToolDuration}>
       {t("codingWorkbench.activity.took", { duration: format(durationMs) })}
     </span>
+  );
+}
+
+/** The short label on a row whose result the runtime shortened for the model. */
+export function ToolOutputShortenedLabel({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (tool.presentation?.outputShortened === undefined) return null;
+  return (
+    <span className={styles.cmpToolDuration}>{t("codingWorkbench.activity.outputShortened")}</span>
+  );
+}
+
+// What the model received of a shortened result, in plain words: the person still sees the rest.
+function ToolOutputShortenedHint({
+  shortened,
+  t,
+}: {
+  readonly shortened: CodingSafeActivityOutputShortened;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const { keptLines, totalLines } = shortened;
+  return (
+    <p className={styles.cmpToolHint}>
+      {keptLines === undefined || totalLines === undefined
+        ? t("codingWorkbench.activity.outputShortened.hint")
+        : t("codingWorkbench.activity.outputShortened.hintLines", {
+            kept: keptLines,
+            total: totalLines,
+          })}
+    </p>
   );
 }
 
@@ -144,6 +191,9 @@ function failureLead(
   if (tool.presentation?.refusalReason === "FILE_NOT_UTF8") {
     return t("codingWorkbench.activity.editRefusalNotUtf8");
   }
+  if (origin === "keiko-refused" && tool.presentation?.refusalCause !== undefined) {
+    return t("codingWorkbench.activity.failure.not-run");
+  }
   const exitCode = tool.presentation?.exitCode;
   return origin === "command-failed" && exitCode !== undefined
     ? t("codingWorkbench.activity.failure.command-failed", { code: exitCode })
@@ -179,6 +229,14 @@ export function ToolTextDetail({
           t={t}
         />
       )}
+      {facts.taskPrompt === undefined ? null : (
+        <ToolTextBlock
+          label={t("codingWorkbench.activity.prompt")}
+          text={facts.taskPrompt.text}
+          truncated={facts.taskPrompt.truncated}
+          t={t}
+        />
+      )}
       {facts.errorText === undefined ? null : (
         <ToolTextBlock
           label={t("codingWorkbench.activity.agentMessage")}
@@ -188,6 +246,9 @@ export function ToolTextDetail({
         />
       )}
       {facts.output === undefined ? null : <ToolOutputBlock output={facts.output} t={t} />}
+      {facts.outputShortened === undefined ? null : (
+        <ToolOutputShortenedHint shortened={facts.outputShortened} t={t} />
+      )}
     </>
   );
 }

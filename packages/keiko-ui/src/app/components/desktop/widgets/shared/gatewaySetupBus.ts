@@ -47,6 +47,12 @@ export const GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT =
   "keiko:gateway-model-catalog-refresh-requested";
 
 let pending = false;
+let catalogRefreshConsumers = 0;
+// One entry per mounted requester: a merged `check` is served only while a requester that asked for
+// it is still mounted, so an unmounted window's check never outlives it.
+let unservedCatalogRefreshes: { readonly check: boolean; readonly at: number }[] = [];
+/** A kept request older than this is stale: the shell it waited for did not appear in time. */
+const UNSERVED_CATALOG_REFRESH_TTL_MS = 10_000;
 
 /**
  * Request that the Settings panel open the gateway-setup dialog (Figma access-token section).
@@ -99,13 +105,28 @@ export function notifyGatewayModelCatalogUpdated(correlationId?: string): void {
  */
 export function requestGatewayModelCatalogRefresh(
   options: { readonly check?: boolean } = {},
-): void {
-  if (typeof window === "undefined") return;
+): () => void {
+  if (typeof window === "undefined") return noop;
+  // A window that mounts in the same commit as the shell runs its effects before the shell's
+  // catalog consumer has subscribed, so the event would reach nobody and the catalog would stay the
+  // bootstrap's activated-only list (U-45). The request is kept, for a short while and only while
+  // its requester is mounted: the returned cleanup (an unmounting window) drops it.
+  const kept =
+    catalogRefreshConsumers === 0 ? { check: options.check === true, at: Date.now() } : undefined;
+  if (kept !== undefined) unservedCatalogRefreshes.push(kept);
   window.dispatchEvent(
     new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
       detail: { check: options.check === true },
     }),
   );
+  return (): void => {
+    if (kept !== undefined)
+      unservedCatalogRefreshes = unservedCatalogRefreshes.filter((r) => r !== kept);
+  };
+}
+
+function noop(): void {
+  // nothing was kept, so there is nothing to drop
 }
 
 /** Whether a catalog refresh request came from a person's own step and asks for a check. */
@@ -122,4 +143,24 @@ export function gatewayModelCatalogCorrelationId(event: Event): string | undefin
   const descriptor = Object.getOwnPropertyDescriptor(detail, "correlationId");
   const value: unknown = descriptor?.value;
   return isActivityLogCorrelationId(value) ? value : undefined;
+}
+
+/**
+ * A catalog refresh consumer is now listening. Returns the request that arrived before any consumer
+ * existed (and clears it), so the consumer serves it once instead of the request being lost.
+ */
+export function attachGatewayModelCatalogRefreshConsumer():
+  { readonly check: boolean } | undefined {
+  catalogRefreshConsumers += 1;
+  const now = Date.now();
+  const fresh = unservedCatalogRefreshes.filter(
+    (request) => now - request.at <= UNSERVED_CATALOG_REFRESH_TTL_MS,
+  );
+  unservedCatalogRefreshes = [];
+  return fresh.length === 0 ? undefined : { check: fresh.some((request) => request.check) };
+}
+
+/** The consumer stopped listening; later requests are kept for the next one. */
+export function detachGatewayModelCatalogRefreshConsumer(): void {
+  catalogRefreshConsumers = Math.max(0, catalogRefreshConsumers - 1);
 }

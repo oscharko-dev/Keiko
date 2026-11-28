@@ -317,6 +317,9 @@ const deniedVerificationRunner: VerificationRunnerManager = {
     throw new Error("abort not exercised");
   },
   inFlightCount: (): number => 0,
+  previewCommands: (): never => {
+    throw new Error("previewCommands not exercised");
+  },
   subscribe: (): (() => void) => (): void => undefined,
   scriptTrustFor: (): ScriptTrustDecision => ({ trusted: true, basis: "repository" }),
   runToReport: (): never => {

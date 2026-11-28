@@ -4,6 +4,7 @@ import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
   codingSafeActivityStateFailureOrigin,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
+  CODING_SAFE_ACTIVITY_GIT_ACTIONS,
   CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
@@ -18,6 +19,7 @@ import {
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_STATES,
   CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+  CODING_SAFE_ACTIVITY_PROGRAM_KINDS,
   isCodingSafeActivityToolPresentation,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityAnswerPage,
@@ -134,11 +136,20 @@ describe("coding safe-activity contract", () => {
     expect([...CODING_SAFE_ACTIVITY_GIT_OUTCOMES]).toEqual([
       "completed",
       "waiting-for-approval",
+      "prepared",
       "verification-failed",
       "verification-missing",
       "not-staged",
       "unsaved-changes",
       "blocked",
+      "commit-protected-branch",
+      "branch-invalid-name",
+      "branch-protected-name",
+      "branch-exists",
+      "branch-not-on-base",
+      "branch-not-local-checkout",
+      "branch-executable-filters",
+      "branch-preflight",
       "changed",
       "not-done",
     ]);
@@ -147,6 +158,77 @@ describe("coding safe-activity contract", () => {
     }
     for (const gitOutcome of ["committed", "failed", "", null, 1, ["blocked"], "Blocked"]) {
       expect(isCodingSafeActivityToolPresentation({ gitOutcome })).toBe(false);
+    }
+  });
+
+  it("admits only a closed program kind on a tool presentation", () => {
+    for (const programKind of CODING_SAFE_ACTIVITY_PROGRAM_KINDS) {
+      expect(isCodingSafeActivityToolPresentation({ programKind })).toBe(true);
+    }
+    for (const programKind of ["bash", "Schedule", "", null, 1, ["tool"]]) {
+      expect(isCodingSafeActivityToolPresentation({ programKind })).toBe(false);
+    }
+  });
+
+  it("admits only a closed stage or unstage as the Git action of a tool presentation", () => {
+    for (const gitAction of CODING_SAFE_ACTIVITY_GIT_ACTIONS) {
+      expect(isCodingSafeActivityToolPresentation({ gitAction })).toBe(true);
+    }
+    for (const gitAction of ["commit", "Unstage", "", null, 1, ["stage"]]) {
+      expect(isCodingSafeActivityToolPresentation({ gitAction })).toBe(false);
+    }
+  });
+
+  it("admits a subagent's bounded texts and never beside a shed prompt (U-52)", () => {
+    const text = (value: string): { text: string; truncated: boolean } => ({
+      text: value,
+      truncated: false,
+    });
+    expect(
+      isCodingSafeActivityToolPresentation({
+        agentName: text("explore"),
+        taskDescription: text("Count test files"),
+        taskPrompt: text("Count them."),
+      }),
+    ).toBe(true);
+    expect(isCodingSafeActivityToolPresentation({ agentName: text("a".repeat(81)) })).toBe(false);
+    expect(
+      isCodingSafeActivityToolPresentation({ agentName: { text: "", truncated: false } }),
+    ).toBe(false);
+    expect(
+      isCodingSafeActivityToolPresentation({ taskPrompt: text("x"), detailOmitted: true }),
+    ).toBe(false);
+  });
+
+  it("admits only an opaque 16-hex reference as the Git proposal reference of a presentation", () => {
+    expect(isCodingSafeActivityToolPresentation({ gitProposalRef: "0123456789abcdef" })).toBe(true);
+    for (const gitProposalRef of ["stage-7", "0123456789ABCDEF", "0123", "", null, 1]) {
+      expect(isCodingSafeActivityToolPresentation({ gitProposalRef })).toBe(false);
+    }
+  });
+
+  // PERF-2: a result the runtime shortened for the model carries counts only; the lines are both
+  // present or both absent, and the model cannot have kept as many lines as the output had.
+  it("admits only counts as the shortened-output fact of a tool presentation", () => {
+    for (const outputShortened of [
+      { keptBytes: 51_200 },
+      { keptBytes: 51_200, keptLines: 380, totalLines: 200_000 },
+      { keptBytes: 0, keptLines: 0, totalLines: 1 },
+    ]) {
+      expect(isCodingSafeActivityToolPresentation({ outputShortened })).toBe(true);
+    }
+    for (const outputShortened of [
+      true,
+      {},
+      { keptBytes: -1 },
+      { keptBytes: 1.5 },
+      { keptBytes: "1" },
+      { keptBytes: 1, keptLines: 2 },
+      { keptBytes: 1, totalLines: 2 },
+      { keptBytes: 1, keptLines: 5, totalLines: 5 },
+      { keptBytes: 1, path: "/tmp/x" },
+    ]) {
+      expect(isCodingSafeActivityToolPresentation({ outputShortened })).toBe(false);
     }
   });
 
@@ -782,6 +864,32 @@ describe("coding safe-activity contract — message origin", () => {
     ["a non-string", 1, "user"],
   ] as const)("rejects an origin that is %s", (_label, origin, role) => {
     expect(validateCodingSafeActivityFeed(withUserOrigin(origin, role)).ok).toBe(false);
+  });
+});
+
+// The runtime's output-limit finish of an assistant turn rides on the message as the closed `true`.
+describe("coding safe-activity contract — output limit", () => {
+  function withFlag(value: unknown, which: 0 | 1): unknown {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected an available feed");
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const messages = turn.messages.map((message, index) =>
+      index === which ? { ...message, outputLimitReached: value } : message,
+    );
+    return { ...feed, turns: [{ ...turn, messages }] };
+  }
+
+  it("accepts the flag on an assistant message", () => {
+    expect(validateCodingSafeActivityFeed(withFlag(true, 1)).ok).toBe(true);
+  });
+
+  it.each([
+    ["false", false, 1],
+    ["a string", "true", 1],
+    ["on a user message", true, 0],
+  ] as const)("rejects the flag when it is %s", (_label, value, which) => {
+    expect(validateCodingSafeActivityFeed(withFlag(value, which)).ok).toBe(false);
   });
 });
 

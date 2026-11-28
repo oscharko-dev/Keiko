@@ -244,7 +244,6 @@ export class DraftDeliveryFixture {
       authorityDigest: DIGEST,
       bindingDigest: DIGEST,
       provenanceDigest: DIGEST,
-      toolCallCount: 0,
       patchByteCount: 0,
       modelRequestCount: 0,
       ...(this.issueFree ? {} : { issueBinding: this.issue }),

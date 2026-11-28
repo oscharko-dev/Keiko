@@ -31,8 +31,12 @@ import {
   deriveContextProfile,
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import type {
+  GatewayEmptyAnswerEvidence,
+  GatewayOutputRepairOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
+import { PromptCalibrationLedger } from "./prompt-calibration.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
 import { GatewayReasoningHistory } from "./reasoning-history.js";
@@ -570,6 +574,14 @@ const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
+    // How the provider ended the answer, so a cut-off at the output limit (`length`) is read off the
+    // line instead of inferred from `completionTokens`. `unknown`: none the gateway recognizes.
+    finishReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["stop", "length", "tool_calls", "content_filter", "unknown"],
+    },
     ...REASONING_COMPLETION_FIELDS,
   },
   causal: "correlation",
@@ -618,6 +630,24 @@ const GATEWAY_STREAM_ABANDONED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// O-11: what the provider reported for a failed attempt (counts it actually sent) and, for an answer
+// that ended empty, the closed classification the adapter derived from it.
+function providerEvidenceFields(error: unknown): {
+  readonly providerCompletionTokens?: number;
+  readonly providerReasoningTokens?: number;
+  readonly emptyAnswerEvidence?: GatewayEmptyAnswerEvidence;
+} {
+  if (!(error instanceof GatewayError)) return {};
+  const { completionTokens, reasoningTokens } = error.providerUsage ?? {};
+  return {
+    ...(completionTokens === undefined ? {} : { providerCompletionTokens: completionTokens }),
+    ...(reasoningTokens === undefined ? {} : { providerReasoningTokens: reasoningTokens }),
+    ...(error instanceof ProviderEmptyAnswerError && error.emptyAnswerEvidence !== undefined
+      ? { emptyAnswerEvidence: error.emptyAnswerEvidence }
+      : {}),
+  };
+}
+
 const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -645,6 +675,18 @@ const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: false,
+    },
+    // O-11: the usage the provider itself reported for the failed attempt, absent (never 0) when it
+    // sent none, and, on an answer that ended without text or a tool call, what that usage says:
+    // `provider-reported-output`, `no-provider-output` or `usage-unavailable`. Counts and a closed
+    // word only.
+    providerCompletionTokens: { type: "integer", dataClass: "count", required: false },
+    providerReasoningTokens: { type: "integer", dataClass: "count", required: false },
+    emptyAnswerEvidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
     },
   },
   causal: "correlation",
@@ -1361,6 +1403,16 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
   return { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
 }
 
+type StreamFinishReason = "stop" | "length" | "tool_calls" | "content_filter" | "unknown";
+
+// The finish reason the stream-completed line records: a reason the provider did not report, or an
+// error/cancelled finish (those surface as failures elsewhere), is `unknown`, never a guessed `stop`.
+function streamFinishReason(response: NormalizedResponse | undefined): StreamFinishReason {
+  if (response === undefined || response.finishReasonUnreported === true) return "unknown";
+  const { finishReason } = response;
+  return finishReason === "error" || finishReason === "cancelled" ? "unknown" : finishReason;
+}
+
 type ReasoningDisposition = "none" | "forwarded" | "discarded";
 
 interface ReasoningCompletion {
@@ -1411,9 +1463,26 @@ async function* withoutReasoningChunks(
   }
 }
 
+// The first chunk of a stream that carries an answer, or undefined when the stream ends without
+// one. Empty deltas are skipped in constant memory. The view has no `return`, so leaving the loop
+// does not close the generator the caller goes on to read.
+async function firstNonEmptyStreamChunk(
+  iterator: AsyncGenerator<GatewayStreamChunk>,
+): Promise<GatewayStreamChunk | undefined> {
+  const view: AsyncIterable<GatewayStreamChunk> = {
+    [Symbol.asyncIterator]: () => ({ next: () => iterator.next() }),
+  };
+  for await (const chunk of view) {
+    if (chunk.type === "delta" && chunk.token.length === 0) continue;
+    return chunk;
+  }
+  return undefined;
+}
+
 export class Gateway {
   private readonly spendBudget: GatewaySpendBudget | undefined;
   private readonly promptCounter: ProviderPromptCounter;
+  private readonly promptCalibration = new PromptCalibrationLedger();
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
@@ -1569,6 +1638,7 @@ export class Gateway {
       log: this.log,
       now: () => this.clock.now(),
       counter: this.promptCounter,
+      calibration: this.promptCalibration,
       fetchImpl: this.fetchImpl,
     });
   }
@@ -1666,6 +1736,7 @@ export class Gateway {
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.settleCompletedCall(attempt.state, request, route.provider, result);
+    attempt.promptAdmission.recordUsageOf(result.usage);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -1946,6 +2017,7 @@ export class Gateway {
     this.logStreamCompleted(ids, route, chunkCount, elapsed(), {
       firstOutput,
       usage: streamUsageIfSupplied(terminalResponse?.usage),
+      finishReason: streamFinishReason(terminalResponse),
       reasoning:
         terminalResponse === undefined
           ? undefined
@@ -2194,6 +2266,7 @@ export class Gateway {
     terminal: {
       readonly firstOutput: FirstOutput | undefined;
       readonly usage: StreamTerminalUsage | undefined;
+      readonly finishReason: StreamFinishReason;
       readonly reasoning: ReasoningCompletion | undefined;
     },
   ): void {
@@ -2210,6 +2283,7 @@ export class Gateway {
             ? {}
             : { firstTokenMs: terminal.firstOutput.ms, firstTokenKind: terminal.firstOutput.kind }),
           ...terminal.usage,
+          finishReason: terminal.finishReason,
           ...terminal.reasoning,
         },
       ),
@@ -2268,6 +2342,7 @@ export class Gateway {
           // the call's retry loop).
           afterFirstChunk: chunkCount > 0,
           outputExhausted: error instanceof ProviderOutputExhaustedError,
+          ...providerEvidenceFields(error),
         },
       ),
     );
@@ -2412,12 +2487,9 @@ export class Gateway {
       admission,
     );
     try {
-      let first = await iterator.next();
-      while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
-        first = await iterator.next();
-      }
-      if (first.done) throw new TransportError("provider stream ended without an answer");
-      return { first: first.value, iterator };
+      const first = await firstNonEmptyStreamChunk(iterator);
+      if (first === undefined) throw new TransportError("provider stream ended without an answer");
+      return { first, iterator };
     } catch (error) {
       await iterator.return(undefined);
       throw error;
@@ -2447,6 +2519,7 @@ export class Gateway {
       for await (const chunk of stream) {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
+          state.promptAdmission.recordUsageOf(usage);
           received = true;
           terminal = chunk;
           break;

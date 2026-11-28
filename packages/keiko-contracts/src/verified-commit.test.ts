@@ -1,6 +1,7 @@
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "./coding-workbench-runtime-approval-review.js";
 import { describe, expect, it } from "vitest";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import { GIT_COMMIT_MESSAGE_VIOLATION_CODES } from "./git-commit-policy.js";
 import {
   GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
   GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
@@ -95,7 +96,12 @@ describe("message-policy violation codes on a blocked receipt (#3390)", () => {
   });
   it.each([
     { violations: [] }, // never zero: even "empty-subject" alone short-circuits to one code
-    { violations: Array.from({ length: 7 }, () => "missing-conventional-prefix") }, // exceeds the closed vocabulary size (6)
+    {
+      violations: Array.from(
+        { length: GIT_COMMIT_MESSAGE_VIOLATION_CODES.length + 1 },
+        () => "missing-conventional-prefix",
+      ),
+    }, // exceeds the closed vocabulary size, whatever it is
     { violations: ["not-a-real-code"] },
     { violations: ["empty-subject", "not-a-real-code"] },
   ])("rejects a malformed violation list $violations", ({ violations }) => {
@@ -155,6 +161,53 @@ describe("transient verified commit review", () => {
       ).toBe(false);
     },
   );
+  it.each([
+    "src/größe.js",
+    "dir with spaces/项目 alpha/f (1) & g.js",
+    'dir/say "hi".js',
+    "dir/with\ttab.js",
+    "dir/line\nbreak.js",
+    "dir/back\\slash.js",
+    "dir/time 10:30.js",
+    "~$report.docx",
+    "docs/~$report.docx",
+    "C:notes",
+  ])("accepts the repository-spelled path %j", (path) => {
+    expect(
+      validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+        ...review,
+        pending: { ...review.pending, paths: [path] },
+      }).ok,
+    ).toBe(true);
+  });
+  it.each([
+    "/etc/passwd",
+    "../outside.js",
+    "dir/../../outside.js",
+    "dir\\..\\outside.js",
+    "\\\\server\\share\\f.js",
+    "\\\\?\\C:\\f.js",
+    "..\\outside.js",
+    "~/secrets.env",
+    "~",
+    "C:/Windows/system32",
+    "C:\\Windows",
+    "/abs",
+    "a\0b",
+    "dir//f.js",
+    "./f.js",
+    "dir/f\0.js",
+    "dir/visible\u202Espoof.js",
+    "dir/visible\u200Bspoof.js",
+    "",
+  ])("still rejects the escaping repository path %j", (path) => {
+    expect(
+      validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+        ...review,
+        pending: { ...review.pending, paths: [path] },
+      }).ok,
+    ).toBe(false);
+  });
   it("keeps approval tokens out of both nested receipts and the transient review", () => {
     for (const verifiedCommit of [
       { ...review.pending.verifiedCommit, approvalToken: "private fixture" },

@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import type { ClientCodingWorkbenchRepositorySource } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientCodingWorkbenchActivationTrigger,
+  ClientCodingWorkbenchRepositorySource,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import {
+  activationTriggerOf,
   reportCodingWorkbenchInteraction,
   reportCodingWorkbenchRepositoryResolved,
 } from "@/lib/coding-workbench-interaction";
@@ -80,7 +84,12 @@ function branchSelectionPatch(
 ): WindowCfgRecord {
   if (root !== null && root !== undefined) return { targetBranch: branch, targetBranchRoot: root };
   if (shownRoot === null) return { targetBranch: branch, targetBranchRoot: undefined };
-  return { repositoryPath: shownRoot, targetBranch: branch, targetBranchRoot: shownRoot };
+  return {
+    repositoryPath: shownRoot,
+    targetBranch: branch,
+    targetBranchRoot: shownRoot,
+    repositoryPinned: undefined,
+  };
 }
 
 function isHistoryRestore(selection: string | undefined): boolean {
@@ -162,6 +171,49 @@ function useRepositorySourceReport(
   }, [source]);
 }
 
+/**
+ * The repository the window shows and where it came from. A window without a repository of its own
+ * follows the active workspace: once a workspace is active the shell's seed never overrides it, so
+ * the seed can only bind a folder when nothing is active (U-3). `repositoryPinned` marks a
+ * repository a run pinned into the window, which an explicit selection clears.
+ */
+function useWindowRepository(
+  cfg: WindowCfgRecord,
+  context: WindowRenderContext,
+): {
+  readonly root: string | undefined;
+  readonly activationTrigger: ClientCodingWorkbenchActivationTrigger | undefined;
+} {
+  const workspace = useOptionalActiveWorkspace();
+  const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
+  const decidedSeed = useShellSeedRoot(context, cfgRoot);
+  const active = workspace?.activeInstance ?? null;
+  // A pinned repository keeps the window's identity while the workspace is gone or unreadable. It
+  // is not a selection: once another window moved the active workspace elsewhere, this window
+  // follows it instead of binding its own pin back, which two such windows would do forever.
+  const ownRoot =
+    cfg.repositoryPinned === true && active !== null && active.repositoryRoot !== cfgRoot
+      ? undefined
+      : cfgRoot;
+  const seedRoot = active === null ? decidedSeed : null;
+  useRepositorySourceReport(repositorySourceOf(cfgRoot, decidedSeed));
+  const source = repositorySourceOf(ownRoot, seedRoot);
+  return {
+    root: ownRoot ?? seedRoot ?? undefined,
+    activationTrigger: activationTriggerOf(source, cfg.repositoryPinned === true),
+  };
+}
+
+function selectedLocationOf(
+  cfg: WindowCfgRecord,
+  restoringHistory: boolean,
+): WorkbenchExecutionLocation | undefined {
+  return !restoringHistory &&
+    (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
+    ? cfg.executionLocation
+    : undefined;
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -170,18 +222,12 @@ export function CodingWorkbenchWindowHost({
   readonly cfg: WindowCfgRecord;
   readonly context: WindowRenderContext;
 }): ReactNode {
-  const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
-  const seedRoot = useShellSeedRoot(context, cfgRoot);
-  const root = cfgRoot ?? seedRoot;
-  useRepositorySourceReport(repositorySourceOf(cfgRoot, seedRoot));
+  const { root, activationTrigger } = useWindowRepository(cfg, context);
   const historySelection =
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
   const restoringHistory = isHistoryRestore(historySelection);
   const targetBranch = restoringHistory ? undefined : resolvedTargetBranch(cfg, root);
-  const selectedLocation: WorkbenchExecutionLocation | undefined =
-    !restoringHistory && (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
-      ? cfg.executionLocation
-      : undefined;
+  const selectedLocation = selectedLocationOf(cfg, restoringHistory);
   const connectorWindows = useWorkspaceConnectorWindows(context.openWindow);
   return (
     <ConnectorWindowsProvider value={connectorWindows}>
@@ -190,8 +236,10 @@ export function CodingWorkbenchWindowHost({
         historySelection={historySelection}
         onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
         onOpenHistory={() => context.openWindow("codingHistory")}
+        onOpenSettings={() => context.openWindow("settings", { initialTab: "models" })}
         leftRun={typeof cfg.leftRunId === "string" ? cfg.leftRunId : undefined}
         onLeftRun={(leftRunId) => context.updateCfg({ leftRunId })}
+        activationTrigger={activationTrigger}
         selectedRoot={root ?? undefined}
         selectedBranch={targetBranch}
         selectedLocation={selectedLocation}
@@ -205,11 +253,15 @@ export function CodingWorkbenchWindowHost({
             targetBranch: undefined,
             targetBranchRoot: undefined,
             executionLocation: undefined,
+            repositoryPinned: undefined,
           });
         }}
         onSelectBranch={(branch, shownRoot) => {
           context.updateCfg(branchSelectionPatch(branch, root, shownRoot));
         }}
+        onPinRepository={(repositoryPath) =>
+          context.updateCfg({ repositoryPath, repositoryPinned: true })
+        }
         onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
         onOpenGit={(target) => openGit(context, target)}
       />

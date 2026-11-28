@@ -25,6 +25,36 @@ describe("Coding Workbench window frame styles", () => {
   });
 });
 
+describe("Coding Workbench body notice flow", () => {
+  // U-29: the body was a grid of two explicit rows (`auto`, `1fr`) holding up to five children (the
+  // alert, the in-place activation, the tool check, the status notice and the columns). The
+  // activation landed in the `1fr` row under overflow, so the session columns painted over the
+  // "Activate" button at a 1024x768 window and `elementFromPoint` returned the status container. The
+  // body is one flex column instead: every notice keeps its own height in document flow and only
+  // the session columns (`.session`), takes the remaining space and shrinks.
+  it("stacks every notice in normal flow and lets only the columns shrink", () => {
+    const body = cssBlock(".body");
+
+    expect(body).toContain("display: flex;");
+    expect(body).toContain("flex-direction: column;");
+    expect(body).not.toContain("grid-template-rows");
+    expect(css).not.toContain(".body:has(> .alert)");
+    const notices = cssBlock(".body > *");
+    expect(notices).toContain("flex: 0 0 auto;");
+    const columns = cssBlock(".body > .session");
+    expect(columns).toContain("flex: 1 1 0;");
+    expect(columns).toContain("min-height: 0;");
+    expect(`${body}${notices}${columns}`).not.toMatch(/position:\s*absolute|z-index/u);
+  });
+
+  it("insets the in-place model activation like the alert above it", () => {
+    const activation = cssBlock(".cmpModelActivation");
+
+    expect(activation).toContain("margin: 0 var(--space-6) var(--space-3);");
+    expect(cssBlock(".alert")).toContain("margin: var(--space-3) var(--space-6);");
+  });
+});
+
 describe("Coding Workbench composer model chip styles", () => {
   // #3873 live review: a fixed 9rem chip ellipsized "gemma-4-31b-it" to "gemma-4-…". The chip grows
   // with its identifier up to a readable bound; only an identifier beyond that bound is ellipsized.
@@ -55,5 +85,28 @@ describe("Coding Workbench native approval styles", () => {
     const block = cssBlock(".cmp-approval-native-resource + .cmp-approval-native-resource");
 
     expect(block).toContain("border-block-start:");
+  });
+});
+
+describe("Coding Workbench conversation width", () => {
+  // Owner, 2026-11-28: the Workbench conversation is as wide as the Chat window's. A fixed 760 px
+  // column left most of a wide window empty and squeezed answer tables and code into it. The stream
+  // now fills the window like `.chatw-scroll`, so widening the window gives wide content room.
+  it("lets the session stream content fill the window width", () => {
+    const block = cssBlock(".sessionStream > *");
+
+    expect(block).toContain("width: 100%;");
+    expect(block).not.toMatch(/760px|min\(/u);
+  });
+
+  // The composer stands under the conversation as Chat's does (`.chatw-foot .composer` has no max
+  // width): a centred 760 px composer under a full-width feed was misaligned on a wide window.
+  it("aligns the composer and its context line with the full-width stream", () => {
+    const dock = cssBlock(".composerDock");
+    const context = cssBlock(".composerContext");
+
+    expect(dock).toContain("width: calc(100% - 2 * var(--space-5));");
+    expect(context).toContain("width: 100%;");
+    expect(`${dock}${context}`).not.toMatch(/760px/u);
   });
 });

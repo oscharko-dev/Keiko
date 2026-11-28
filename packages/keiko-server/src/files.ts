@@ -58,13 +58,23 @@ import {
   reKeyEditorLocalHistorySafely,
 } from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
-import { correlationIdOrUnknown } from "./correlation.js";
+import { UNKNOWN_CORRELATION_ID, correlationIdOrUnknown } from "./correlation.js";
 import { recordFilesCopyRefusal, type FilesCopyRefusalStage } from "./files-copy-log.js";
-import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
+import {
+  DENIED_MESSAGE,
+  pathDeniedAsyncRecorded,
+  pathIsDenied,
+  pathIsDeniedAsync,
+} from "./files-deny.js";
 import { errorBody } from "./route-error.js";
 import { STREAMING } from "./route-outcome.js";
 import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import {
+  HumanWriteGateTimeoutError,
+  runHumanWorkspaceWrite,
+} from "./coding-runtime/nativeWriteGate.js";
+import { recordWriteGateTimeout } from "./coding-runtime/opencodeRevert.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
@@ -179,6 +189,32 @@ export class FilesError extends Error {
   }
 }
 
+export const CODING_RUN_WRITING_MESSAGE =
+  "A Coding run is still writing these files. Try again in a moment.";
+
+/**
+ * Runs a write a person made once no runtime revert write of the workspace is running
+ * (`nativeWriteGate.ts`). When the runtime write does not end in time the write does not run and the
+ * route answers with a retryable refusal, never a silent concurrent write.
+ */
+export async function runHumanWriteOrBusy<Result>(
+  root: string,
+  write: () => Promise<Result>,
+  correlationId?: string,
+): Promise<Result> {
+  try {
+    return await runHumanWorkspaceWrite(root, write, undefined, {
+      onTimeout: (_side, waitedMs) => {
+        recordWriteGateTimeout(undefined, waitedMs, correlationId);
+      },
+    });
+  } catch (error) {
+    if (error instanceof HumanWriteGateTimeoutError)
+      throw new FilesError(409, "BUSY", CODING_RUN_WRITING_MESSAGE);
+    throw error;
+  }
+}
+
 interface ResolvedTarget {
   readonly root: string;
   readonly realRoot: string;
@@ -260,7 +296,7 @@ export async function resolveRequestRoot(
   const deferManagedAuthority = options.managedRootAuthority === "defer-to-caller";
   const managedRootInput = requestedManagedRoot(deps, rootInput);
   if (managedRootInput === undefined || deferManagedAuthority) {
-    return resolveRoot(deps.store, rootInput, deps.redactor);
+    return resolveRoot(deps.store, rootInput, deps.redactor, ctx.correlationId);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     recordManagedRootRequestDenial("managed-root-session-authority-missing", {
@@ -369,8 +405,8 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return store.listProjects().find((project) => project.path === projectId);
 }
 
-function rootPathIsDenied(rootPath: string): boolean {
-  return pathIsDenied(rootPath);
+function rootPathIsDenied(rootPath: string, correlationId?: string): Promise<boolean> {
+  return pathDeniedAsyncRecorded(rootPath, correlationId);
 }
 
 function assertMetadataSafe(value: string, redactor: FilesMetadataRedactor): void {
@@ -391,14 +427,15 @@ export function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): 
 async function resolveRegisteredRoot(
   project: Project,
   redactor: FilesMetadataRedactor,
+  correlationId?: string,
 ): Promise<ResolvedProjectRoot> {
   assertMetadataSafe(project.path, redactor);
-  if (rootPathIsDenied(project.path)) {
+  if (await rootPathIsDenied(project.path, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(project.path);
   assertMetadataSafe(realRoot, redactor);
-  if (rootPathIsDenied(realRoot)) {
+  if (await rootPathIsDenied(realRoot, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return {
@@ -418,17 +455,18 @@ async function resolveRegisteredRoot(
 async function resolveArbitraryRoot(
   rootInput: string,
   redactor: FilesMetadataRedactor,
+  correlationId?: string,
 ): Promise<ResolvedProjectRoot> {
   if (!isAbsolute(rootInput)) {
     throw new FilesError(400, "BAD_ROOT", "The root must be an absolute directory path.");
   }
   assertMetadataSafe(rootInput, redactor);
-  if (pathIsDenied(rootInput)) {
+  if (await rootPathIsDenied(rootInput, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(rootInput);
   assertMetadataSafe(realRoot, redactor);
-  if (pathIsDenied(realRoot)) {
+  if (await rootPathIsDenied(realRoot, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return { root: rootInput, realRoot, access: createOrdinaryWorkspaceRootAccess(realRoot) };
@@ -438,14 +476,15 @@ export async function resolveRoot(
   store: UiStore,
   rootInput: string | null,
   redactor: FilesMetadataRedactor,
+  correlationId: string | undefined,
 ): Promise<ResolvedProjectRoot> {
   if (rootInput === null || rootInput.trim().length === 0) {
     throw new FilesError(400, "BAD_REQUEST", "The root query parameter is required.");
   }
   const project = projectFor(store, rootInput);
   return project === undefined
-    ? resolveArbitraryRoot(rootInput.trim(), redactor)
-    : resolveRegisteredRoot(project, redactor);
+    ? resolveArbitraryRoot(rootInput.trim(), redactor, correlationId)
+    : resolveRegisteredRoot(project, redactor, correlationId);
 }
 
 export function normalizeRelativePath(pathInput: unknown): string {
@@ -550,6 +589,17 @@ function assertAdmittedIdentityCurrent(target: ResolvedTarget): void {
   assertAdmittedPathCurrent(target, "The requested path is outside the selected root.");
 }
 
+// A root resolved here has no request behind it: every route handler resolves its root through
+// `resolveRequestRoot` and passes it on, so this fallback only serves a programmatic caller that
+// supplied none. Its denial line therefore carries the sanctioned UNKNOWN_CORRELATION_ID.
+function resolveUnscopedRoot(
+  store: UiStore,
+  rootInput: string | null,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedProjectRoot> {
+  return resolveRoot(store, rootInput, redactor, UNKNOWN_CORRELATION_ID);
+}
+
 async function resolveInsideRoot(
   store: UiStore,
   rootInput: string | null,
@@ -557,7 +607,7 @@ async function resolveInsideRoot(
   redactor: FilesMetadataRedactor,
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ResolvedTarget> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   // Deny check runs BEFORE realpath so existence of a denied path is not
@@ -1232,15 +1282,17 @@ async function nearestGitRoot(
   }
 }
 
-function canExposeFileSearchGitRoot(
+// A denied nested Git root is left out of the file-search results: an ordinary eligibility
+// exclusion, not a refusal of the request, so it is deliberately not recorded on the denial line.
+async function canExposeFileSearchGitRoot(
   selectedRoot: ResolvedProjectRoot,
   gitRoot: string,
   redactor: FilesMetadataRedactor,
-): boolean {
+): Promise<boolean> {
   return (
     gitRoot !== selectedRoot.realRoot &&
     isContained(selectedRoot.realRoot, gitRoot) &&
-    !pathIsDenied(gitRoot) &&
+    !(await pathIsDeniedAsync(gitRoot)) &&
     metadataIsSafe(gitRoot, redactor)
   );
 }
@@ -1271,7 +1323,7 @@ async function resolveFileSearchResultPath(args: {
     rootKind: "selected-root",
   };
   const gitRoot = await nearestGitRoot(dirname(args.nativePath), args.state.gitRootCache);
-  if (gitRoot === null || !canExposeFileSearchGitRoot(args.root, gitRoot, args.redactor)) {
+  if (gitRoot === null || !(await canExposeFileSearchGitRoot(args.root, gitRoot, args.redactor))) {
     return fallback;
   }
 
@@ -1485,7 +1537,7 @@ export async function searchFiles(
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<FilesSearchResponse> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const query = normalizeSearchQuery(queryInput);
   const limit = Math.min(
     Math.max(limitInput ?? DEFAULT_FILE_SEARCH_LIMIT, 1),
@@ -2026,7 +2078,7 @@ export async function resolveContainedEditorFilePath(
   // resolveRoot syscall for the same rootInput within one request.
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ContainedEditorFilePath> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   if (relativePath.length === 0) {
@@ -2178,6 +2230,7 @@ async function writeResolvedFilesContent(args: {
   readonly beforeWrite?:
     | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
     | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesContentResponse> {
   if (!args.target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
@@ -2208,9 +2261,12 @@ async function writeResolvedFilesContent(args: {
   // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
   // conflict checks are untouched and still do the deciding.
   args.testControl?.onQueued?.();
-  const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
-    fileWriteKeys(args.target.path),
-    () => verifyThenWrite(args),
+  // A save waits for a runtime revert write in flight in this workspace and lands right after it,
+  // so the person's edit is the newer one (`nativeWriteGate.ts`).
+  const { localHistoryProtection, updatedStats } = await runHumanWriteOrBusy(
+    args.target.realRoot,
+    () => fileWriteMutex.runExclusive(fileWriteKeys(args.target.path), () => verifyThenWrite(args)),
+    args.correlationId,
   );
   return {
     ...base,
@@ -2233,6 +2289,7 @@ export async function writeFilesContent(args: {
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesContentResponse> {
   const target = await resolveInsideRoot(
     args.store,
@@ -2247,6 +2304,7 @@ export async function writeFilesContent(args: {
     expectedModifiedAt: args.expectedModifiedAt,
     baseVersion: args.baseVersion,
     testControl: args.testControl,
+    correlationId: args.correlationId,
   });
 }
 
@@ -2382,7 +2440,7 @@ async function resolveCreationTarget(
   redactor: FilesMetadataRedactor,
   resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ResolvedCreationTarget> {
-  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
+  const root = resolvedRoot ?? (await resolveUnscopedRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   if (relativePath.length === 0) {
     throw new FilesError(400, "BAD_PATH", "A new entry needs a name inside the selected root.");
@@ -2437,6 +2495,10 @@ async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise
     throw stalePathError();
   }
   return current;
+}
+
+function assertStillTheSameKind(current: Stats, kind: FilesEntryKind): void {
+  if ((kind === "directory") !== current.isDirectory()) throw stalePathError();
 }
 
 function assertCreatedEntryKind(current: WorkspaceStat, kind: FilesEntryKind): void {
@@ -2628,6 +2690,7 @@ export async function createFilesEntry(args: {
   readonly kind: FilesEntryKind;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesMutationResponse> {
   if (args.kind !== "file" && args.kind !== "directory") {
     throw new FilesError(400, "BAD_REQUEST", "A new entry must be a file or a directory.");
@@ -2639,16 +2702,23 @@ export async function createFilesEntry(args: {
     args.redactor ?? staticFilesMetadataRedactor,
     args.resolvedRoot,
   );
-  assertCreationParentStillContained(target);
   try {
-    if (args.kind === "directory") {
-      // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
-      await mkdir(target.path);
-    } else {
-      // `wx` = O_CREAT | O_EXCL: atomically refuse to overwrite an existing entry AND refuse to
-      // follow a final symlink, closing the create-time TOCTOU/symlink window.
-      await writeFile(target.path, "", { flag: "wx" });
-    }
+    await runHumanWriteOrBusy(
+      target.realRoot,
+      async () => {
+        // Proven after the gate wait, which can last long: a parent swapped meanwhile is refused.
+        assertCreationParentStillContained(target);
+        if (args.kind === "directory") {
+          // Non-recursive: the parent was just verified, and EEXIST surfaces as a clean 409.
+          await mkdir(target.path);
+        } else {
+          // `wx` = O_CREAT | O_EXCL: atomically refuse to overwrite an existing entry AND refuse to
+          // follow a final symlink, closing the create-time TOCTOU/symlink window.
+          await writeFile(target.path, "", { flag: "wx" });
+        }
+      },
+      args.correlationId,
+    );
   } catch (error) {
     throw mapNodeFsError(error);
   }
@@ -2690,6 +2760,7 @@ interface RenameFilesEntryArgs {
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 interface RenameFilesPlan {
@@ -2761,7 +2832,16 @@ async function executeContainedRename(
 
 export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
   const { source, target, kind } = await resolveRenameFilesPlan(args);
-  await executeContainedRename(source, target, kind);
+  await runHumanWriteOrBusy(
+    source.realRoot,
+    async () => {
+      // The plan was made before the wait: the entry is proven again, kind included, inside the gate.
+      assertStillTheSameKind(await assertResolvedTargetStillCurrent(source), kind);
+      assertCreationParentStillContained(target);
+      await executeContainedRename(source, target, kind);
+    },
+    args.correlationId,
+  );
   // LSP spec pair for a rename: the old path is Deleted, the new path is Created.
   notifyHostLspWorkspaceFileChanged(source.realRoot, source.path, 3);
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
@@ -2782,6 +2862,7 @@ export async function deleteFilesEntry(args: {
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesMutationResponse> {
   const target = await resolveInsideRoot(
     args.store,
@@ -2805,12 +2886,39 @@ export async function deleteFilesEntry(args: {
   // bound the blast radius to inside the selected root and away from .git/node_modules/secrets, and
   // symlinks are rejected above so `rm` never recurses THROUGH a link out of the root.
   try {
-    await rm(target.path, { recursive: kind === "directory", force: false });
+    await runHumanWriteOrBusy(
+      target.realRoot,
+      async () => {
+        // Proven again, kind included, inside the gate: `recursive` follows what is there now.
+        const current = await assertResolvedTargetStillCurrent(target);
+        assertStillTheSameKind(current, kind);
+        await rm(target.path, { recursive: kind === "directory", force: false });
+      },
+      args.correlationId,
+    );
   } catch (error) {
     throw mapNodeFsError(error);
   }
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 3);
   return { root: target.root, path: target.relativePath, kind };
+}
+
+/** The copy itself, inside the gate: the entry is proven again, kind included, after the wait. */
+function copyInsideGate(
+  source: ResolvedTarget,
+  target: ResolvedCreationTarget,
+  kind: FilesEntryKind,
+  correlationId: string | undefined,
+): Promise<void> {
+  return runHumanWriteOrBusy(
+    target.realRoot,
+    async () => {
+      assertStillTheSameKind(await assertResolvedTargetStillCurrent(source), kind);
+      assertCreationParentStillContained(target);
+      await copyContainedEntry(source, target, kind, correlationId);
+    },
+    correlationId,
+  );
 }
 
 export async function copyFilesEntry(args: {
@@ -2854,7 +2962,7 @@ export async function copyFilesEntry(args: {
   }
   await assertResolvedTargetStillCurrent(source);
   assertCreationParentStillContained(target);
-  await copyContainedEntry(source, target, kind, args.correlationId);
+  await copyInsideGate(source, target, kind, args.correlationId);
   // The copy created a new watched file at the destination; the source is untouched and needs no
   // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
@@ -2881,6 +2989,7 @@ export async function readConnectedFileBytes(
   rootInput: string,
   pathInput: string,
   maxBytes: number,
+  correlationId: string,
 ): Promise<{
   readonly bytes: Buffer;
   readonly name: string;
@@ -2889,7 +2998,8 @@ export async function readConnectedFileBytes(
   if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const target = await resolveInsideRoot(deps.store, rootInput, pathInput, deps.redactor);
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
+  const target = await resolveInsideRoot(deps.store, rootInput, pathInput, deps.redactor, root);
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
@@ -3206,6 +3316,7 @@ async function writeFilesContentRoute(
       fields.historyOrigin === "pre-restore"
         ? createPreRestoreCapture(deps, target, ctx.correlationId)
         : undefined,
+    correlationId: ctx.correlationId,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
   const localHistoryProtection = captureNormalFileSave(deps, target, fields, ctx.correlationId);
@@ -3258,6 +3369,7 @@ export async function handleFilesCreate(
         kind,
         redactor: deps.redactor,
         resolvedRoot,
+        correlationId: ctx.correlationId,
       }),
     };
   });
@@ -3382,6 +3494,7 @@ export async function handleFilesRename(
       baseVersion: baseVersion.version,
       redactor: deps.redactor,
       resolvedRoot,
+      correlationId: ctx.correlationId,
     });
     if (result.previousPath !== undefined) {
       // Deliberately NOT awaited (Codex P1 on PR #3141): the synchronous prefix — computing the
@@ -3447,6 +3560,7 @@ export async function handleFilesDelete(
         baseVersion: baseVersion.version,
         redactor: deps.redactor,
         resolvedRoot,
+        correlationId: ctx.correlationId,
       }),
     };
   });

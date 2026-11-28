@@ -32,7 +32,7 @@ import { logChatResponseMessages } from "./chat-activity.js";
 // is scrubbed before it ever reaches the wire. Guardrail/validation/model errors are returned as a
 // JSON RouteResult BEFORE any SSE header so the client can fall back to the buffered route.
 
-import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
+import { startSseHeartbeat, openSseResponse } from "./sse.js";
 import { recordSseStreamFrame, whenSseWritable, writeSseFrame } from "./sse-write.js";
 import {
   STREAMING,
@@ -750,7 +750,7 @@ function streamingReplayOutcome(
   ctx: RouteContext,
   response: DesktopChatSendResponse,
 ): HandlerOutcome {
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res, { openFrame: false });
   logChatResponseMessages(response, ctx.correlationId);
   writeTerminalFrame(ctx, sseMessage({ event: "done", data: response }));
   ctx.res.end();
@@ -947,7 +947,7 @@ async function executeAdmittedDesktopChatStream(
 ): Promise<HandlerOutcome> {
   let stopHeartbeat: (() => void) | undefined;
   try {
-    ctx.res.writeHead(200, SSE_HEADERS);
+    openSseResponse(ctx.res, { correlationId: ctx.correlationId, openFrame: false });
     markStreamStarted();
     // correlationId (#2902 w5-sse-counters) is threaded here AND into streamConversation's
     // per-token writeSseFrame call: whichever write actually happens first attaches it to the
@@ -1190,7 +1190,7 @@ function writeGitChangeDescriptionStream(
   ctx: RouteContext,
   response: DesktopChatSendResponse,
 ): HandlerOutcome {
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res, { openFrame: false });
   const assistant = response.messages.find((message) => message.role === "assistant");
   if (assistant !== undefined) {
     writeTerminalFrame(ctx, sseMessage({ event: "token", data: { text: assistant.content } }));

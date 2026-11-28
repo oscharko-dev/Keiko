@@ -22,6 +22,8 @@ import {
   createCodingToolFacade,
   codingToolEditPresentation,
   codingToolGitPresentation,
+  codingToolGitProposalPresentation,
+  codingToolHumanDecisionPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -35,6 +37,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
+import type { CodingRepositoryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
@@ -1437,6 +1440,64 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // U-28: a status list of 50 files that says "truncated" left the model to loop on shell output.
+  // It now names the one governed way forward, and only when the list really was cut.
+  it("tells the model a truncated status is staged by directory", async () => {
+    const status = (truncated: boolean): Record<string, unknown> => ({
+      kind: "status",
+      head: "born",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "main",
+      changes: [],
+      truncated,
+    });
+    const run = async (truncated: boolean): Promise<unknown> => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git: status(truncated) }),
+      );
+      return createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "git", operation: "status" }),
+        capability,
+      });
+    };
+    const guidance = ((await run(true)) as { readonly guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("keiko_git_stage");
+    expect(guidance).toContain("directory");
+    expect(guidance).toContain('"."');
+    expect(await run(false)).not.toHaveProperty("guidance");
+  });
+
+  // A status persisted by 1.5.10 has a commit and no `head` marker. The facade reads it as a born
+  // branch before the guard, and still fails one that names no commit.
+  it("reads a persisted status without the head marker as born", async () => {
+    const persisted = {
+      kind: "status",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "main",
+      changes: [],
+      truncated: false,
+    };
+    const run = async (git: Record<string, unknown>): Promise<unknown> => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git }),
+      );
+      return createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "git", operation: "status" }),
+        capability,
+      });
+    };
+    expect(await run(persisted)).toMatchObject({
+      status: "completed",
+      git: { head: "born", headSha: "a".repeat(40) },
+    });
+    const { headSha: _sha, ...unmarked } = persisted;
+    expect(await run(unmarked)).toMatchObject({ status: "failed" });
+  });
+
   // #4068: on a stock Git for Windows host the system scope sets core.autocrlf=true, so every stage
   // was blocked as unsupported-transformation and the model guessed at file locks and hooks.
   it("names the line-ending conversion and the operator's opt-out for a blocked stage", async () => {
@@ -1471,9 +1532,54 @@ describe("CodingToolFacade", () => {
       status: "completed",
       git: { kind: "stage", status: "blocked", reason: "unsupported-transformation" },
     });
-    expect(guidance).toContain("core.autocrlf");
-    expect(guidance).toContain("git config core.autocrlf false");
     expect(guidance).toContain("Do not retry");
+    expect(guidance).toContain("operator");
+    // #4491: Keiko's sandbox refuses `git config`, so the model is never told to run it.
+    expect(guidance).not.toContain("git config");
+  });
+
+  // #4491: a refusal that carries its closed cause gets the guidance of that cause, never a hint
+  // about another one (a Markdown attribute rule once sent the model chasing core.autocrlf).
+  it.each([
+    ["config-unsupported", "core.safecrlf", "operator"],
+    ["filter-driver", "filter driver", "operator"],
+    ["attribute-filter", "applies a filter", ".git/info/attributes"],
+    ["attribute-encoding", "working-tree-encoding", "Stage the other files"],
+    ["attribute-ident", "ident expansion", "Stage the other files"],
+    ["attribute-line-ending", "line-ending conversion", "one extension"],
+    ["attribute-unreadable", "could not report the attribute rules", "operator"],
+    ["content-conversion", "round-trip", "Rewrite the file"],
+  ] as const)("names the %s cause of a blocked stage", async (cause, named, step) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        git: {
+          kind: "stage",
+          proposalId: "stage-4491",
+          status: "blocked",
+          reason: "unsupported-transformation",
+          pathCount: 1,
+          cause,
+        },
+      }),
+    );
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({
+        action: "git",
+        operation: "stage",
+        phase: "propose",
+        paths: ["README.md"],
+      }),
+      capability,
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+
+    expect(guidance).toContain(named);
+    expect(guidance).toContain(step);
+    expect(guidance).not.toContain("git config");
+    if (cause !== "config-unsupported") expect(guidance).not.toContain("core.autocrlf");
   });
 
   // #3907: a task branch Keiko refused is a completed Git result with a closed reason, and each
@@ -1856,7 +1962,38 @@ describe("CodingToolFacade", () => {
       ...(code === "NO_RUNNABLE_STEPS"
         ? { guidance: expect.stringContaining("This verifier has nothing to run") as unknown }
         : {}),
+      // A limit a step reached is neither red nor green, so the model is told what happened.
+      ...(code === "VERIFICATION_RESOURCE_EXCEEDED"
+        ? { guidance: expect.stringContaining("reached a resource limit") as unknown }
+        : {}),
+      ...(code === "VERIFICATION_TIMED_OUT"
+        ? { guidance: expect.stringContaining("ran out of its wall-time limit") as unknown }
+        : {}),
     });
+  });
+
+  it("names the closed limit a verification step reached, and withholds any other word", async () => {
+    const run = async (resourceLimit: string): Promise<unknown> => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({
+          outcome: "failed",
+          reasonCode: "VERIFICATION_RESOURCE_EXCEEDED",
+          resourceLimit,
+        }),
+      );
+      return createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      });
+    };
+
+    await expect(run("output-limit")).resolves.toMatchObject({
+      reasonCode: "VERIFICATION_RESOURCE_EXCEEDED",
+      detail: "Limit reached: output-limit.",
+    });
+    const hostile = (await run("/Users/someone/secret")) as { detail?: string };
+    expect(hostile.detail).toBeUndefined();
   });
 
   it("forwards only the bounded structured diagnostics of a failed verifier", async () => {
@@ -2005,6 +2142,25 @@ describe("CodingToolFacade", () => {
       nextAction: "verify-again",
       extra: true,
     },
+    // #4491: a permanent cause never answers `verify-again`; an unknown cause is no cause.
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "verify-again",
+      cause: "unborn-head",
+    },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "resolve-then-verify",
+      cause: "read-failed",
+    },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "resolve-then-verify",
+      cause: "invented",
+    },
     { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
     // #3612: unsaved buffers are saved, never staged, and name no paths.
     { commitProof: "unavailable", reasonCode: "buffers-dirty", nextAction: "stage-then-verify" },
@@ -2071,6 +2227,26 @@ describe("CodingToolFacade", () => {
         nextAction: "verify-again",
       },
     },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "proof-unavailable",
+        nextAction: "resolve-then-verify",
+        cause: "unborn-head",
+      },
+    },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "proof-unavailable",
+        nextAction: "verify-again",
+        cause: "snapshot-drift",
+      },
+    },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
     {
       status: "passed",
@@ -2114,6 +2290,19 @@ describe("CodingToolFacade", () => {
     expect(humanDecisionToolResult(outcome)).toMatchObject({
       guidance: humanDecisionFeedback(outcome),
     });
+  });
+
+  // Both approval sources answer with this one result, so both name the same closed cause; a refusal
+  // Keiko's own policy made names none (the row then says Keiko blocked it).
+  it.each([
+    ["denied", "approval-declined"],
+    ["expired", "approval-expired"],
+  ] as const)("names %s as %s on the row of the human's decision only", (outcome, cause) => {
+    expect(codingToolHumanDecisionPresentation(humanDecisionToolResult(outcome))).toEqual({
+      failureOrigin: "keiko-refused",
+      refusalCause: cause,
+    });
+    expect(codingToolHumanDecisionPresentation({ status: "denied", evidence: [] })).toEqual({});
   });
 
   // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.
@@ -2431,6 +2620,119 @@ describe("CodingToolFacade", () => {
 // #3579: a refused or skipped verification used to read as a failed one in the Workbench timeline,
 // because the card knew only that the tool reported an error. The presentation names, in the
 // contract's closed words, why the call the model received ended as it did.
+// PERF-2: the generated tool shim states `truncated: false`, so the runtime never shortens a
+// governed result. That holds only because the facade bounds the model-visible result itself, at
+// 64 KiB: a repository search, a read, a discovery and a research page. Each oversized producer
+// answer is bounded here with an honest marker, and stays valid JSON.
+describe("the model-visible bound of a governed result (PERF-2)", () => {
+  const BOUND = 64 * 1024;
+  const hit = (index: number): Record<string, unknown> => ({
+    path: `src/file-${String(index)}.ts`,
+    startLine: 1,
+    endLine: 2,
+    snippet: "s".repeat(4_000),
+    redacted: false,
+    snippetTruncated: false,
+  });
+
+  interface Answered {
+    readonly status: string;
+    readonly search?: CodingRepositoryResult;
+    readonly read?: { readonly text: string; readonly byteCount: number };
+  }
+
+  async function answerFor(
+    body: Record<string, unknown>,
+    delegated: Record<string, unknown>,
+  ): Promise<Answered> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], ...delegated }),
+    );
+    const answer = await createCodingToolFacade(ports).execute({
+      body: requestBody(body),
+      capability,
+    });
+    return answer;
+  }
+
+  it("drops the trailing hits of an oversized search and says output-limit", async () => {
+    const hits = Array.from({ length: 200 }, (_, index) => hit(index));
+    const result = await answerFor(
+      {
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "needle",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 50,
+        },
+      },
+      { search: { ...stubSearchResult, hits, truncationReasons: ["result-limit"] } },
+    );
+    const search = result.search;
+    if (search?.ok !== true || search.kind !== "search") throw new Error("expected a search");
+    expect(Buffer.byteLength(JSON.stringify(search))).toBeLessThanOrEqual(BOUND);
+    expect(search.hits.length).toBeGreaterThan(0);
+    expect(search.hits.length).toBeLessThan(hits.length);
+    expect(search.truncationReasons).toEqual(["result-limit", "output-limit"]);
+    expect(search.hits[0]).toEqual(hits[0]);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+
+  it("refuses a search that no number of hits makes fit", async () => {
+    const result = await answerFor(
+      {
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "needle",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 50,
+        },
+      },
+      {
+        search: {
+          ...stubSearchResult,
+          hits: [],
+          truncationReasons: [],
+          diagnostics: { huge: "x".repeat(BOUND) },
+        },
+      },
+    );
+    expect(result.status).toBe("failed");
+    expect(result).not.toHaveProperty("search");
+  });
+
+  it("cuts an oversized research page at the read bound, on a whole character", async () => {
+    const text = "é".repeat(150_000);
+    const result = await answerFor(
+      { action: "egress", target: "https://example.test" },
+      { read: { text } },
+    );
+    const { read } = result;
+    if (read === undefined) throw new Error("expected a research page");
+    expect(read.byteCount).toBeLessThanOrEqual(BOUND);
+    expect(Buffer.byteLength(read.text)).toBe(read.byteCount);
+    expect(text.startsWith(read.text)).toBe(true);
+    expect(JSON.stringify(result).length).toBeLessThan(BOUND * 2);
+  });
+
+  it("refuses a repository read above the read bound instead of passing it on", async () => {
+    const result = await answerFor(
+      { action: "read", relativePath: "src/a.ts", startLine: 1, maxLines: 10 },
+      { read: { text: "x".repeat(BOUND + 1), digest: "a".repeat(64), totalLines: 1 } },
+    );
+    expect(result).not.toHaveProperty("read");
+  });
+});
+
 describe("CodingToolFacade verification presentation (#3579)", () => {
   async function presented(delegateOutcome: unknown): Promise<unknown> {
     const ports = facade();
@@ -2658,6 +2960,22 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     });
   });
 
+  // Lab U-48: a commit refused on a protected branch read only the generic policy sentence.
+  it("names a commit refused on a protected branch, and keeps other policy blocks generic", () => {
+    const blocked = (blockReason: string): CodingToolResult =>
+      completedWith("verifiedCommit", {
+        status: "blocked",
+        reason: "policy-block",
+        blockReason,
+      });
+    expect(codingToolGitPresentation(blocked("protected-branch"))).toEqual({
+      gitOutcome: "commit-protected-branch",
+    });
+    expect(codingToolGitPresentation(blocked("policy-forbidden"))).toEqual({
+      gitOutcome: "blocked",
+    });
+  });
+
   it.each([
     [{ kind: "stage", status: "succeeded", reason: "none" }, "completed"],
     [{ kind: "stage", status: "blocked", reason: "scope-denied" }, "blocked"],
@@ -2668,20 +2986,97 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     ],
     [{ kind: "stage", status: "failed", reason: "execution-failed" }, "not-done"],
     [{ kind: "branch", status: "succeeded", reason: "none" }, "completed"],
-    [{ kind: "branch", status: "blocked", reason: "branch-exists" }, "blocked"],
+    [{ kind: "branch", status: "blocked", reason: "invalid-name" }, "branch-invalid-name"],
+    [{ kind: "branch", status: "blocked", reason: "protected-name" }, "branch-protected-name"],
+    [{ kind: "branch", status: "blocked", reason: "branch-exists" }, "branch-exists"],
+    [{ kind: "branch", status: "blocked", reason: "not-on-base" }, "branch-not-on-base"],
+    [
+      { kind: "branch", status: "blocked", reason: "not-local-checkout" },
+      "branch-not-local-checkout",
+    ],
+    [
+      { kind: "branch", status: "blocked", reason: "executable-filters" },
+      "branch-executable-filters",
+    ],
+    [{ kind: "branch", status: "blocked", reason: "preflight-block" }, "branch-preflight"],
+    [{ kind: "branch", status: "blocked", reason: "authority-denied" }, "blocked"],
+    [{ kind: "branch", status: "blocked", reason: "policy-block" }, "blocked"],
     [{ kind: "branch", status: "failed", reason: "rebind-failed" }, "not-done"],
     [{ kind: "fetch", status: "succeeded" }, "completed"],
     [{ kind: "pull", status: "up-to-date" }, "completed"],
     [{ kind: "pull", status: "not-fast-forward" }, "not-done"],
     [{ kind: "fetch", status: "auth-failed" }, "not-done"],
   ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
-    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
+    // The index steps also name which direction they took; every other kind presents its outcome only.
+    const action = git.kind === "stage" || git.kind === "unstage" ? { gitAction: git.kind } : {};
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome, ...action });
+  });
+
+  // Lab 2026-11-27 (Full access): the policy authorized the commit proposal, no decision was ever
+  // asked, and the card still read "Waiting for approval". A proposal answered ready needs none.
+  it("presents a commit proposal answered ready as prepared, never as waiting for a decision", () => {
+    const proposal = { status: "approval-required", reason: "approval-required" };
+    expect(
+      codingToolGitPresentation({
+        ...completedWith("verifiedCommit", proposal),
+        approvalDisposition: "ready",
+      } as CodingToolResult),
+    ).toEqual({ gitOutcome: "prepared" });
+    expect(codingToolGitPresentation(completedWith("verifiedCommit", proposal))).toEqual({
+      gitOutcome: "waiting-for-approval",
+    });
+  });
+
+  // U-49: stage and unstage share the `keiko_git_stage` tool name, so the row learns which one it
+  // was from the result's own kind; a proposal answered ready carries no outcome, only its action.
+  it.each([
+    [{ kind: "unstage", status: "ready", reason: "none" }, { gitAction: "unstage" }],
+    [{ kind: "stage", status: "ready", reason: "none" }, { gitAction: "stage" }],
+    [
+      { kind: "unstage", status: "succeeded", reason: "none" },
+      { gitOutcome: "completed", gitAction: "unstage" },
+    ],
+    [{ kind: "branch", status: "succeeded", reason: "none" }, { gitOutcome: "completed" }],
+  ] as const)("presents the index step %j as %j", (git, presentation) => {
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual(presentation);
+  });
+
+  // A Git proposal and the execute that redeems it carry one opaque reference, so the Workbench
+  // names the proposal an execute carried out instead of guessing from order.
+  it("gives a proposal and its execute the same opaque reference, and none to a call naming no proposal", () => {
+    const proposal = codingToolGitProposalPresentation(
+      { action: "git", operation: "stage", phase: "propose", paths: ["a.ts"] } as never,
+      completedWith("git", {
+        kind: "stage",
+        proposalId: "stage-7",
+        status: "ready",
+        reason: "none",
+      }),
+    );
+    const execute = codingToolGitProposalPresentation(
+      { action: "git", operation: "stage", phase: "execute", proposalId: "stage-7" } as never,
+      { status: "denied", evidence: [] } as never,
+    );
+    expect(proposal.gitProposalRef).toMatch(/^[0-9a-f]{16}$/u);
+    expect(execute).toEqual(proposal);
+    const other = codingToolGitProposalPresentation(
+      { action: "git", operation: "stage", phase: "execute", proposalId: "stage-8" } as never,
+      { status: "denied", evidence: [] } as never,
+    );
+    expect(other.gitProposalRef).not.toBe(proposal.gitProposalRef);
+    expect(JSON.stringify(proposal)).not.toContain("stage-7");
+    expect(
+      codingToolGitProposalPresentation(
+        { action: "git", operation: "status" } as never,
+        completedWith("git", { kind: "fetch", status: "succeeded" }),
+      ),
+    ).toEqual({});
   });
 
   it("fails closed to not done for a Git or commit status it does not know", () => {
     expect(
       codingToolGitPresentation(completedWith("git", { kind: "stage", status: "unexpected" })),
-    ).toEqual({ gitOutcome: "not-done" });
+    ).toEqual({ gitOutcome: "not-done", gitAction: "stage" });
     expect(
       codingToolGitPresentation(
         completedWith("verifiedCommit", { status: "unexpected", reason: "unexpected" }),
@@ -2689,14 +3084,14 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     ).toEqual({ gitOutcome: "not-done" });
   });
 
-  it("presents nothing for reads, an unprepared proposal, other results and other statuses", () => {
+  it("presents no outcome for reads, an unprepared proposal, other results and other statuses", () => {
     expect(codingToolGitPresentation(completedWith("git", { kind: "status" }))).toEqual({});
     expect(codingToolGitPresentation(completedWith("git", { kind: "diff" }))).toEqual({});
     expect(
       codingToolGitPresentation(
         completedWith("git", { kind: "stage", status: "ready", reason: "none" }),
       ),
-    ).toEqual({});
+    ).toEqual({ gitAction: "stage" });
     expect(
       codingToolGitPresentation({
         status: "completed",

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { CODING_WORKBENCH_TOOL_CALL_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
 import {
@@ -19,7 +20,9 @@ export type OpenCodeV2ApprovalOutcome =
 
 /** A refused governed ask as the bridge reports it to the tool facade route. */
 export type ToolBridgeApprovalRejection =
-  `approval-${Exclude<OpenCodeV2ApprovalOutcome, "approved">}`;
+  | `approval-${Exclude<OpenCodeV2ApprovalOutcome, "approved">}`
+  /** A task-branch ask Keiko answers itself because it would refuse the name at execution (U-27). */
+  | "branch-name-refused";
 
 /**
  * The decision with the tool call it belongs to (#3612). `actionId` is the tool call's own
@@ -74,6 +77,9 @@ interface ParsedAsk {
   readonly actionId: string;
 }
 
+// Only the call that opened a prompt is named by it (`callId`, the Workbench's "Waiting for approval"
+// row): identical asks from other calls join that prompt, or queue behind it, and their rows keep
+// their feed state until their own ask is the one shown.
 // One run may keep this many prompts open, so a run that asks in a loop cannot use the whole
 // registry up for the others; the global ceiling still bounds the process.
 const MAX_PENDING_ASKS_PER_RUN = 16;
@@ -85,11 +91,10 @@ const ASK_IDENTITY_FIELDS: ReadonlySet<string> = new Set([
   "actionId",
   "idempotencyKey",
   "approvalId",
+  "callId",
   "expiresAt",
 ]);
 const ASK_KEYS: readonly string[] = ["action", "runId", "actionId", "properties"];
-// The call id shape the safe-activity settlement accepts (productionOpenCodeBackend.ts).
-const CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const UNAVAILABLE: OpenCodeV2ApprovalDecision = { outcome: "unavailable" };
 
 function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
@@ -105,9 +110,9 @@ function exactKeys(value: Readonly<Record<string, unknown>>, keys: readonly stri
 
 // The plugin derives the ask id from the same `sessionID:id` seed it sends as `actionId`, so an
 // actionId that does not hash to the ask id, or names another session, fails closed.
-function boundActionId(value: unknown, sessionId: string, askId: unknown): value is string {
+export function boundActionId(value: unknown, sessionId: string, askId: unknown): value is string {
   if (typeof value !== "string" || !value.startsWith(`${sessionId}:`)) return false;
-  if (!CALL_ID.test(value.slice(sessionId.length + 1))) return false;
+  if (!CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(value.slice(sessionId.length + 1))) return false;
   const digest = createHash("sha256").update(value, "utf8").digest("hex");
   return askId === `per_${digest.slice(0, 32)}`;
 }
@@ -126,7 +131,10 @@ function parsedAsk(value: unknown, runId: string, sessionId: string): ParsedAsk 
     { id: properties.id, type: "permission.asked", properties },
     sessionId,
   );
-  return event === undefined ? undefined : { event, actionId };
+  // The ask is bound to its call (`boundActionId`), so the call's own id names the row it holds back.
+  return event === undefined
+    ? undefined
+    : { event: { ...event, callId: actionId.slice(sessionId.length + 1) }, actionId };
 }
 
 // The decision about one parsed ask, naming its call and its permission request.

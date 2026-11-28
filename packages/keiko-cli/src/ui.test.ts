@@ -1141,6 +1141,35 @@ describe("runUiCli", () => {
     }
   });
 
+  it("registers no project when the launch cwd is inside the program folder (ADR-0121 D9)", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-program-folder-"));
+    await writeFile(join(cwd, "package.json"), '{"name":"keiko"}\n', "utf8");
+    vi.stubEnv("KEIKO_LAUNCH_FROM_PROGRAM_FOLDER", "1");
+    vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.store.listProjects()).toEqual([]);
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("registers the launch cwd as a project before the server starts", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-launch-project-"));

@@ -25,6 +25,7 @@ import type {
   GitDeliveryRecoveryStrategyHint,
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "./types.js";
+import type { GitHeadState } from "./git-head-state.js";
 
 // ─── Concrete execution operands ──────────────────────────────────────────────────────────
 // These carry the concrete operands (paths, message, refs) the content-free contract inputs
@@ -33,6 +34,12 @@ import type { CommandRule } from "./types.js";
 export interface GitBranchCreateExecRequest {
   readonly branchName: string;
   readonly startPointRefHash: string;
+  /**
+   * Set when HEAD is unborn (a fresh `git init`, #4491): the unborn branch HEAD must still name.
+   * There is no commit to start from, so the adapter re-points HEAD at the new unborn branch
+   * (`git switch -c` semantics, no object written) after proving that state again.
+   */
+  readonly fromUnbornBranch?: string;
 }
 
 export interface GitBranchSwitchExecRequest {
@@ -57,12 +64,17 @@ export interface GitCommitExecRequest {
   readonly verified?: GitVerifiedCommitPrecondition;
 }
 
+/**
+ * What a verified stage, unstage or commit was reviewed against. `head` and `base` are explicit
+ * states: an unborn branch (a fresh repository) is its own base, and its first commit is a root
+ * commit created with a zero old value (#4491).
+ */
 export interface GitVerifiedCommitPrecondition {
-  readonly headSha: string;
+  readonly head: GitHeadState;
   readonly stagedTreeDigest: string;
   readonly branchName: string;
   readonly baseRef: string;
-  readonly baseSha: string;
+  readonly base: GitHeadState;
 }
 
 export interface GitAbortExecRequest {
@@ -99,11 +111,13 @@ export interface GitLocalMutationAdapter {
 export const GIT_MUTATION_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze([
   "branch",
   "switch",
+  "symbolic-ref",
   "add",
   "restore",
   "commit",
   "write-tree",
   "commit-tree",
+  "stripspace",
   "update-ref",
   "hash-object",
   "update-index",
@@ -232,6 +246,13 @@ export function buildBranchCreateArgv(req: GitBranchCreateExecRequest): GitMutat
   ];
 }
 
+// Re-point HEAD, symbolically, at a branch that has no commit yet: the only way to "create" a branch
+// from an unborn HEAD. The operand is guarded like every ref; the node adapter proves the unborn
+// state immediately before it runs.
+export function buildUnbornBranchArgv(req: GitBranchCreateExecRequest): GitMutationArgvPlan {
+  return [["symbolic-ref", "HEAD", `refs/heads/${assertRef(req.branchName, "branchName")}`]];
+}
+
 // Switch HEAD to an EXISTING local branch. `git switch` (never `checkout`) is branch-only: it cannot
 // be coerced into a path checkout, so it carries no file-overwrite surface. The branch operand is a
 // bare positional guarded by assertRef (non-empty, NUL-free, no leading "-" flag-injection), mirroring
@@ -244,12 +265,45 @@ export function buildStageArgv(req: GitStageExecRequest): GitMutationArgvPlan {
   return [["add", "--", ...assertPathspecs(req.pathspecs)]];
 }
 
-export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPlan {
-  return [["restore", "--staged", "--", ...assertPathspecs(req.pathspecs)]];
+// One `restore` run's pathspec text stays far below Windows' CreateProcess limit (about 32 K
+// characters for the whole command line, which argument quoting can roughly double), so a directory unstage that names thousands of files
+// (U-28) runs as several restores inside one index transaction instead of one oversized command.
+const UNSTAGE_ARGV_PATHSPEC_CHARS = 8_000;
+
+// The empty tree, which Git knows without storing it, per object format. An unborn HEAD has no
+// commit for `restore --staged` to read as its source, so the unstaging names the empty tree: every
+// reviewed path leaves the index exactly as it would for a path HEAD does not contain.
+const GIT_EMPTY_TREE_ID = Object.freeze({
+  40: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+  64: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+});
+
+function unstageRestorePrefix(req: GitUnstageExecRequest): string[] {
+  const head = req.verified?.head;
+  return head?.kind === "unborn"
+    ? ["restore", "--source", GIT_EMPTY_TREE_ID[head.objectIdLength], "--staged", "--"]
+    : ["restore", "--staged", "--"];
 }
 
-export function buildCommitArgv(req: GitCommitExecRequest): GitMutationArgvPlan {
-  const argv: string[] = ["commit", "--gpg-sign"];
+export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPlan {
+  const plan: string[][] = [];
+  let used = Infinity;
+  for (const pathspec of assertPathspecs(req.pathspecs)) {
+    if (used + pathspec.length + 1 > UNSTAGE_ARGV_PATHSPEC_CHARS) {
+      plan.push(unstageRestorePrefix(req));
+      used = 0;
+    }
+    plan.at(-1)?.push(pathspec);
+    used += pathspec.length + 1;
+  }
+  return plan;
+}
+
+// `sign` is Git's effective `commit.gpgsign` for the repository (ADR-0006). A commit that is not to
+// be signed passes neither `--gpg-sign` nor `--no-gpg-sign`: Git then commits exactly as it would for
+// the person, and no hook or later configuration is overridden.
+export function buildCommitArgv(req: GitCommitExecRequest, sign: boolean): GitMutationArgvPlan {
+  const argv: string[] = sign ? ["commit", "--gpg-sign"] : ["commit"];
   if (req.allowEmpty) {
     argv.push("--allow-empty");
   }

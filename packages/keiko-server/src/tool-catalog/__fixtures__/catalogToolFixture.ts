@@ -69,7 +69,7 @@ function fixtureOptions(
   };
 }
 
-export function catalogToolFixture(): {
+export function catalogToolFixture(maxDurationMs?: number): {
   readonly pure: ReturnType<typeof fixture>;
   readonly input: CatalogToolBinderInput;
   readonly options: CatalogToolBinderOptions;
@@ -81,7 +81,7 @@ export function catalogToolFixture(): {
   readonly context: CatalogTrustedContext;
   readonly primary: ReturnType<typeof createBufferedServerLogSink>;
 } {
-  const pure = fixture();
+  const pure = fixture(undefined, undefined, maxDurationMs);
   const primary = createBufferedServerLogSink();
   const preview = vi.fn<CodingToolAuthorityPreview>(() => ({ ok: true }));
   const budgetAvailable = vi.fn<CatalogToolBudgetPort["available"]>(() => true);

@@ -231,6 +231,13 @@ export interface CodingVerificationFailureEvidence {
   readonly failedCount: number;
 }
 
+export interface FailedCheckTarget {
+  readonly target: string;
+  readonly failure: CodingVerificationFailureEvidence;
+  /** The check passed earlier in this run and fails only after the run's own later edit. */
+  readonly provenOwn: boolean;
+}
+
 interface OrchestratorEffortRecord {
   verificationCount: number;
   appliedEditCount: number;
@@ -251,6 +258,11 @@ interface VerificationTargetState {
   readonly selected: boolean;
   /** The target's check ran after the run's last code edit and failed; cleared by the next edit. */
   readonly failure?: CodingVerificationFailureEvidence;
+  /**
+   * The target's check passed in this run before a later code edit: a failure of it afterwards is
+   * the run's own doing, which no baseline outside the run is needed to prove (#4491 review).
+   */
+  readonly passedBeforeEdit?: boolean;
   readonly notRun?: boolean;
   readonly blockedReason?: CodingVerificationBlockedReason;
 }
@@ -306,6 +318,14 @@ export class CodingRuntimeRunEffortLedger {
   }
 
   /**
+   * A run that settled succeeded without any check after its last code change hands that debt on,
+   * so the task's next follow-up still owes the check although the run itself did not fail.
+   */
+  handVerificationDebtOn(runId: string): void {
+    retained(this.settledDebts, runId, () => true as const, MAX_SETTLED_DEBTS);
+  }
+
+  /**
    * An applied edit of the run. An edit that changed documentation alone is no change a check could
    * contradict: it demands no verification and leaves the run's earlier results standing; any edit
    * that changed code, or named no path, demands one after it (#4491).
@@ -319,7 +339,11 @@ export class CodingRuntimeRunEffortLedger {
     run.editRevision = boundedSum(run.editRevision, 1);
     for (const [target, state] of run.verificationTargets) {
       const { failure: _superseded, ...rest } = state;
-      run.verificationTargets.set(target, { ...rest, passed: false });
+      run.verificationTargets.set(target, {
+        ...rest,
+        passed: false,
+        ...(state.passed || state.passedBeforeEdit === true ? { passedBeforeEdit: true } : {}),
+      });
     }
   }
 
@@ -340,12 +364,15 @@ export class CodingRuntimeRunEffortLedger {
     run.verificationCount += 1;
     if (passed === null || run.verificationTargets.get(target)?.notRun === true) return;
     if (!verificationAtCurrentRevision(run, editRevision)) {
-      // A late old summary must not erase an already observed fresh pass for this same target.
-      if (!run.verificationTargets.has(target))
-        run.verificationTargets.set(target, { passed: false, selected: true });
+      recordStaleVerification(run, target, editRevision, failure);
       return;
     }
-    run.verificationTargets.set(target, { passed, selected: true, ...failedWith(passed, failure) });
+    run.verificationTargets.set(target, {
+      passed,
+      selected: true,
+      ...keptPassedBeforeEdit(run.verificationTargets.get(target)),
+      ...failedWith(passed, failure),
+    });
   }
 
   /** Whether a summary's edit revision is the run's current one (the rule `verification` applies). */
@@ -403,11 +430,18 @@ export class CodingRuntimeRunEffortLedger {
    * could not start, or when every check since the last edit passed.
    */
   failedCheck(runId: string): CodingVerificationFailureEvidence | undefined {
+    return this.failedCheckTarget(runId)?.failure;
+  }
+
+  /** The same failed check with the digest of the target it ran against: which check it was. */
+  failedCheckTarget(runId: string): FailedCheckTarget | undefined {
     const run = this.runs.get(runId);
     if (run === undefined) return undefined;
-    return [...run.verificationTargets.values()].find(
-      (state) => state.selected && !state.passed && state.failure !== undefined,
-    )?.failure;
+    for (const [target, state] of run.verificationTargets) {
+      if (state.selected && !state.passed && state.failure !== undefined)
+        return { target, failure: state.failure, provenOwn: state.passedBeforeEdit === true };
+    }
+    return undefined;
   }
 
   /** Whether the run applied edits and every one of them changed documentation alone. */
@@ -468,11 +502,39 @@ export class CodingRuntimeRunEffortLedger {
 }
 
 // The failed check's evidence rides the target only while the target is failing.
+function keptPassedBeforeEdit(earlier: VerificationTargetState | undefined): {
+  readonly passedBeforeEdit?: true;
+} {
+  return earlier?.passedBeforeEdit === true ? { passedBeforeEdit: true } : {};
+}
+
 function failedWith(
   passed: boolean,
   failure: CodingVerificationFailureEvidence | undefined,
 ): { readonly failure?: CodingVerificationFailureEvidence } {
   return passed || failure === undefined ? {} : { failure };
+}
+
+// A late old summary must not erase an already observed fresh pass for this same target. A summary
+// that arrives without any revision (the supervised/sidecar producer) cannot be placed, so a
+// failure in it stays a failure: it keeps its evidence and never reads as "no check ran". Only a
+// fresh pass at the current revision replaces it.
+function recordStaleVerification(
+  run: OrchestratorEffortRecord,
+  target: string,
+  editRevision: number | undefined,
+  failure: CodingVerificationFailureEvidence | undefined,
+): void {
+  const known = run.verificationTargets.get(target);
+  const placesFailure = editRevision === undefined && failure !== undefined;
+  // A stale summary that carries a revision, or a stale pass, never rewrites what is known.
+  if (known !== undefined && !placesFailure) return;
+  run.verificationTargets.set(target, {
+    passed: false,
+    selected: true,
+    ...keptPassedBeforeEdit(known),
+    ...failedWith(false, placesFailure ? failure : undefined),
+  });
 }
 
 function verificationAtCurrentRevision(

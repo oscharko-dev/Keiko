@@ -23,6 +23,12 @@
 //                     orchestration between steps. The install's own duration is on
 //                     `editor.verification.dependencies`; `dependencyBootstrap` names the outcome.
 //   probeDurationMs   the isolation probe, which runs before the report's clock starts.
+//   supervisorAttestationMs / stepNodeAttestationMs
+//                     the part of the probe the Windows supervisor's and the step Node.js's byte
+//                     attestation took (Windows only).
+//   stepCopyCleanupMs / stepCopyCleanupRetryCount
+//                     removing the run's private step copy after the last step, inside the
+//                     exclusive workspace scope, and how often that removal was retried.
 // The time a run waited for the workspace is the gap between its `editor.verification.workspace`
 // `waiting` and `acquired` lines.
 
@@ -106,6 +112,10 @@ export const VERIFICATION_COMPLETION_FIELD_CONTRACTS = {
   outsideStepsMs: DURATION_FIELD,
   maxStepDurationMs: DURATION_FIELD,
   probeDurationMs: DURATION_FIELD,
+  supervisorAttestationMs: DURATION_FIELD,
+  stepNodeAttestationMs: DURATION_FIELD,
+  stepCopyCleanupMs: DURATION_FIELD,
+  stepCopyCleanupRetryCount: { type: "integer", dataClass: "count", required: false },
   testStatus: STATUS_FIELD,
   testDurationMs: DURATION_FIELD,
   targetedTestStatus: STATUS_FIELD,
@@ -143,6 +153,12 @@ export const VERIFICATION_COMPLETION_FIELD_CONTRACTS = {
     required: false,
     values: VERIFICATION_DEPENDENCY_STATE_VALUES,
   },
+  // Output volume never ends a healthy step: a step keeps a bounded head and tail of its output and
+  // runs to its exit code. Present only when a step dropped output, or when a runaway ended one.
+  outputRetainedBytes: { type: "integer", dataClass: "count", required: false },
+  outputDiscardedBytes: { type: "integer", dataClass: "count", required: false },
+  // True only when the absolute runaway ceiling ended a step (its status is resource-exceeded).
+  outputCapFired: { type: "boolean", dataClass: "closed-enum", required: false },
 } as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
 
 interface VerificationCompletionLogFields {
@@ -150,6 +166,10 @@ interface VerificationCompletionLogFields {
   readonly outsideStepsMs?: number;
   readonly maxStepDurationMs?: number;
   readonly probeDurationMs?: number;
+  readonly supervisorAttestationMs?: number;
+  readonly stepNodeAttestationMs?: number;
+  readonly stepCopyCleanupMs?: number;
+  readonly stepCopyCleanupRetryCount?: number;
   readonly testStatus?: VerificationStatus;
   readonly testDurationMs?: number;
   readonly targetedTestStatus?: VerificationStatus;
@@ -165,6 +185,9 @@ interface VerificationCompletionLogFields {
   readonly isolationEngine?: DockerEngineAnswer;
   readonly networkEnforcement?: NetworkEnforcementMode;
   readonly dependencyBootstrap?: VerificationDependencyState;
+  readonly outputRetainedBytes?: number;
+  readonly outputDiscardedBytes?: number;
+  readonly outputCapFired?: boolean;
 }
 
 type MutableFields = {
@@ -266,6 +289,27 @@ function timingFields(report: VerificationReport): VerificationCompletionLogFiel
   };
 }
 
+// Summed over the report's steps. Absent when no step dropped output and none was ended for it.
+function outputFields(report: VerificationReport): VerificationCompletionLogFields {
+  let retained: number | undefined;
+  let discarded: number | undefined;
+  for (const result of report.results) {
+    if (result.outputDiscardedBytes === undefined) continue;
+    discarded = Math.min(Number.MAX_SAFE_INTEGER, (discarded ?? 0) + result.outputDiscardedBytes);
+    retained = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (retained ?? 0) + (result.outputRetainedBytes ?? 0),
+    );
+  }
+  const capFired = report.results.some((result) => result.truncated);
+  return {
+    ...(retained === undefined || discarded === undefined
+      ? {}
+      : { outputRetainedBytes: retained, outputDiscardedBytes: discarded }),
+    ...(capFired ? { outputCapFired: true } : {}),
+  };
+}
+
 function isolationFields(execution: ExecuteVerificationResult): VerificationCompletionLogFields {
   const probeMs =
     execution.probeDurationMs === undefined
@@ -279,7 +323,26 @@ function isolationFields(execution: ExecuteVerificationResult): VerificationComp
       ? {}
       : { networkEnforcement: execution.networkEnforcement }),
     ...(probeMs === undefined ? {} : { probeDurationMs: probeMs }),
+    ...windowsStepFields(execution),
   };
+}
+
+// Whole milliseconds and a count, or nothing: a field the execution did not report is omitted.
+function windowsStepFields(execution: ExecuteVerificationResult): VerificationCompletionLogFields {
+  const supervisorMs = optionalMilliseconds(execution.supervisorAttestationMs);
+  const stepNodeMs = optionalMilliseconds(execution.stepNodeAttestationMs);
+  const cleanupMs = optionalMilliseconds(execution.stepCopyCleanupMs);
+  const retries = optionalMilliseconds(execution.stepCopyCleanupRetryCount);
+  return {
+    ...(supervisorMs === undefined ? {} : { supervisorAttestationMs: supervisorMs }),
+    ...(stepNodeMs === undefined ? {} : { stepNodeAttestationMs: stepNodeMs }),
+    ...(cleanupMs === undefined ? {} : { stepCopyCleanupMs: cleanupMs }),
+    ...(retries === undefined ? {} : { stepCopyCleanupRetryCount: retries }),
+  };
+}
+
+function optionalMilliseconds(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : wholeMilliseconds(value);
 }
 
 // The fields the `editor.verification.execute` completion line adds to its counts: where the wall
@@ -292,6 +355,7 @@ export function verificationCompletionLogFields(
   return {
     ...timingFields(report),
     ...stepFields(report),
+    ...outputFields(report),
     ...isolationFields(execution),
     ...(report.dependencies === undefined
       ? {}

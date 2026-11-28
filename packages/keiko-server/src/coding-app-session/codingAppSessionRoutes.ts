@@ -41,7 +41,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { STREAMING } from "../route-outcome.js";
 import type { HandlerOutcome, RouteContext, RouteDefinition, RouteResult } from "../routes.js";
-import { SSE_HEADERS } from "../sse.js";
+import { openSseResponse } from "../sse.js";
 import {
   CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS,
   createSessionStreamWriter,
@@ -133,6 +133,8 @@ const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
 const SESSION_STREAM_FLOW_FIELDS = {
   drainWaitCount: { type: "integer", dataClass: "count", required: true },
   coalescedSnapshotCount: { type: "integer", dataClass: "count", required: true },
+  carriedTextDeltaCount: { type: "integer", dataClass: "count", required: true },
+  carryFallbackCount: { type: "integer", dataClass: "count", required: true },
 } as const;
 
 const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
@@ -470,6 +472,8 @@ function channelOpened(
         {
           drainWaitCount: flow.drainWaitCount,
           coalescedSnapshotCount: flow.coalescedSnapshotCount,
+          carriedTextDeltaCount: flow.carriedTextDeltaCount,
+          carryFallbackCount: flow.carryFallbackCount,
         },
       ),
     );
@@ -807,7 +811,7 @@ export function openCodingAppSessionStream(
   diagnostics?: ServerDiagnosticSink,
   activityLog: ServerLogSink = processServerLogSink(),
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { correlationId, openFrame: false });
   if (channel === undefined) {
     openContentFreeSessionStream(res, activityLog, correlationId, diagnostics);
     return;

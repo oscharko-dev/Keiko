@@ -35,20 +35,27 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-function runState(deps: Partial<UnitTestWorkflowDeps>): {
+function runState(
+  deps: Partial<UnitTestWorkflowDeps>,
+  withTargetedTest = true,
+): {
   state: RunState;
   workspace: WorkspaceInfo;
   fs: WorkspaceFs;
+  files: Record<string, string>;
 } {
-  const fs = memFs(ROOT, {
+  const files: Record<string, string> = {
     "package.json": JSON.stringify({
       name: "d",
       scripts: { test: "vitest run" },
       devDependencies: { vitest: "^4" },
     }),
     "src/add.ts": "export const add = (a: number, b: number): number => a + b;",
-    "tests/add.test.ts": "import { test } from 'vitest';\ntest('x', () => {});\n",
-  });
+    ...(withTargetedTest
+      ? { "tests/add.test.ts": "import { test } from 'vitest';\ntest('x', () => {});\n" }
+      : {}),
+  };
+  const fs = memFs(ROOT, files);
   const input: UnitTestWorkflowInput = {
     workspaceRoot: ROOT,
     target: { kind: "file", filePath: "src/add.ts" },
@@ -59,7 +66,7 @@ function runState(deps: Partial<UnitTestWorkflowDeps>): {
     { model: { call: () => Promise.reject(new Error("unused")) }, fs, ...deps },
     "fp",
   );
-  return { state, workspace: detectWorkspace(ROOT, fs), fs };
+  return { state, workspace: detectWorkspace(ROOT, fs), fs, files };
 }
 
 // The production governed shape: the budget wrapper injects a spawn, and no caller anywhere sets an
@@ -119,5 +126,49 @@ describe("verification egress enforcement (ADR-0043 D8)", () => {
     expect(spawn.calls()).toHaveLength(1);
     expect(spawn.calls()[0]?.args).toContain("--bind");
     expect(spawn.calls()[0]?.args).not.toContain("--unshare-net");
+  });
+});
+
+describe("the verification stage binds package scripts to the plan it built", () => {
+  it("runs the planned bytes, as the shell `sh -c`, when the scripts are unchanged", async () => {
+    const spawn = governedSpawn();
+    const { state, workspace, fs } = runState(
+      { spawn: spawn.fn, verificationEnforcedNetworkAvailable: true },
+      false,
+    );
+    const outcome = await runWorkflowVerification(state, workspace, fs);
+    expect(outcome.summary?.overallStatus).toBe("passed");
+    expect(spawn.calls()[0]?.args).toContain("vitest run");
+  });
+
+  it("denies, without a spawn, a package.json rewritten after the plan was built", async () => {
+    const spawn = governedSpawn();
+    const held: { files?: Record<string, string> } = {};
+    const {
+      state,
+      workspace,
+      fs,
+      files: store,
+    } = runState(
+      {
+        spawn: spawn.fn,
+        verificationEnforcedNetworkAvailable: true,
+        // The report's clock starts after planning and before any spawn: the model's patch lands here.
+        now: () => {
+          if (held.files !== undefined) {
+            held.files["package.json"] = JSON.stringify({
+              name: "d",
+              scripts: { test: "node steal.js" },
+            });
+          }
+          return 1;
+        },
+      },
+      false,
+    );
+    held.files = store;
+    const outcome = await runWorkflowVerification(state, workspace, fs);
+    expect(spawn.calls()).toHaveLength(0);
+    expect(outcome.summary?.results.map((result) => result.status)).toEqual(["denied"]);
   });
 });

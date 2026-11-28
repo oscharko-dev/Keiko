@@ -1,3 +1,4 @@
+import { codingToolCallIdFromActionId } from "./codingToolIpc.js";
 import { ACTIVITY_LOG_DIAGNOSTIC_FIELDS } from "@oscharko-dev/keiko-contracts/runtime/activity-log-diagnostic-fields";
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
@@ -58,6 +59,7 @@ import type {
 import {
   PackageSelectionRequiredError,
   VerificationRunnerError,
+  VerificationPlanChangedError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
 import {
@@ -73,7 +75,10 @@ import {
   type CodingToolAuthorityContextProvider,
   type CommitExecutionApproval,
 } from "./codingToolAuthorityPort.js";
-import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
+import {
+  blockedBranchToolResult,
+  type GovernedVerificationReasonCode,
+} from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type {
   CodingToolEditOutcome,
@@ -101,13 +106,21 @@ import type {
 import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   GOVERNED_ASK_DECLINED_REASON_CODE,
+  GOVERNED_ASK_EXPIRED_REASON_CODE,
   dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
+  type VerificationResourceLimitWord,
   type VerificationNotRunStep,
+  COMMIT_PROOF_UNAVAILABLE_CAUSES,
+  type CommitProofUnavailableCause,
 } from "./codingToolIpc.js";
+import {
+  classifyCommitProofFailure,
+  isPermanentCommitProofCause,
+} from "./codingCommitProofCause.js";
 import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
@@ -154,6 +167,7 @@ import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
+import { verificationPlanDigest } from "./verificationApprovalPreview.js";
 
 const PROPOSAL_APPROVAL_POLL_MS = 25;
 
@@ -412,6 +426,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["begin", "complete", "observe"],
     },
+    commitProofCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: COMMIT_PROOF_UNAVAILABLE_CAUSES,
+    },
     ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
   lifecycle: "state",
@@ -427,6 +447,8 @@ interface ProposalApprovalProbe {
   readonly matchesApproval: (proposalId: string) => boolean;
   /** The operator declined the proposal: it stays reviewable, so this is read first. */
   readonly declined?: (proposalId: string) => boolean;
+  /** The system refused it (a full approval queue): the wait ends without a person's "no". */
+  readonly refused?: (proposalId: string) => boolean;
 }
 
 export function waitForRuntimeProposalApproval(
@@ -445,6 +467,7 @@ export function waitForRuntimeProposalApproval(
     inspect: (): ProposalApprovalWaitOutcome | undefined => {
       try {
         if (probe.declined?.(proposalId) === true) return "denied";
+        if (probe.refused?.(proposalId) === true) return "unavailable";
         if (probe.review(proposalId) === undefined) return "unavailable";
         return probe.matchesApproval(proposalId) ? "approved" : undefined;
       } catch (error) {
@@ -534,11 +557,11 @@ export interface ProductionManagedWorktreeToolInput {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly ciObservationService?: CiObservationService;
   readonly draftDeliveryService?: DraftDeliveryService;
-  readonly requestDraftDeliveryApproval?: (proposalId: string) => void;
+  readonly requestDraftDeliveryApproval?: (proposalId: string, callId?: string) => void;
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
-  readonly requestStageApproval?: (proposalId: string) => void;
-  readonly requestCommitApproval?: (proposalId: string) => void;
+  readonly requestStageApproval?: (proposalId: string, callId?: string) => void;
+  readonly requestCommitApproval?: (proposalId: string, callId?: string) => void;
   readonly authority: Pick<
     CodingRuntimeAuthorityService,
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
@@ -571,7 +594,7 @@ export interface ProductionManagedWorktreeToolInput {
   // for the same reason `requestOperatorDecision` is: a composition that supplies neither cannot
   // wait for an operator and keeps the immediate refusal it always had. Both are needed to wait.
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport"> &
-    Partial<Pick<VerificationRunnerManager, "scriptTrustFor">>;
+    Partial<Pick<VerificationRunnerManager, "scriptTrustFor" | "previewCommands">>;
   /**
    * Announces a decision only a local human can make, and then announces how it settled. A tool
    * that meets one waits in place for it; this is how the run itself reports that it is waiting,
@@ -800,7 +823,27 @@ export function createProductionManagedWorktreeToolFacade(
     },
   );
   const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
-  return acceptedInitialization === undefined ? facade : { ...facade, acceptedInitialization };
+  const withBranchAsk = { ...facade, ...branchAskFacet(input) };
+  return acceptedInitialization === undefined
+    ? withBranchAsk
+    : { ...withBranchAsk, acceptedInitialization };
+}
+
+// A task-branch ask the run's own branch step is certain to refuse (U-32). A plain folder has no
+// repository and no Git service: its asks stay with the step's own refusal.
+function branchAskFacet(
+  input: ProductionManagedWorktreeToolInput,
+): Pick<CodingToolFacade, "branchAsk"> {
+  const service = input.runtimeGitService;
+  if (service === undefined || input.workspaceKind === "folder") return {};
+  return {
+    branchAsk: {
+      refusal: (branchName): ReturnType<typeof blockedBranchToolResult> | undefined => {
+        const reason = service.branchAskRefusal(branchName);
+        return reason === undefined ? undefined : blockedBranchToolResult(reason, branchName);
+      },
+    },
+  };
 }
 
 function managedWorktreeAuthorityContext(
@@ -988,7 +1031,14 @@ function buildRuntimeGitPort(
       const result = await input.runtimeGitService.execute(request, guard, signal);
       if (result.kind === "refused")
         return { status: "failed", reasonCode: GIT_REFUSAL_REASON_CODES[result.reason] };
-      return stageReleaseResult(await releaseStageProposal(input, result, signal));
+      return stageReleaseResult(
+        await releaseStageProposal(
+          input,
+          result,
+          signal,
+          codingToolCallIdFromActionId(request.actionId),
+        ),
+      );
     },
   };
 }
@@ -1009,27 +1059,32 @@ async function runCiObservation(
 function requestStageReview(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
+  callId: string | undefined,
 ): void {
   if (
     (result.kind === "stage" || result.kind === "unstage") &&
     result.status === "approval-required"
   )
-    input.requestStageApproval?.(result.proposalId);
+    input.requestStageApproval?.(result.proposalId, callId);
 }
 
 async function releaseStageProposal(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
   signal: AbortSignal | undefined,
+  callId: string | undefined,
 ): Promise<
-  import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
+  | import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult
+  | "declined"
+  | "expired"
+  | undefined
 > {
   if (
     (result.kind !== "stage" && result.kind !== "unstage") ||
     result.status !== "approval-required"
   )
     return result;
-  requestStageReview(input, result);
+  requestStageReview(input, result, callId);
   const actionKind = result.kind === "stage" ? "git-stage" : "git-unstage";
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
@@ -1043,14 +1098,21 @@ async function releaseStageProposal(
   );
   recordProposalApprovalWait(input, actionKind, result.proposalId, outcome);
   if (outcome === "denied") return "declined";
+  if (outcome === "expired") return "expired";
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
 }
 
 function stageReleaseResult(
-  released: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined,
+  released:
+    | import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult
+    | "declined"
+    | "expired"
+    | undefined,
 ): GovernedCodingToolResult {
   if (released === "declined")
     return { status: "failed", reasonCode: GOVERNED_ASK_DECLINED_REASON_CODE };
+  if (released === "expired")
+    return { status: "failed", reasonCode: GOVERNED_ASK_EXPIRED_REASON_CODE };
   return released === undefined
     ? { status: "failed", reasonCode: "git-authority-revoked" }
     : { status: "completed", git: released };
@@ -1069,7 +1131,14 @@ function declinableProposalProbe(
     matchesApproval: (proposalId) => service.matchesApproval(proposalId),
     declined: (proposalId) =>
       input.approvalProofVerifier?.proposalDeclined?.(runId, proposalId) === true,
+    refused: (proposalId) =>
+      input.approvalProofVerifier?.proposalRefused?.(runId, proposalId) === true,
   };
+}
+
+function deliveryWaitReasonCode(outcome: ProposalApprovalWaitOutcome): string {
+  if (outcome === "denied") return GOVERNED_ASK_DECLINED_REASON_CODE;
+  return outcome === "expired" ? GOVERNED_ASK_EXPIRED_REASON_CODE : "delivery-authority-revoked";
 }
 
 // A human's "no" reaches the model as that decision; every other unapproved end of the wait stays
@@ -1079,11 +1148,7 @@ function deliveryWaitResult(
   ready: GovernedCodingToolResult,
 ): GovernedCodingToolResult {
   if (outcome === "approved") return ready;
-  return {
-    status: "failed",
-    reasonCode:
-      outcome === "denied" ? GOVERNED_ASK_DECLINED_REASON_CODE : "delivery-authority-revoked",
-  };
+  return { status: "failed", reasonCode: deliveryWaitReasonCode(outcome) };
 }
 
 function buildVerifiedCommitPort(
@@ -1142,7 +1207,10 @@ async function releaseDraftDeliveryProposal(
     recordPolicyAuthorizedProposal(input, actionKind, proposal.record.proposalId);
     return { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" };
   }
-  input.requestDraftDeliveryApproval?.(proposal.record.proposalId);
+  input.requestDraftDeliveryApproval?.(
+    proposal.record.proposalId,
+    codingToolCallIdFromActionId(request.actionId),
+  );
   const outcome = await waitForRuntimeProposalApproval(
     declinableProposalProbe(input, service),
     proposal.record.proposalId,
@@ -1181,7 +1249,7 @@ async function completeVerifiedCommitRequest(
     recordPolicyAuthorizedProposal(input, "commit", result.proposalId);
     return { status: "completed", verifiedCommit: result, approvalDisposition: "ready" };
   }
-  input.requestCommitApproval?.(result.proposalId);
+  input.requestCommitApproval?.(result.proposalId, codingToolCallIdFromActionId(request.actionId));
   const outcome = await waitForRuntimeProposalApproval(
     declinableProposalProbe(input, service),
     result.proposalId,
@@ -1698,6 +1766,8 @@ type VerificationPortResult =
       readonly shellDependencies?: "installed" | undefined;
       /** The workspace-relative package folders the model has to choose between (`packageDir`). */
       readonly packageCandidates?: readonly string[] | undefined;
+      /** The closed limit a step reached when the reason is a resource ceiling or the wall time. */
+      readonly resourceLimit?: VerificationResourceLimitWord | undefined;
     };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
@@ -1753,18 +1823,19 @@ async function runVerificationCall(
   signal: Parameters<VerificationRunnerExecute>[1],
   guard: Parameters<VerificationRunnerExecute>[2],
 ): Promise<VerificationPortResult> {
-  const kind = verificationRunnerEntry(input, request, guard, signal);
-  if (typeof kind !== "string") return kind;
+  const entry = verificationRunnerEntry(input, request, guard, signal);
+  if (!("kind" in entry)) return entry;
+  const { kind, bound } = entry;
   // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
   // catalog's ceilings both run from admission, so the wait below must be measured from here
   // and not from the moment the first attempt failed (owner review, PR #3452).
   const enteredAtMs = Date.now();
   const editRevision = input.verificationRevision?.();
   const executed = input.verificationAdmitted?.();
-  let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+  let attempt = await runVerificationAttempt(input, request, kind, guard, signal, bound);
   if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
     if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
-      attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+      attempt = await runVerificationAttempt(input, request, kind, guard, signal, bound);
     }
   }
   if (attempt.outcome === "refused") return attempt.result;
@@ -1791,6 +1862,67 @@ async function runVerificationCall(
   return verificationOutcome(input, attempt, guard, signal);
 }
 
+/**
+ * ADR-0124 D6: the person approved the command lines the card showed. The call is planned again
+ * here, exactly as the runner plans it, and any difference (a changed package.json, another package
+ * folder, a plan that can no longer be made) refuses it with a closed reason instead of running
+ * something the person never saw. An ask that showed no command line bound nothing.
+ */
+function verificationPlanChanged(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
+): VerificationPortResult | string | undefined {
+  // The digest rides on the approval record this very call spent, so it is bound to this call.
+  const bound = input.approvalProofVerifier?.takeApprovedPlan({
+    runId: input.authorityRef.runId,
+    request,
+  });
+  if (bound === undefined) return undefined;
+  // The card showed commands. A runner that cannot plan them again cannot prove they are still the
+  // ones the person saw, so the call fails closed instead of running unbound.
+  const preview = input.verificationRunner.previewCommands;
+  if (preview !== undefined && verificationPlanDigestOf(input, preview, request, kind) === bound) {
+    // The runner proves the same digest again on the plan it builds for the effect itself, on
+    // every attempt (the wait for script trust and the captures below leave this check behind).
+    return bound;
+  }
+  return verificationPortRefusal(input, "verification-plan-changed");
+}
+
+function verificationPlanDigestOf(
+  input: ProductionManagedWorktreeToolInput,
+  preview: NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
+): string | undefined {
+  try {
+    const plan = preview({
+      projectId: input.workspaceRoot,
+      kinds: [kind],
+      // `targetPath` is not part of the plan: only `targeted-test` carries one (the request
+      // parser rejects it for every other verifier), and a targeted test shows and binds nothing.
+      ...(request.packageDir === undefined ? {} : { packageDir: request.packageDir }),
+    });
+    return plan.kind === "steps" ? verificationPlanDigest(plan.steps) : undefined;
+  } catch (error) {
+    emitVerificationDiagnostic(input, "verification-plan-changed", "verification-failed", error);
+    return undefined;
+  }
+}
+
+interface VerificationEntry {
+  readonly kind: VerificationKind;
+  /** The plan digest the person approved, still to be proven against the plan the effect builds. */
+  readonly bound: string | undefined;
+}
+
 function verificationRunnerEntry(
   input: ProductionManagedWorktreeToolInput,
   request: Extract<
@@ -1799,13 +1931,16 @@ function verificationRunnerEntry(
   >,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): VerificationKind | VerificationPortResult {
+): VerificationEntry | VerificationPortResult {
   const refusal = verificationLivenessRefusal(input, guard, signal);
   if (refusal !== undefined) {
     return verificationPortRefusal(input, "verification-authority-revoked", refusal);
   }
   const kind = verificationKind(request.verifierId);
-  if (kind !== undefined) return kind;
+  if (kind !== undefined) {
+    const bound = verificationPlanChanged(input, request, kind);
+    return typeof bound === "object" ? bound : { kind, bound };
+  }
   input.verificationBlocked?.(
     "verification-verifier-unsupported",
     codingVerificationTargetDigest(request.verifierId, request.targetPath),
@@ -1898,6 +2033,7 @@ async function runVerificationAttempt(
   kind: VerificationKind,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
+  bound: string | undefined,
 ): Promise<VerificationAttempt> {
   // Built on demand, never in advance: `verificationPortRefusal` EMITS the refusal diagnostic as a
   // side effect, so materialising it up front would report a revoked authority on every attempt
@@ -1911,7 +2047,7 @@ async function runVerificationAttempt(
     const beforeRun = verificationLivenessRefusal(input, guard, signal);
     if (beforeRun !== undefined) return revoked(beforeRun);
     const { report, failureOutput } = await input.verificationRunner.runToReport(
-      verificationRunInput(input, request, kind),
+      verificationRunInput(input, request, kind, bound),
       signal ?? new AbortController().signal,
     );
     const afterRun = verificationLivenessRefusal(input, guard, signal);
@@ -1919,6 +2055,14 @@ async function runVerificationAttempt(
     const commitProof = await completeCandidateVerification(input, begun, report, guard, signal);
     return { outcome: "completed", report, failureOutput, commitProof };
   } catch (error) {
+    // The plan built for the effect is no longer the one the person approved: the same closed
+    // refusal as the entry check, before any step started.
+    if (error instanceof VerificationPlanChangedError) {
+      return {
+        outcome: "refused",
+        result: verificationPortRefusal(input, "verification-plan-changed"),
+      };
+    }
     return { outcome: "threw", error };
   }
 }
@@ -2130,6 +2274,28 @@ function modelFacingStatus(report: VerificationReport): Exclude<VerificationStat
   return overall;
 }
 
+// The limit a step reached, in the closed words the model is told: which dimension the orchestrator
+// marked breached on the step that ran to a resource or wall-time end. Never a number or a path.
+const BREACHED_DIMENSION_WORDS: Readonly<Record<string, VerificationResourceLimitWord>> = {
+  "output-size": "output-limit",
+  memory: "memory-limit",
+  "wall-time": "time-limit",
+};
+
+function executedResourceLimit(
+  report: VerificationReport,
+  status: Exclude<VerificationStatus, "passed">,
+): VerificationResourceLimitWord | undefined {
+  if (status !== "resource-exceeded" && status !== "timed-out") return undefined;
+  for (const result of report.results) {
+    if (result.status !== status) continue;
+    const breached = result.appliedLimits.find((limit) => limit.breached === true);
+    const word = breached === undefined ? undefined : BREACHED_DIMENSION_WORDS[breached.dimension];
+    if (word !== undefined) return word;
+  }
+  return undefined;
+}
+
 function failedVerificationOutcome(
   input: ProductionManagedWorktreeToolInput,
   attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
@@ -2145,10 +2311,12 @@ function failedVerificationOutcome(
       ? notRunSteps(report)
       : undefined;
   if (notRun !== undefined) recordVerificationNotRun(input, notRun);
+  const resourceLimit = executedResourceLimit(report, status);
   return {
     status: "failed",
     reasonCode,
     ...(verificationFailure === undefined ? {} : { verificationFailure }),
+    ...(resourceLimit === undefined ? {} : { resourceLimit }),
     ...(notRun === undefined ? {} : { notRun }),
     ...(notRun !== undefined && installedForShell(report)
       ? { shellDependencies: "installed" }
@@ -2384,7 +2552,8 @@ function stepFailure(
 }
 
 type CandidateVerificationStart =
-  VerificationTicketOutcome | { readonly kind: "proof-unavailable" };
+  | VerificationTicketOutcome
+  | { readonly kind: "proof-unavailable"; readonly cause: CommitProofUnavailableCause };
 
 async function beginCandidateVerification(
   input: ProductionManagedWorktreeToolInput,
@@ -2392,16 +2561,16 @@ async function beginCandidateVerification(
   try {
     return await input.verifiedCommitService?.beginVerification();
   } catch (error) {
-    recordCommitProofFailure(input, "begin", error);
-    return { kind: "proof-unavailable" };
+    return { kind: "proof-unavailable", cause: recordCommitProofFailure(input, "begin", error) };
   }
 }
 
-function unavailableCommitProof(): CodingToolCommitProofResult {
+function unavailableCommitProof(cause: CommitProofUnavailableCause): CodingToolCommitProofResult {
   return {
     commitProof: "unavailable",
     reasonCode: "proof-unavailable",
-    nextAction: "verify-again",
+    nextAction: isPermanentCommitProofCause(cause) ? "resolve-then-verify" : "verify-again",
+    cause,
   };
 }
 
@@ -2409,7 +2578,8 @@ function recordCommitProofFailure(
   input: ProductionManagedWorktreeToolInput,
   proofStage: "begin" | "complete" | "observe",
   error: unknown,
-): void {
+): CommitProofUnavailableCause {
+  const cause = classifyCommitProofFailure(error);
   input.verifiedCommitService?.invalidate();
   emitVerificationDiagnostic(
     input,
@@ -2429,11 +2599,13 @@ function recordCommitProofFailure(
         state: "proof-unavailable",
         proofStage,
         commitProofReason: "proof-unavailable",
+        commitProofCause: cause,
         frames: keikoStackFrames(error),
         causeChain: causeChain(error),
       },
     ),
   );
+  return cause;
 }
 
 async function completeCandidateVerification(
@@ -2444,7 +2616,7 @@ async function completeCandidateVerification(
   signal: AbortSignal | undefined,
 ): Promise<CodingToolCommitProofResult | undefined> {
   if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
-  if (begun.kind === "proof-unavailable") return unavailableCommitProof();
+  if (begun.kind === "proof-unavailable") return unavailableCommitProof(begun.cause);
   try {
     return await recordCandidateVerification(
       input.verifiedCommitService,
@@ -2454,8 +2626,9 @@ async function completeCandidateVerification(
       signal,
     );
   } catch (error) {
-    recordCommitProofFailure(input, begun.kind === "ticket" ? "complete" : "observe", error);
-    return unavailableCommitProof();
+    return unavailableCommitProof(
+      recordCommitProofFailure(input, begun.kind === "ticket" ? "complete" : "observe", error),
+    );
   }
 }
 
@@ -2546,6 +2719,7 @@ function verificationRunInput(
     { readonly action: "verification" }
   >,
   kind: VerificationKind,
+  expectedPlanDigest: string | undefined,
 ): VerificationRunInput {
   const correlationId = verificationCorrelationId(input);
   recordVerificationTarget(input, request, kind);
@@ -2560,6 +2734,7 @@ function verificationRunInput(
     ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
     // Read at the attempt, not frozen at construction: the run's mode is the live selection.
     autonomyMode: effectiveModeOf(input),
+    ...(expectedPlanDigest === undefined ? {} : { expectedPlanDigest }),
   };
 }
 
@@ -2608,7 +2783,10 @@ function verificationCorrelationId(input: ProductionManagedWorktreeToolInput): s
 
 function verificationPortRefusal(
   input: ProductionManagedWorktreeToolInput,
-  reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
+  reasonCode:
+    | "verification-authority-revoked"
+    | "verification-verifier-unsupported"
+    | "verification-plan-changed",
   condition?: VerificationLivenessRefusal,
 ): VerificationPortResult {
   if (reasonCode === "verification-authority-revoked") input.verificationBlocked?.(reasonCode);

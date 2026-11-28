@@ -2,7 +2,13 @@ import { CatalogDispatchFault } from "./catalogToolErrors.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
+import { openCodeCatalogSettlementBudgetMs } from "./catalogToolFacadeBridge.js";
+import { largeHashTimeoutMs } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { runtimeMaxDurationMs } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { chatTurnDeadlineSignal } from "../chat-tool-turn-deadline.js";
+import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type {
   CatalogHandlerContext,
@@ -53,11 +59,12 @@ function deferred<T>(): {
 function fixtureWith(
   input?: (fixture: ReturnType<typeof catalogToolFixture>) => CatalogToolBinderInput,
   context?: (fixture: ReturnType<typeof catalogToolFixture>) => CatalogTrustedContext,
+  maxDurationMs?: number,
 ): ReturnType<typeof catalogToolFixture> & {
   binder: ReturnType<typeof createCatalogToolBinder>;
   request: object;
 } {
-  const fixture = catalogToolFixture();
+  const fixture = catalogToolFixture(maxDurationMs);
   const binder = createCatalogToolBinder(input?.(fixture) ?? fixture.input, {
     ...fixture.options,
     context: () => context?.(fixture) ?? fixture.context,
@@ -74,6 +81,61 @@ function fixtureWith(
       arguments: { path: "fixture.ts" },
     },
   };
+}
+const STAGE_EXECUTE = {
+  ...ID,
+  action: "git",
+  operation: "stage",
+  phase: "execute",
+  proposalId: "stage-1",
+} as const;
+const STATUS_READ = { ...ID, action: "git", operation: "status" } as const;
+const DIFF_READ = {
+  ...ID,
+  action: "git",
+  operation: "diff",
+  scope: "working-tree",
+  paths: ["big.bin"],
+} as const;
+const MIB = 1_048_576;
+// A supported 6 GiB staging file read at 10 MiB/s: one hash pass takes 614.4 s, which lies between
+// the former ten-minute outer bound and the 674.4 s the hash itself is granted.
+const SIX_GIB_HASH_MS = (6_144 / 10) * 1_000;
+// Dispatches `keiko.git.execute` stage under the production budget; `hold` is the handler's work.
+function stageDispatch(
+  hold: Promise<CatalogHandlerResult>,
+  options: {
+    readonly authorityMs?: number;
+    readonly signal?: AbortSignal;
+    readonly request?: CodingToolActionRequest;
+  } = {},
+): { readonly fixture: ReturnType<typeof fixtureWith>; readonly started: Promise<undefined> } {
+  const budget = openCodeCatalogSettlementBudgetMs(options.request ?? STAGE_EXECUTE) ?? 0;
+  const started = deferred<undefined>();
+  const fixture = fixtureWith(
+    (f) => ({
+      ...f.input,
+      handlerBindings: [
+        {
+          ...f.handler,
+          execute: (_args, context): Promise<CatalogHandlerResult> => {
+            expect(context.beforeEffect()).toBe(true);
+            started.resolve(undefined);
+            return hold;
+          },
+        },
+      ],
+    }),
+    (f) => ({
+      ...f.context,
+      // The run's authority ends the call: its deadline, and the expiry the claim is held until.
+      deadlineAt: new Date(1000 + (options.authorityMs ?? budget)).toISOString(),
+      authorityExpiresAt: new Date(1000 + (options.authorityMs ?? budget)).toISOString(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    }),
+    budget,
+  );
+  return { fixture, started: started.promise };
 }
 const RESULT: CatalogHandlerResult = {
   data: { text: "safe-result" },
@@ -170,6 +232,171 @@ describe("catalog invocation settlement races", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect((await pending).kind).toBe("settled");
     expect(fixture.primary.events.at(-1)?.extra?.status).toBe("timeout");
+  });
+  // Owner decision 2026-11-24 (work-ending limits): a redeemed git delivery proposal runs many
+  // subprocesses that carry their own timeouts, so a 30 s catalog budget ended healthy work on a
+  // loaded host. The call is given the budget the production catalog declares for it.
+  it("does not settle a governed git execute that runs past the 30 s sandbox default", async () => {
+    vi.useFakeTimers();
+    const budget =
+      openCodeCatalogSettlementBudgetMs({
+        ...ID,
+        action: "git",
+        operation: "stage",
+        phase: "execute",
+        proposalId: "stage-1",
+      }) ?? 0;
+    expect(budget).toBeGreaterThan(30_000);
+    const started = deferred<undefined>();
+    const finish = deferred<CatalogHandlerResult>();
+    const fixture = fixtureWith(
+      (f) => ({
+        ...f.input,
+        handlerBindings: [
+          {
+            ...f.handler,
+            execute: (_args, context): Promise<CatalogHandlerResult> => {
+              expect(context.beforeEffect()).toBe(true);
+              started.resolve(undefined);
+              return finish.promise;
+            },
+          },
+        ],
+      }),
+      (f) => ({ ...f.context, deadlineAt: new Date(1000 + budget).toISOString() }),
+      budget,
+    );
+    const pending = fixture.binder.dispatch(fixture.request, ID);
+    await started.promise;
+    fixture.now.mockReturnValue(1000 + 45_000);
+    await vi.advanceTimersByTimeAsync(45_000);
+    finish.resolve(RESULT);
+    const settled = await pending;
+    expect(settled).toMatchObject({ kind: "settled", result: { status: "completed" } });
+    expect(fixture.primary.events.at(-1)?.extra).toMatchObject({
+      status: "completed",
+      budgetMs: budget,
+    });
+  });
+  describe("large-file staging is not cut by the outer budget", () => {
+    it("completes a successful 6 GiB hash that outlasts ten minutes but not its own deadline", async () => {
+      vi.useFakeTimers();
+      expect(SIX_GIB_HASH_MS).toBeGreaterThan(600_000);
+      expect(SIX_GIB_HASH_MS).toBeLessThan(largeHashTimeoutMs(6_144 * MIB));
+      const finish = deferred<CatalogHandlerResult>();
+      const { fixture, started } = stageDispatch(finish.promise);
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + SIX_GIB_HASH_MS);
+      await vi.advanceTimersByTimeAsync(SIX_GIB_HASH_MS);
+      finish.resolve(RESULT);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "completed" } });
+    });
+    it("grants the call at least the deadline of the hash it admits", () => {
+      const budget = openCodeCatalogSettlementBudgetMs(STAGE_EXECUTE) ?? 0;
+      expect(budget).toBeGreaterThanOrEqual(largeHashTimeoutMs(6_144 * MIB));
+    });
+    it("keeps a finite backstop no longer than the longest authorizable run", () => {
+      const budget = openCodeCatalogSettlementBudgetMs(STAGE_EXECUTE) ?? 0;
+      expect(budget).toBe(runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES));
+      expect(budget).toBeLessThan(TOOL_CATALOG_LIMITS.maxDurationMs);
+    });
+    it("still ends a hung call when the run's authority expires", async () => {
+      vi.useFakeTimers();
+      const { fixture, started } = stageDispatch(new Promise(() => undefined), {
+        authorityMs: 700_000,
+      });
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + 700_000);
+      await vi.advanceTimersByTimeAsync(700_000);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "timeout" } });
+      expect(fixture.primary.events.at(-1)?.extra).toMatchObject({ reason: "deadline-exceeded" });
+    });
+    it("still ends the call at once when the run is cancelled", async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const { fixture, started } = stageDispatch(new Promise(() => undefined), {
+        signal: controller.signal,
+      });
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + SIX_GIB_HASH_MS);
+      await vi.advanceTimersByTimeAsync(SIX_GIB_HASH_MS);
+      controller.abort();
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "cancelled" } });
+    });
+    it("ends a call that never settles at the backstop", async () => {
+      vi.useFakeTimers();
+      const budget = openCodeCatalogSettlementBudgetMs(STAGE_EXECUTE) ?? 0;
+      const { fixture, started } = stageDispatch(new Promise(() => undefined));
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + budget);
+      await vi.advanceTimersByTimeAsync(budget);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "timeout" } });
+    });
+  });
+  // The raw status/diff scan streams a whole tracked large file whose index stat no longer matches,
+  // so it needs the same bounded lifetime as delivery: a 614.4 s read must not meet a ten-minute cut.
+  describe.each([
+    ["status", STATUS_READ],
+    ["diff", DIFF_READ],
+  ] as const)("a governed git %s read of a large modified file", (_name, request) => {
+    it("grants at least the deadline of the 6 GiB hash and no more than the longest run", () => {
+      const budget = openCodeCatalogSettlementBudgetMs(request) ?? 0;
+      expect(budget).toBeGreaterThanOrEqual(largeHashTimeoutMs(6_144 * MIB));
+      expect(budget).toBe(runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES));
+    });
+    it("completes a read that outlasts ten minutes", async () => {
+      vi.useFakeTimers();
+      const finish = deferred<CatalogHandlerResult>();
+      const { fixture, started } = stageDispatch(finish.promise, { request });
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + SIX_GIB_HASH_MS);
+      await vi.advanceTimersByTimeAsync(SIX_GIB_HASH_MS);
+      finish.resolve(RESULT);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "completed" } });
+    });
+    it("still ends a hung read when the run's authority expires", async () => {
+      vi.useFakeTimers();
+      const { fixture, started } = stageDispatch(new Promise(() => undefined), {
+        authorityMs: 700_000,
+        request,
+      });
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + 700_000);
+      await vi.advanceTimersByTimeAsync(700_000);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "timeout" } });
+    });
+  });
+  it("names the budget that fired on a deadline-exceeded line", async () => {
+    vi.useFakeTimers();
+    const started = deferred<undefined>();
+    const fixture = fixtureWith((f) => ({
+      ...f.input,
+      handlerBindings: [
+        {
+          ...f.handler,
+          execute: (): Promise<CatalogHandlerResult> => {
+            started.resolve(undefined);
+            return new Promise(() => undefined);
+          },
+        },
+      ],
+    }));
+    const pending = fixture.binder.dispatch(fixture.request, ID);
+    await started.promise;
+    fixture.now.mockReturnValue(6000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await pending;
+    expect(fixture.primary.events.at(-1)?.extra).toMatchObject({
+      status: "timeout",
+      reason: "deadline-exceeded",
+      budgetMs: 5000,
+    });
   });
   it.each([false, true])(
     "settles timeout and late completion exactly once (effect started=%s)",
@@ -542,12 +769,19 @@ describe("catalog invocation settlement: which cause fired decides (#4355)", () 
       timeouts.push(controller);
       return controller.signal;
     });
-    const deadline = chatTurnDeadlineSignal(1);
-    const result = await stopped(() => {
-      timeouts[0]?.abort(new DOMException("The operation timed out", "TimeoutError"));
-    });
-    expect(deadline.aborted).toBe(true);
-    expect(result).toEqual({ status: "timeout", late: false });
+    try {
+      const deadline = chatTurnDeadlineSignal(1);
+      const result = await stopped((controller) => {
+        timeouts[0]?.abort(new DOMException("The operation timed out", "TimeoutError"));
+        // The call's own signal is the stop controller's: the turn's deadline stops it with the
+        // deadline's reason, which `isChatTurnDeadlineReason` recognises by identity.
+        controller.abort(deadline.reason);
+      });
+      expect(deadline.aborted).toBe(true);
+      expect(result).toEqual({ status: "timeout", late: false });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("settles cancelled for a TimeoutError that is not the turn's deadline", async () => {

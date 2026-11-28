@@ -17,6 +17,8 @@ import {
   type CodingWorkbenchMutationCommand,
 } from "./coding-workbench-runtime-mutations";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 const apiMocks = vi.hoisted(() => ({
   startCodingWorkbenchRuntime: vi.fn(),
   decideCodingWorkbenchRuntimeApproval: vi.fn(),
@@ -33,6 +35,13 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("./coding-workbench-runtime-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./coding-workbench-runtime-api")>()),
   ...apiMocks,
+}));
+
+const workspaceMocks = vi.hoisted(() => ({ getActiveTaskWorkspace: vi.fn() }));
+
+vi.mock("./task-workspace-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./task-workspace-api")>()),
+  ...workspaceMocks,
 }));
 
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
@@ -116,7 +125,72 @@ describe("mutationResultMatchesCurrentTruth", () => {
   });
 });
 
+describe("createStartMutation without an active server workspace", () => {
+  const options = { projectMemoryEnabled: true, expectedWorkspaceRoot: EXPECTED_ROOT };
+
+  beforeEach(() => {
+    workspaceMocks.getActiveTaskWorkspace.mockReset();
+  });
+
+  it("sends no start and names the recoverable selection refusal when the server has none", async () => {
+    workspaceMocks.getActiveTaskWorkspace.mockResolvedValue(null);
+    const mutation = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await expect(mutation.run(SIGNAL)).rejects.toMatchObject({
+      code: "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH",
+      status: 409,
+    });
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one start once the server reports an active workspace", async () => {
+    workspaceMocks.getActiveTaskWorkspace.mockResolvedValueOnce(null).mockResolvedValue({});
+    const first = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await expect(first.run(SIGNAL)).rejects.toMatchObject({ status: 409 });
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+    const second = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await second.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the decision to the server when the pointer cannot be read", async () => {
+    workspaceMocks.getActiveTaskWorkspace.mockRejectedValue(new Error("offline"));
+    const mutation = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await mutation.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createStartMutation", () => {
+  beforeEach(() => {
+    workspaceMocks.getActiveTaskWorkspace.mockReset();
+    workspaceMocks.getActiveTaskWorkspace.mockResolvedValue({});
+  });
+
+  // The run starts in the repository the person sees or not at all: the body states the displayed
+  // root, which the server compares with its active workspace and refuses on a difference.
+  it("states the displayed repository on the start and on the retry request", async () => {
+    const start = createStartMutation("task", stateWithRun(null, { canStart: true }), {
+      projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "C:\\work\\repository-b",
+    });
+    await start.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedWorkspace: { root: "C:\\work\\repository-b" } }),
+      SIGNAL,
+    );
+    const retry = createRetryMutation(
+      "task",
+      stateWithRun(snapshot(), { canRetry: true }),
+      "C:\\work\\repository-b",
+    );
+    await retry.run(SIGNAL);
+    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({ expectedWorkspace: { root: "C:\\work\\repository-b" } }),
+      SIGNAL,
+    );
+  });
+
   it("preserves the accepted issue intent and digest through the production start client", async () => {
     const issue = {
       issueRef: "https://github.com/owner/repo/issues/42",
@@ -125,7 +199,7 @@ describe("createStartMutation", () => {
     const mutation = createStartMutation(
       "implement the issue",
       stateWithRun(null, { canStart: true }),
-      { issue, projectMemoryEnabled: true },
+      { issue, projectMemoryEnabled: true, expectedWorkspaceRoot: EXPECTED_ROOT },
     );
     await mutation.run(SIGNAL);
     expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
@@ -136,7 +210,10 @@ describe("createStartMutation", () => {
 
   it("refuses to start while the runtime readiness gate is closed", () => {
     expect(() =>
-      createStartMutation("task", stateWithRun(null), { projectMemoryEnabled: true }),
+      createStartMutation("task", stateWithRun(null), {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
     ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
   });
 
@@ -144,6 +221,7 @@ describe("createStartMutation", () => {
     const state = stateWithRun(null, { canStart: true });
     const mutation = createStartMutation("add a regression test", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     });
     expect(mutation.mayInstallNewRun).toBe(true);
     expect(mutation.expected).toBeUndefined();
@@ -153,6 +231,7 @@ describe("createStartMutation", () => {
         requestId: mutation.requestId,
         taskIntent: "add a regression test",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "managed-gateway",
         projectMemory: { enabled: true },
       },
@@ -164,6 +243,7 @@ describe("createStartMutation", () => {
     const state = stateWithRun(null, { canStart: true });
     const mutation = createStartMutation("inspect the repository", state, {
       projectMemoryEnabled: false,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     });
 
     await mutation.run(SIGNAL);
@@ -173,6 +253,7 @@ describe("createStartMutation", () => {
         requestId: mutation.requestId,
         taskIntent: "inspect the repository",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "managed-gateway",
         projectMemory: { enabled: false },
       },
@@ -188,6 +269,7 @@ describe("createStartMutation", () => {
       stateWithRun(null, { canStart: true }),
       {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
         fork: { taskId: "task-source", beforeMessageId: "message-3" },
       },
     );
@@ -199,6 +281,7 @@ describe("createStartMutation", () => {
         requestId: mutation.requestId,
         taskIntent: "try another approach",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "managed-gateway",
         projectMemory: { enabled: true },
         fork: { taskId: "task-source", beforeMessageId: "message-3" },
@@ -211,6 +294,7 @@ describe("createStartMutation", () => {
     expect(() =>
       createStartMutation("task", stateWithRun(null, { canStart: true }), {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
         conversationId: "task-source",
         fork: { taskId: "task-source" },
       }),
@@ -226,6 +310,7 @@ describe("createStartMutation", () => {
     });
     const mutation = createStartMutation("inspect the repository", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     });
 
     await mutation.run(SIGNAL);
@@ -235,6 +320,7 @@ describe("createStartMutation", () => {
         requestId: mutation.requestId,
         taskIntent: "inspect the repository",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "codex-subscription",
         projectMemory: { enabled: true },
       },
@@ -248,10 +334,12 @@ describe("createStartMutation", () => {
 
     await createStartMutation("implement the ticket", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       jiraPodId,
     }).run(SIGNAL);
     await createStartMutation("implement the ticket", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     }).run(SIGNAL);
 
     const [picked, bare] = apiMocks.startCodingWorkbenchRuntime.mock.calls.slice(-2);
@@ -264,14 +352,17 @@ describe("createStartMutation", () => {
 
     await createStartMutation("implement the ticket", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       mcpServers: ["alpha", "wiki"],
     }).run(SIGNAL);
     await createStartMutation("implement the ticket", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       mcpServers: [],
     }).run(SIGNAL);
     await createStartMutation("implement the ticket", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     }).run(SIGNAL);
 
     const [narrowed, none, all] = apiMocks.startCodingWorkbenchRuntime.mock.calls.slice(-3);
@@ -287,10 +378,12 @@ describe("createStartMutation", () => {
       const state = stateWithRun(null, { canStart: true, requestedMode });
       await createStartMutation("inspect Jira", state, {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
         jiraPodId,
       }).run(SIGNAL);
       await createStartMutation("inspect Jira", state, {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
         jiraPodId,
         connectorScopes: ["issue-tracker.admin"],
       }).run(SIGNAL);
@@ -313,6 +406,7 @@ describe("createStartMutation", () => {
     });
     const mutation = createStartMutation("inspect the repository", state, {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     });
 
     await mutation.run(SIGNAL);
@@ -391,12 +485,16 @@ describe("createRunBoundMutation", () => {
 describe("createRetryMutation", () => {
   it("requires acknowledged recovery before retrying", () => {
     expect(() =>
-      createRetryMutation("retry it", stateWithRun(snapshot(), { canRetry: false })),
+      createRetryMutation("retry it", stateWithRun(snapshot(), { canRetry: false }), EXPECTED_ROOT),
     ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
   });
 
   it("retries against the failed run with a fresh request id", async () => {
-    const mutation = createRetryMutation("retry it", stateWithRun(snapshot(), { canRetry: true }));
+    const mutation = createRetryMutation(
+      "retry it",
+      stateWithRun(snapshot(), { canRetry: true }),
+      EXPECTED_ROOT,
+    );
     expect(mutation.mayInstallNewRun).toBe(true);
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
     await mutation.run(SIGNAL);
@@ -406,6 +504,7 @@ describe("createRetryMutation", () => {
         requestId: mutation.requestId,
         taskIntent: "retry it",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "managed-gateway",
       },
       SIGNAL,
@@ -419,7 +518,7 @@ describe("createRetryMutation", () => {
       selectedModelId: "stale-model",
       reasoningEffort: "high",
     });
-    const mutation = createRetryMutation("retry it", state);
+    const mutation = createRetryMutation("retry it", state, EXPECTED_ROOT);
 
     await mutation.run(SIGNAL);
 
@@ -429,6 +528,7 @@ describe("createRetryMutation", () => {
         requestId: mutation.requestId,
         taskIntent: "retry it",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "codex-subscription",
       },
       SIGNAL,
@@ -535,7 +635,7 @@ describe("primary agent on the mutations (#3897)", () => {
       const started = createStartMutation(
         "outline the change",
         stateWithRun(null, { canStart: true, ...offered, agent }),
-        { projectMemoryEnabled: true },
+        { projectMemoryEnabled: true, expectedWorkspaceRoot: EXPECTED_ROOT },
       );
       await started.run(SIGNAL);
       expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
@@ -545,6 +645,7 @@ describe("primary agent on the mutations (#3897)", () => {
       const retried = createRetryMutation(
         "outline the change",
         stateWithRun(snapshot(), { canRetry: true, ...offered, agent }),
+        EXPECTED_ROOT,
       );
       await retried.run(SIGNAL);
       expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
@@ -559,11 +660,14 @@ describe("primary agent on the mutations (#3897)", () => {
     const stale = { selectableAgents: ["build"], agent: "plan" } as const;
     await createStartMutation("task", stateWithRun(null, { canStart: true, ...stale }), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     }).run(SIGNAL);
     expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
-    await createRetryMutation("task", stateWithRun(snapshot(), { canRetry: true, ...stale })).run(
-      SIGNAL,
-    );
+    await createRetryMutation(
+      "task",
+      stateWithRun(snapshot(), { canRetry: true, ...stale }),
+      EXPECTED_ROOT,
+    ).run(SIGNAL);
     expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).not.toHaveProperty("agent");
     await createFollowUpMutation("task", stateWithRun(snapshot({ state: "paused" }), stale)).run(
       SIGNAL,
@@ -578,14 +682,17 @@ describe("primary agent on the mutations (#3897)", () => {
     const custom = { ...offered, agent: "reviewer" } as const;
     await createStartMutation("task", stateWithRun(null, { canStart: true, ...custom }), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     }).run(SIGNAL);
     expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).toHaveProperty(
       "agent",
       "build",
     );
-    await createRetryMutation("task", stateWithRun(snapshot(), { canRetry: true, ...custom })).run(
-      SIGNAL,
-    );
+    await createRetryMutation(
+      "task",
+      stateWithRun(snapshot(), { canRetry: true, ...custom }),
+      EXPECTED_ROOT,
+    ).run(SIGNAL);
     expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).toHaveProperty(
       "agent",
       "build",
@@ -603,6 +710,7 @@ describe("primary agent on the mutations (#3897)", () => {
     const codex = { ...offered, agent: "plan", runtimePreference: "codex-subscription" } as const;
     await createStartMutation("task", stateWithRun(null, { canStart: true, ...codex }), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     }).run(SIGNAL);
     expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
   });
@@ -776,6 +884,7 @@ describe("references and a slash command on the start mutation", () => {
   it("sends the first prompt's references and the command beside its text", async () => {
     const mutation = createStartMutation("the last commit", stateWithRun(null, ready), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
       command: { name: "review" },
     });
@@ -787,6 +896,7 @@ describe("references and a slash command on the start mutation", () => {
         requestId: mutation.requestId,
         taskIntent: "the last commit",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         runtimePreference: "managed-gateway",
         projectMemory: { enabled: true },
         references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
@@ -799,6 +909,7 @@ describe("references and a slash command on the start mutation", () => {
   it("starts a bare command with an empty text", async () => {
     const mutation = createStartMutation("", stateWithRun(null, ready), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       command: { name: "init" },
     });
     await mutation.run(SIGNAL);
@@ -810,10 +921,12 @@ describe("references and a slash command on the start mutation", () => {
   it("keeps the ordinary start body exactly as it was, whatever empty inputs ride along", async () => {
     const plain = createStartMutation("fix it", stateWithRun(null, ready), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
     });
     await plain.run(SIGNAL);
     const empty = createStartMutation("fix it", stateWithRun(null, ready), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       references: [],
       command: undefined,
     });
@@ -833,6 +946,7 @@ describe("references and a slash command on the start mutation", () => {
     };
     const withFiles = createStartMutation("implement it", stateWithRun(null, ready), {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       issue,
       references: [{ path: "src/app.ts" }],
     });
@@ -845,6 +959,7 @@ describe("references and a slash command on the start mutation", () => {
     expect(() =>
       createStartMutation("implement it", stateWithRun(null, ready), {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
         issue,
         command: { name: "review" },
       }),
@@ -856,6 +971,7 @@ describe("references and a slash command on the start mutation", () => {
     expect(() =>
       createStartMutation("", stateWithRun(null), {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
         command: { name: "init" },
       }),
     ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
@@ -864,6 +980,7 @@ describe("references and a slash command on the start mutation", () => {
   it("gives each mutation its own request id and keeps it when the same mutation runs again", async () => {
     const options = {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       references: [{ path: "a.ts" }],
       command: { name: "review" },
     };

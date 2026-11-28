@@ -129,6 +129,14 @@ No caller may widen authority by passing a higher requested mode than the enviro
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.
 
+**Amendment, 2026-11-28 (live run posture in readiness, U-37, #4491):** while a live run holds its
+minted Authority Envelope, the readiness read confirms that run's own ceiling-clamped posture, in
+either direction, and marks the answer `liveRunAnchored: true`. A reloaded window that selects a
+narrower mode than its live run is thus told what the run actually holds. The browser contract check
+accepts an effective mode wider than the request only for an answer so marked, and never wider than
+the deployment ceiling; every other readiness answer keeps the minimum of request and ceiling. A
+failed readiness read is re-read with bounded backoff instead of staying on screen.
+
 ### D3 — Every governed coding run carries an Authority Envelope
 
 The Authority Envelope is the single shared contract for a governed coding run. It must include:
@@ -186,7 +194,9 @@ executed result. Actual passing checks remain usable alongside skipped checks. T
 for the task, not a global quality run. A model turn ending normally does not establish that proof. Up to two
 continuations use the existing task dispatcher and unchanged authority to inspect results, repair
 the diagnosed cause, and retest. A refused continuation or exhausted continuation budget settles
-`verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
+`verification-not-evidenced`, except for a run that ran no check at all, which keeps the outcome its
+turn reported and records the gap on the Activity Log (owner decision 2026-11-28, ADR-0137);
+ordinary read-only tasks need no invented verification work.
 A follow-up of a task whose last change still has no passing check inherits that verification debt
 (#4492): a check it runs must pass, or it settles `verification-not-evidenced` too, while a
 follow-up that runs no check (a question, a summary) settles normally and hands the debt on to the
@@ -288,6 +298,43 @@ contract. Request kinds are closed and action-class aligned, including:
 A permission request carries only ids, enums, expiry, requested connector scopes, and redacted safe
 labels. It never carries raw command logs, file contents, prompts, or credentials.
 
+What a person approves is shown on the separate, authenticated approval-review channel, never in the
+permission request. A governed verification ask (`test`, `typecheck`, `lint`, `build`) names only its
+verifier class, so the server resolves the command lines the runner would plan for it
+(`VerificationRunnerManager.previewCommands`, a strictly side-effect-free read: no trust decision,
+no isolation probe, no spawn, no evidence, no log line) and carries them as the review's
+`verificationPreview`. The lines are what a person reads, so they pass the credential floor
+(`redactContent` with `preserve`) and then the strict `redact` for flag shapes such as `--password=`;
+at most 8 lines of 1,024 characters, a cut line ending in an ellipsis. A targeted test and an
+unresolved monorepo package name no command yet and say so in a plain sentence; a failed lookup
+falls back to the class label with a closed reason (`workspace-unresolved`, `no-runnable-step`,
+`preview-failed`) logged body-free on `coding-runtime.approval`, and never blocks the decision. The
+preview never enters a runtime event, snapshot, evidence or the Activity Log. Known gap: the floor
+does not mask a Maven `-Dpassword=` system property; the preview therefore also masks
+credential-named options itself (`--name=v`, `--name v`, `-Dname=v`, `NAME=v` prefixes, quoted
+whole arguments, `-u user:pass`, URL userinfo) in `commandLineRedaction.ts`, a linear scan local to
+this one line. Names are split on camelCase and non-alphanumeric runs: a credential word as the last
+segment, or a strong secret word anywhere unless a non-secret suffix such as `file` or `id` ends
+the name, marks the value for masking; `Bearer`/`Basic` scheme values and statement separators are
+handled so a separator after a masked value stays visible.
+
+The shown plan is bound to the approval, not to the child's claim. The ask carries the digest of
+the shown command lines (command, arguments, folder, script body) and marks that it showed any;
+`observePermission` stores both on the pending record, activation moves them to the approved-action
+record, and the one consumption that spends that record hands the digest to the call that spends
+it (`takeApprovedPlan`). A child that asks under another `actionId` than the call runs with
+therefore spends nothing and receives no digest. Consumption fails closed: an approval that showed
+commands but holds no digest, or a full hand-over table, is not spent. The run then plans again
+exactly as the preview did (one planning function, the ask's package folder; a `targetPath` exists
+only for `targeted-test`, which shows and binds nothing) and refuses a differing plan with the closed
+reason `verification-plan-changed`. The approval proof's own digest does not cover the package
+folder; the plan digest does, through each step's folder, command and script body. A runner that
+cannot plan again while the card showed commands fails closed with the same reason, so a call never
+runs unbound. Accepted residual: between that re-plan and the runner's own
+plan the workspace could change again (a TOCTOU window); runs are serial and the runner plans from
+the same files immediately after, so the window is accepted. Fields are body-free in the Activity
+Log.
+
 The V2 governed ask a generated OpenCode plugin sends (`action: "permission-request"`) also names the
 tool call it asks for (`actionId`, the call's own `sessionID:id` identity, bound to the ask id). It is
 body-free. The approval registry validates the ask fail-closed with exact keys, so an ask that names
@@ -338,6 +385,20 @@ reason `denied` at info level. Before this, nothing answered a denied proposal: 
 denial had released the wait by its abort, and with the run going on the call held until the
 approval ceiling (1.1.10 e2e: a denied commit left its call pending and the run silent).
 
+The lifetime of an ask is server-owned: the child's `permissionRequest.expiresAt` must be a valid
+future instant but never sets the lifetime, in either direction. A shorter value is extended to the
+human-decision wait and a longer one is not honored, so the card deadline, the challenge expiry and
+the minted approval TTL are one instant. The same wait is the lifetime of every governed Git
+proposal (stage, commit, draft delivery) and the default of both approval stores (W-6: a 5-minute
+ask lost a run's commit after the person stepped away). `coding-runtime.approval.waiting` records
+`expiresInMs`. A verification's proof for a commit proposal is bound to its candidate by content
+(head, base, staged-tree digest, repository digest and the run context), not by the clock (V-2: a
+slow local model's turn took 6 minutes and a 5-minute wall-clock bound ended a healthy run as
+`verification-stale`). The same facts in the same run are as true after 6 or 59 minutes. Only a
+backstop remains: a proof older than the longest run (`MAX_RUNTIME_MAX_DURATION_MINUTES`, 480) is
+`verification-stale`. A changed candidate is `candidate-drift` and a different run context is
+`verification-stale`; both result lines carry `proofAgeMs`.
+
 The run's own wait on an approval ends at the same instant as the ask's
 (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval nobody decided in
 time is retired, the run returns to `running`, or to the next queued ask, under a new revision, so
@@ -345,10 +406,17 @@ the Workbench stops offering a card nothing can decide; an ask that arrives afte
 queued behind the expired one: the oldest live queued ask takes the card first and the late ask
 queues behind it, and only when no live queued ask waits does the late ask take the expired one's
 place. A queued ask whose wait ran out before its turn is retired as well instead of stopping the
-run. Each retirement writes `coding-runtime.approval.retired`, whose `replaced` is true only when the
-late ask took the expired one's place (1.1.9 lab: the expired card stayed on screen, approving it
-failed as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is
-decided, retired, or whose run settles takes its expiry timer with it.
+run. Each retirement writes `coding-runtime.approval.retired` with `reason=expired`, whose `replaced`
+is true only when the late ask took the expired one's place (1.1.9 lab: the expired card stayed on
+screen, approving it failed as `invalid-intent`, and the model's next ask expired unseen behind it).
+An approval that is decided, retired, or whose run settles takes its expiry timer with it.
+
+The per-run queue of waiting asks is bounded at 64 (`MAX_QUEUED_APPROVALS_PER_RUN`) to protect
+memory only. The 65th and every later ask is denied through the permission port, like any rejected
+step, and written as `coding-runtime.approval.retired` with `reason=queue-full`; the run keeps going
+and the 64 queued asks are served in order (owner decision 2026-11-24, work-ending limits: a bound
+never ends healthy work). Only a denial the runtime cannot settle fails the run closed, as every
+unsettled decision does.
 
 A mapped research fetch (`keiko_research_fetch`, #2387) asks through the research grant, not
 through an approval proof. Below Full access a deployment opens research only through the

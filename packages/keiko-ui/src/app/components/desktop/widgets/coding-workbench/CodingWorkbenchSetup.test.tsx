@@ -153,6 +153,8 @@ function liveState(
 ): CodingWorkbenchRuntimeState {
   return {
     ...createInitialCodingWorkbenchRuntimeState(),
+    // The window's run has been read and there is none: an automatic activation waits for that (U-3).
+    run: { status: "ready", value: null, error: null },
     runtime: {
       status: "ready",
       value: {
@@ -177,6 +179,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     setSelectedModel: vi.fn(),
     adoptModel: vi.fn(),
     setReasoningEffort: vi.fn(),
+    dismissRefusal: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),

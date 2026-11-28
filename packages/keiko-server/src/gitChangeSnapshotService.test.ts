@@ -133,6 +133,39 @@ describe("immutable Git change snapshot production", () => {
     service.close();
   });
 
+  it("logs identical base and head revisions as an ordinary state, not a warning with frames", async () => {
+    const workspace = await repository();
+    const events: ServerLogEvent[] = [];
+    const service = createGitChangeSnapshotService({
+      logSink: { write: (event) => events.push(event) },
+    });
+
+    const result = await service.capture({ ...inputFor(workspace), headRef: "main" });
+    const line = events.find((event) => event.op === "git.snapshot.capture");
+
+    expect(result.snapshot).toMatchObject({
+      outcome: "unavailable",
+      reason: "identical-revisions",
+    });
+    expect(line?.level).not.toBe("warn");
+    expect(line?.errorKind).toBeUndefined();
+    expect(line?.extra).toMatchObject({ outcome: "unavailable", reason: "identical-revisions" });
+    expect(line?.extra?.frames).toBeUndefined();
+    expect(line?.extra?.errorClass).toBeUndefined();
+    // A real unavailable reason stays a warning with its error kind.
+    const behind = await service.capture({
+      ...inputFor(workspace),
+      headRef: "main",
+      baseRef: "feature",
+    });
+    expect(behind.snapshot).toMatchObject({ reason: "head-behind-base" });
+    expect(events.filter((event) => event.op === "git.snapshot.capture").at(-1)).toMatchObject({
+      level: "warn",
+      errorKind: "validation-failed",
+    });
+    service.close();
+  });
+
   it("logs no git failure for the bounded binary-check reads of files larger than the prefix", async () => {
     // The binary check reads only the first 8,000 bytes of each changed blob, on purpose. A dev
     // Activity Log showed 359 `git.process.failed` lines in 10 s for exactly these reads, although

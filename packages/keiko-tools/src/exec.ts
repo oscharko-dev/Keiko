@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 import { Readable, Writable } from "node:stream";
 import {
   redact,
+  redactCredentialShapes,
   environmentVariableValue,
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
@@ -24,6 +25,7 @@ import type {
   CommandTerminationEvidence,
   CommandTerminationReason,
   WindowsStepDrive,
+  SandboxBackend,
   WindowsStepSupervisor,
   WindowsTreeKillDisposition,
   WindowsTreeKillResult,
@@ -56,6 +58,13 @@ import {
   isCommandAllowed,
 } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
+import {
+  feedPemScan,
+  newPemScan,
+  withholdOpenKeyHead,
+  withholdOpenKeyTail,
+  type PemScan,
+} from "./pem-boundary-scan.js";
 import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-shell.js";
 import {
   windowsStepFrames,
@@ -814,6 +823,247 @@ interface Buffers {
   // fire after terminate(). Any positive omittedByteCount derived from it is a sufficient
   // truncation signal; the exact byte total is not claimed.
   attempted: number;
+  // Present only under `outputOverflow: "retain-head-tail"`: the bounded windows that replace the
+  // flood-guard sinks above, so output volume never ends a healthy command.
+  window?: { readonly out: StreamWindow; readonly err: StreamWindow };
+}
+
+// One stream's retained output under "retain-head-tail": its first `budget` bytes, its last
+// `budget` bytes, and a count of what lay between. Memory is bounded by 2 * budget per stream.
+export interface StreamWindow {
+  readonly budget: number;
+  readonly head: Buffer[];
+  headBytes: number;
+  readonly tail: Buffer[];
+  // Index of the first live chunk of `tail`: chunks before it were dropped and are compacted away in
+  // bulk, so dropping the oldest chunk is O(1) instead of an O(n) Array.shift per chunk.
+  tailFirst: number;
+  tailBytes: number;
+  dropped: number;
+  // The last byte dropped from the tail's front: a newline there means the tail starts on a line.
+  lastDropped: number | undefined;
+  // Whether a private-key block is open across the head, the dropped middle and the tail start.
+  readonly keyScan: PemScan;
+}
+
+export function newStreamWindow(budget: number): StreamWindow {
+  return {
+    budget,
+    head: [],
+    headBytes: 0,
+    tail: [],
+    tailFirst: 0,
+    tailBytes: 0,
+    dropped: 0,
+    lastDropped: undefined,
+    keyScan: newPemScan(),
+  };
+}
+
+// Each stream keeps a quarter of `maxOutputBytes` as head and a quarter as tail, so the two
+// streams together never retain more than `maxOutputBytes`.
+function newWindows(maxOutputBytes: number): { out: StreamWindow; err: StreamWindow } {
+  const budget = Math.max(1, Math.floor(maxOutputBytes / 4));
+  return { out: newStreamWindow(budget), err: newStreamWindow(budget) };
+}
+
+export function appendWindow(window: StreamWindow, chunk: Buffer): void {
+  let rest = chunk;
+  if (window.headBytes < window.budget) {
+    const take = Math.min(window.budget - window.headBytes, rest.length);
+    window.head.push(rest.subarray(0, take));
+    feedPemScan(window.keyScan, rest.subarray(0, take));
+    window.headBytes += take;
+    rest = rest.subarray(take);
+  }
+  if (rest.length === 0) return;
+  window.tail.push(rest);
+  window.tailBytes += rest.length;
+  let excess = window.tailBytes - window.budget;
+  while (excess > 0) {
+    const first = window.tail[window.tailFirst];
+    if (first === undefined) break;
+    const cut = Math.min(excess, first.length);
+    if (cut === first.length) {
+      // Release the slot before leaving it: a consumed chunk must not stay referenced until the
+      // next compaction, or up to TAIL_COMPACT_MIN dead chunks pin memory past the window bound.
+      window.tail[window.tailFirst] = EMPTY_BUFFER;
+      window.tailFirst += 1;
+    } else {
+      window.tail[window.tailFirst] = first.subarray(cut);
+    }
+    window.lastDropped = first[cut - 1];
+    feedPemScan(window.keyScan, first.subarray(0, cut));
+    window.tailBytes -= cut;
+    window.dropped += cut;
+    excess -= cut;
+  }
+  compactTail(window);
+}
+
+// Drops the consumed prefix of `tail` once it is both large and at least half the array, so the
+// amortized cost of a dropped chunk stays constant and the array never holds more than twice the
+// live chunks (plus the compaction threshold).
+const TAIL_COMPACT_MIN = 1_024;
+const EMPTY_BUFFER = Buffer.alloc(0);
+
+function compactTail(window: StreamWindow): void {
+  if (window.tailFirst < TAIL_COMPACT_MIN || window.tailFirst * 2 < window.tail.length) return;
+  window.tail.splice(0, window.tailFirst);
+  window.tailFirst = 0;
+}
+
+// A window that dropped its middle is cut on LINE boundaries: the head ends after its last newline and
+// the tail starts after its first one. A single-line credential therefore lies wholly in the kept text
+// or wholly in the dropped text. A MULTI-line secret (a configured env value such as a key) can still
+// straddle the cut, leaving a prefix at the head's end or a suffix at the tail's start that the exact
+// match redaction cannot recognize (ADR-0006 D5): `dropStraddlingSecret*` removes those lines (fail
+// closed). A cut side with no newline is dropped whole.
+function windowParts(
+  window: StreamWindow,
+  secrets: readonly string[],
+): { readonly head: Buffer; readonly tail: Buffer } {
+  const head = Buffer.concat(window.head);
+  const tail = Buffer.concat(window.tail.slice(window.tailFirst));
+  if (window.dropped === 0) return { head, tail };
+  const headEnd = head.lastIndexOf(0x0a) + 1;
+  // A tail whose preceding dropped byte is a newline already starts on a line.
+  const tailStart = window.lastDropped === 0x0a ? 0 : tail.indexOf(0x0a) + 1;
+  const keepsTail = window.lastDropped === 0x0a || tailStart > 0;
+  const multiLine = secrets
+    .filter((secret) => secret.includes("\n"))
+    .map((secret) => secret.split("\n").map(stripCarriageReturn));
+  const keptHead = withholdOpenKeyHead(head.subarray(0, headEnd));
+  const keptTail = keepsTail ? withheldTail(window, tail, tailStart) : Buffer.alloc(0);
+  if (multiLine.length === 0) return { head: keptHead, tail: keptTail };
+  const needles = secretLineNeedles(multiLine);
+  return {
+    head: dropSecretLines(dropStraddlingSecretHead(keptHead, multiLine), needles, false),
+    tail: dropSecretLines(dropStraddlingSecretTail(keptTail, multiLine), needles, true),
+  };
+}
+
+// An UNCONFIGURED private key whose BEGIN line was dropped (or lies in the head) must not leave its
+// body at the start of the tail: the redactor needs the boundary it can no longer see. The scan
+// state at the tail's first line decides; the body is withheld up to its END line, or whole.
+function withheldTail(window: StreamWindow, tail: Buffer, tailStart: number): Buffer {
+  const scan: PemScan = { ...window.keyScan };
+  feedPemScan(scan, tail.subarray(0, tailStart));
+  const kept = tail.subarray(tailStart);
+  return scan.open ? withholdOpenKeyTail(kept) : kept;
+}
+
+const MIN_SECRET_LINE_CHARS = 8;
+// The shortest secret line still matched (the short last line of a PEM body, `Zg==`), and the
+// shortest overlap of a cut line's end with the start of a secret line that counts as a fragment.
+const MIN_NEEDLE_CHARS = 2;
+const MIN_FRAGMENT_OVERLAP_CHARS = 4;
+
+// Every non-trivial line of a multi-line secret, trimmed: a retained line that carries one is part
+// of the secret however the stream was cut (it may end inside the secret, or print it indented or
+// behind a prefix), so it never leaves the retained window.
+function secretLineNeedles(secrets: readonly (readonly string[])[]): readonly string[] {
+  return secrets.flatMap((lines) =>
+    lines.map((line) => line.trim()).filter((line) => line.length >= MIN_NEEDLE_CHARS),
+  );
+}
+
+// A long needle is carried by any line that contains it. A short one would match innocent text
+// anywhere, so it must be the whole line or the end of a line after a non-alphanumeric prefix.
+function lineCarriesNeedle(text: string, needle: string): boolean {
+  if (needle.length >= MIN_SECRET_LINE_CHARS) return text.includes(needle);
+  if (text === needle) return true;
+  if (!text.endsWith(needle)) return false;
+  return !/[\p{L}\p{N}]/u.test(text.charAt(text.length - needle.length - 1));
+}
+
+// The line was cut mid-print: its end may be the start of a secret line, behind any decoration.
+function endsWithNeedleStart(text: string, needle: string): boolean {
+  for (
+    let size = Math.min(needle.length, text.length);
+    size >= MIN_FRAGMENT_OVERLAP_CHARS;
+    size -= 1
+  ) {
+    if (text.endsWith(needle.slice(0, size))) return true;
+  }
+  return text.length >= MIN_SECRET_LINE_CHARS && needle.includes(text);
+}
+
+// `endsMidLine`: the window ends without a newline (a stream killed mid-print), so its last line may
+// be only the start of a secret line; it is dropped when its end is the start of any secret line.
+function dropSecretLines(window: Buffer, needles: readonly string[], endsMidLine: boolean): Buffer {
+  if (needles.length === 0 || window.length === 0) return window;
+  const lines = window.toString("utf8").split("\n");
+  const lastIndex = lines.length - 1;
+  const kept = lines.filter((line, index) => {
+    const text = line.trim();
+    if (needles.some((needle) => lineCarriesNeedle(text, needle))) return false;
+    const fragment = endsMidLine && index === lastIndex;
+    return !(fragment && needles.some((needle) => endsWithNeedleStart(text, needle)));
+  });
+  return kept.length === lines.length ? window : Buffer.from(kept.join("\n"), "utf8");
+}
+
+function stripCarriageReturn(line: string): string {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
+
+// The head ends with the first `m` lines of a secret (its first line as a line suffix): drop from there.
+function dropStraddlingSecretHead(head: Buffer, secrets: readonly (readonly string[])[]): Buffer {
+  const lines = head.toString("utf8").split("\n").map(stripCarriageReturn);
+  lines.pop(); // the empty remainder after the final newline
+  let dropFrom = lines.length;
+  for (const secret of secrets) {
+    for (let m = Math.min(secret.length - 1, lines.length); m >= 1; m -= 1) {
+      const start = lines.length - m;
+      if (start >= dropFrom) break;
+      const matches = lines.slice(start).every((line, index) => {
+        const expected = secret[index] ?? "";
+        return index === 0 ? line.endsWith(expected) : line === expected;
+      });
+      if (matches) {
+        dropFrom = start;
+        break;
+      }
+    }
+  }
+  if (dropFrom === lines.length) return head;
+  return Buffer.from(
+    lines
+      .slice(0, dropFrom)
+      .map((line) => `${line}\n`)
+      .join(""),
+    "utf8",
+  );
+}
+
+// The tail starts with the last `m` lines of a secret (its last line as a line prefix): drop them.
+function dropStraddlingSecretTail(tail: Buffer, secrets: readonly (readonly string[])[]): Buffer {
+  const lines = tail.toString("utf8").split("\n");
+  let dropTo = 0;
+  for (const secret of secrets) {
+    for (let m = Math.min(secret.length - 1, lines.length); m > dropTo; m -= 1) {
+      const matches = lines.slice(0, m).every((raw, index) => {
+        const line = stripCarriageReturn(raw);
+        const expected = secret[secret.length - m + index] ?? "";
+        return index === m - 1 ? line.startsWith(expected) : line === expected;
+      });
+      if (matches) {
+        dropTo = m;
+        break;
+      }
+    }
+  }
+  if (dropTo === 0) return tail;
+  return Buffer.from(lines.slice(dropTo).join("\n"), "utf8");
+}
+
+function windowText(window: StreamWindow, secrets: readonly string[]): Buffer {
+  const { head, tail } = windowParts(window, secrets);
+  if (window.dropped === 0) return Buffer.concat([head, tail]);
+  const omitted = window.headBytes + window.tailBytes + window.dropped - head.length - tail.length;
+  const marker = Buffer.from(`[... ${String(omitted)} bytes of output omitted ...]\n`, "utf8");
+  return Buffer.concat([head, marker, tail]);
 }
 
 const TRUNCATED_OUTPUT_MARKER = "[TRUNCATED OUTPUT REDACTED]";
@@ -1042,6 +1292,30 @@ function resolveSpawnTarget(
         input.command,
       );
   }
+}
+
+/**
+ * The sandbox backend an execution-root step would run under with these dependencies, by the same
+ * selection `runCommand` makes. A caller that hands the step host-only facts (the host's Node.js
+ * path, the package manager's path) needs it to withhold them from a container, where those paths
+ * do not exist.
+ */
+export function executionRootBackendFor(
+  deps: Pick<
+    RunCommandDeps,
+    "platform" | "sandboxAvailability" | "processEnv" | "windowsStepSupervisor"
+  >,
+): SandboxBackend {
+  const platform = deps.platform ?? process.platform;
+  const probed = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
+  return selectEnforcingBackend(
+    platform,
+    {
+      ...probed,
+      windowsAppContainer: deps.windowsStepSupervisor !== undefined,
+    },
+    "execution-root",
+  );
 }
 
 function resolveIsolatedSpawnTarget(
@@ -1292,6 +1566,32 @@ function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: numb
   return true; // signals the caller to kill the child (flood protection)
 }
 
+// The retain-head-tail counterpart of appendCapped: every byte is counted, the retained windows stay
+// bounded, and only an absolute runaway (bytes arrived past `runawayOutputBytes`) answers true.
+function appendRetained(
+  buffers: Buffers,
+  window: StreamWindow,
+  chunk: Buffer,
+  runawayOutputBytes: number,
+): boolean {
+  buffers.attempted += chunk.length;
+  if (buffers.truncated) return false;
+  if (buffers.attempted > runawayOutputBytes) {
+    buffers.truncated = true;
+    return true;
+  }
+  appendWindow(window, chunk);
+  return false;
+}
+
+// The runaway ceiling of a retain-head-tail command that names none: 1 GiB arrived across stdout and
+// stderr. Far beyond any realistic CI log, still reached within seconds by an endless writer.
+const DEFAULT_RUNAWAY_OUTPUT_BYTES = 1_073_741_824;
+
+function runawayCeiling(policy: SandboxPolicy): number {
+  return policy.runawayOutputBytes ?? DEFAULT_RUNAWAY_OUTPUT_BYTES;
+}
+
 interface RunState {
   settled: boolean;
   // Node emits "spawn" only after the child process was created successfully. An "error" before
@@ -1374,6 +1674,21 @@ export function defaultOutputScrubSecrets(
   ];
 }
 
+// `machine-metadata`: the credential floor only (literal credential values, URL credentials, private
+// keys, issuer-shaped tokens). The full redactor additionally infers source code or YAML from the
+// text and masks the rest of the output when that projection refuses, which closed machine
+// metadata (index stat, object ids, paths) must never be exposed to (U-25).
+function credentialFloor(text: string, secrets: readonly string[]): string {
+  return redactCredentialShapes(text, secrets, false);
+}
+
+function outputScrubSecrets(deps: RunCommandDeps): readonly string[] {
+  const mode = deps.policy.outputScrub;
+  return mode === "credentials-only" || mode === "machine-metadata"
+    ? collectCredentialLikeEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? [])
+    : defaultOutputScrubSecrets(deps.processEnv, deps.policy);
+}
+
 function buildResult(options: BuildResultOptions): CommandResult {
   const { input, buffers, state, exitCode, termSignal, deps, startedAt, attestation } = options;
   // A credential the policy deliberately handed to the child is still scrubbed on the way out: a
@@ -1382,10 +1697,7 @@ function buildResult(options: BuildResultOptions): CommandResult {
   // `credentials-only` narrows the set to credential values (by governed name, credential-shaped
   // name and the policy's own list) for the one read whose stdout is the value the caller needs;
   // every other policy keeps the fail-closed default of scrubbing every non-allowlisted value.
-  const secrets =
-    deps.policy.outputScrub === "credentials-only"
-      ? collectCredentialLikeEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? [])
-      : defaultOutputScrubSecrets(deps.processEnv, deps.policy);
+  const secrets = outputScrubSecrets(deps);
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
     // Real over-cap byte count from the raw arrival counter (ADR-0054 D5). Clamped at 0 so a
@@ -1406,10 +1718,15 @@ function buildResult(options: BuildResultOptions): CommandResult {
       ...attest,
     };
   }
-  const originalOut = Buffer.concat(buffers.out).toString("utf8");
-  const originalErr = Buffer.concat(buffers.err).toString("utf8");
-  const stdout = redact(originalOut, secrets);
-  const stderr = redact(originalErr, secrets);
+  const originalOut = (
+    buffers.window ? windowText(buffers.window.out, secrets) : Buffer.concat(buffers.out)
+  ).toString("utf8");
+  const originalErr = (
+    buffers.window ? windowText(buffers.window.err, secrets) : Buffer.concat(buffers.err)
+  ).toString("utf8");
+  const scrub = deps.policy.outputScrub === "machine-metadata" ? credentialFloor : redact;
+  const stdout = scrub(originalOut, secrets);
+  const stderr = scrub(originalErr, secrets);
   return {
     command: input.command,
     args: input.args,
@@ -1421,8 +1738,26 @@ function buildResult(options: BuildResultOptions): CommandResult {
     durationMs: deps.now() - startedAt,
     timedOut: state.timedOut,
     truncated: buffers.truncated,
+    ...retainedCounts(buffers, secrets),
     ...attest,
   };
+}
+
+// What "retain-head-tail" kept and dropped, only when it dropped something.
+function retainedCounts(
+  buffers: Buffers,
+  secrets: readonly string[],
+): {
+  readonly retainedByteCount?: number;
+  readonly discardedByteCount?: number;
+} {
+  const { window } = buffers;
+  if (window === undefined || window.out.dropped + window.err.dropped === 0) return {};
+  const kept = [window.out, window.err].reduce((sum, stream) => {
+    const { head, tail } = windowParts(stream, secrets);
+    return sum + head.length + tail.length;
+  }, 0);
+  return { retainedByteCount: kept, discardedByteCount: buffers.attempted - kept };
 }
 
 function cleanup(state: RunState, signal: AbortSignal): void {
@@ -1582,15 +1917,20 @@ function wireStreams(
   state: RunState,
   input: RunCommandInput,
 ): void {
+  const { window } = buffers;
   const onData =
-    (sink: Buffer[]) =>
+    (sink: Buffer[], stream: StreamWindow | undefined) =>
     (chunk: Buffer): void => {
-      if (appendCapped(buffers, sink, chunk, deps.policy.maxOutputBytes)) {
+      const runaway =
+        stream === undefined
+          ? appendCapped(buffers, sink, chunk, deps.policy.maxOutputBytes)
+          : appendRetained(buffers, stream, chunk, runawayCeiling(deps.policy));
+      if (runaway) {
         terminate(child, deps, state, input, "output-cap"); // output flood → kill
       }
     };
-  child.stdout?.on("data", onData(buffers.out));
-  child.stderr?.on("data", onData(buffers.err));
+  child.stdout?.on("data", onData(buffers.out, window?.out));
+  child.stderr?.on("data", onData(buffers.err, window?.err));
 }
 
 interface ExecContext {
@@ -2159,7 +2499,16 @@ function startRun(
 ): Promise<CommandResult> {
   const { env, state } = prepareRun(input, deps, target, cwd, reservation);
   const child = spawnChild(input, deps, target, cwd, env, state);
-  const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
+  const buffers: Buffers = {
+    out: [],
+    err: [],
+    total: 0,
+    truncated: false,
+    attempted: 0,
+    ...(deps.policy.outputOverflow === "retain-head-tail"
+      ? { window: newWindows(deps.policy.maxOutputBytes) }
+      : {}),
+  };
   const ctx: ExecContext = {
     child,
     input,

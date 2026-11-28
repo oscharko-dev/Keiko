@@ -368,7 +368,9 @@ the extension grants no new authority and requires no schema-version bump.
   ended counts; an incomplete last record and a rename or copy whose old-path record was cut are
   dropped, the branch header must survive, and the response keeps its shape with `truncated: true`
   and `clean: false`. The sync preview reports `dirty: true` for such a cut (no new wire field), and
-  the cut is recorded body-free as `git.status.bounded` rather than as a failed git run. The Git
+  the cut is recorded body-free as `git.status.bounded` rather than as a failed git run. The
+  History read uses the same operation with `surface: history` when its page ends early, adding
+  `unreadableRecordCount` for records that could not be read. The Git
   change snapshot reader keeps its own fail-closed `metadata-truncated` rule. See
   [the operator entry](../troubleshooting/git-status-many-untracked-files.md).
 - `GitSyncPreview` reuses `GitUpstreamSummary` from `git-repository-summary.ts`, so the upstream

@@ -1,3 +1,4 @@
+import { codingToolCallIdFromActionId } from "./codingToolIpc.js";
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
@@ -983,9 +984,16 @@ function runtimeLaunchSafety(
   run: ProductionRuntimeBackendInput,
 ): Pick<
   OpenCodeRuntimeCompositionInput,
-  "resolveWorkspaceRootAccess" | "canSpawnRuntime" | "authorityLifecycle" | "codingToolApprovals"
+  | "resolveWorkspaceRootAccess"
+  | "canSpawnRuntime"
+  | "authorityLifecycle"
+  | "codingToolApprovals"
+  | "verificationPreview"
 > {
   return {
+    ...(run.verificationPreview === undefined
+      ? {}
+      : { verificationPreview: run.verificationPreview }),
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
     resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
@@ -1012,7 +1020,6 @@ function observeOpenCodeSandboxAttestation(
 
 const MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS = 2_048;
 const MAX_SAFE_ACTIVITY_TOOL_CORRELATION_BYTES = 128 * 1_024;
-const SAFE_ACTIVITY_CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 interface BoundedCorrelations<T> {
   readonly values: Map<string, T>;
@@ -1056,6 +1063,8 @@ function safeActivityController(
     beginTool: (input): void => {
       if (tools.armed) rememberAdmittedChild(tools, input);
     },
+    observeSubagents: subagentObserver(runId, () => tools.armed, onRuntimeEvent),
+    observeAgentModels: agentModelsObserver(runId, () => tools.armed, onRuntimeEvent),
     clear: (): void => {
       tools.armed = false;
       tools.binding = undefined;
@@ -1131,7 +1140,9 @@ const MAPPED_ACTIVITY_TOOLS: ReadonlySet<string> = new Set(
 function capturedChildHash(tools: ActivityToolCorrelations, actionId: string): string | undefined {
   const binding = tools.binding;
   if (binding === undefined || !actionId.startsWith(`${binding.sessionId}:`)) return undefined;
-  const match = /^cm_([a-f0-9]{64})_([1-9]\d{0,3})$/u.exec(callIdFromAction(actionId) ?? "");
+  const match = /^cm_([a-f0-9]{64})_([1-9]\d{0,3})$/u.exec(
+    codingToolCallIdFromActionId(actionId) ?? "",
+  );
   return match !== null && Number(match[2]) <= MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS
     ? match[1]
     : undefined;
@@ -1143,9 +1154,13 @@ function rememberAdmittedChild(
     NonNullable<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"]>
   >[0],
 ): void {
-  if (tools.binding === undefined || !callIdFromAction(input.actionId)?.startsWith("cm_")) return;
+  if (
+    tools.binding === undefined ||
+    !codingToolCallIdFromActionId(input.actionId)?.startsWith("cm_")
+  )
+    return;
   const parentHash = capturedChildHash(tools, input.actionId);
-  const callId = callIdFromAction(input.actionId);
+  const callId = codingToolCallIdFromActionId(input.actionId);
   if (parentHash === undefined || callId === undefined || !MAPPED_ACTIVITY_TOOLS.has(input.tool)) {
     tools.projection.recordDrop(tools.runId, "validation-rejected");
     return;
@@ -1265,6 +1280,46 @@ function nativeRetryObserver(
   };
 }
 
+// The count of the run's subagent sessions that work while its own session is idle (U-52): a count
+// alone, published as the run's event each time the tree reports a change, only while armed.
+function subagentObserver(
+  runId: string,
+  isArmed: () => boolean,
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
+): (count: number) => void {
+  let sequence = 0;
+  return (count) => {
+    if (!isArmed()) return;
+    onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `event-child-status-${String(++sequence)}`,
+      runId,
+      occurredAt: new Date().toISOString(),
+      kind: "native-subagents-changed",
+      activeSubagentCount: count,
+    });
+  };
+}
+
+// How many per-agent model settings of the repository the run refused (U-53): a count alone, once.
+function agentModelsObserver(
+  runId: string,
+  isArmed: () => boolean,
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
+): (refusedCount: number) => void {
+  return (refusedCount) => {
+    if (!isArmed()) return;
+    onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: "event-child-status-0",
+      runId,
+      occurredAt: new Date().toISOString(),
+      kind: "native-agent-models-refused",
+      refusedAgentModelCount: refusedCount,
+    });
+  };
+}
+
 function ownNativeRetryFact(
   fact: CodingWorkbenchRuntimeEvent["nativeRetry"],
 ): NonNullable<CodingWorkbenchRuntimeEvent["nativeRetry"]> | null {
@@ -1278,7 +1333,7 @@ function settledToolSignal({
   presentation,
 }: Parameters<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["settleTool"]>[0]):
   Extract<CodingSafeActivitySignal, { readonly kind: "tool" }> | undefined {
-  const callId = callIdFromAction(actionId);
+  const callId = codingToolCallIdFromActionId(actionId);
   if (
     callId === undefined ||
     (presentation !== undefined && !isCodingSafeActivityToolPresentation(presentation))
@@ -1386,12 +1441,6 @@ function deleteCorrelation<T>(correlations: BoundedCorrelations<T>, callId: stri
 
 function correlationBytes(callId: string, value: unknown): number {
   return Buffer.byteLength(callId, "utf8") + Buffer.byteLength(JSON.stringify(value), "utf8");
-}
-
-function callIdFromAction(actionId: string): string | undefined {
-  const separator = actionId.indexOf(":");
-  const callId = separator >= 0 ? actionId.slice(separator + 1) : "";
-  return SAFE_ACTIVITY_CALL_ID.test(callId) ? callId : undefined;
 }
 
 /**

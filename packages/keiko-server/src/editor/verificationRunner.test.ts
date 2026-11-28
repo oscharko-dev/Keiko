@@ -4,7 +4,15 @@ import { observedFailureQuery } from "../../../../tests/support/observed-failure
 // content-free lifecycle streaming without a real spawn. Route-level coverage lives in
 // verificationRoutes.test.ts.
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,19 +33,31 @@ import {
 import * as sandbox from "@oscharko-dev/keiko-sandbox";
 import {
   DEFAULT_VERIFICATION_LIMITS,
+  ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
+  runVerification,
   mavenTestArguments,
+  SCRIPT_BINDING_OUTCOMES,
+  scriptTableDigest,
+  SCRIPTS_CHANGED_DENIAL_PREFIX,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
+  SCRIPT_BINDING_VALUES,
+  verificationPlanDigest,
   decideScriptTrust,
+  type VerificationCommandPreview,
   type VerificationExecutePort,
+  type VerificationPreviewInput,
   type VerificationRunInput,
   type VerificationRunnerManager,
   type VerificationRunnerManagerOptions,
   type VerificationRunnerWorkspaceTrustDecider,
 } from "./verificationRunner.js";
-import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import {
+  VerificationPlanChangedError,
+  VerificationRunnerError,
+} from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isVerificationDependencySummary } from "@oscharko-dev/keiko-contracts/runtime/verification";
@@ -669,6 +689,230 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(manager.inFlightCount()).toBe(0);
   });
 
+  describe("binds the plan the person approved to the plan the effect builds", () => {
+    const writeScripts = (scripts: Record<string, string>): void => {
+      writeFileSync(join(workspaceRoot, "package.json"), JSON.stringify({ name: "x", scripts }));
+    };
+    const approvedDigest = (manager: VerificationRunnerManager): string => {
+      const plan = manager.previewCommands({ projectId: workspaceRoot, kinds: ["typecheck"] });
+      if (plan.kind !== "steps") throw new TypeError("expected planned steps");
+      return verificationPlanDigest(plan.steps);
+    };
+
+    it("moves the digest when only a lifecycle script of the approved script changes", () => {
+      const manager = makeManager({ execute: fakePort(report(["typecheck"])).port });
+      writeScripts({ typecheck: "tsc --noEmit", pretypecheck: "echo a" });
+      const approved = approvedDigest(manager);
+      writeScripts({ typecheck: "tsc --noEmit", pretypecheck: "node steal.js" });
+      expect(approvedDigest(manager)).not.toBe(approved);
+    });
+
+    it.each([
+      ["the script body", { typecheck: "node steal.js" }],
+      ["a lifecycle script", { typecheck: "tsc --noEmit", pretypecheck: "node steal.js" }],
+    ])(
+      "refuses the run, before any step, when %s changed after the approval",
+      async (_n, after) => {
+        const port = fakePort(report(["typecheck"]));
+        const manager = makeManager({
+          execute: port.port,
+          isWorkspaceTrustedForPackageScripts: () => true,
+        });
+        writeScripts({ typecheck: "tsc --noEmit", pretypecheck: "echo a" });
+        const expectedPlanDigest = approvedDigest(manager);
+        // Positive control: the approved bytes run.
+        await manager.runToReport(
+          input({ kinds: ["typecheck"], expectedPlanDigest }),
+          new AbortController().signal,
+        );
+        expect(port.calls).toBe(1);
+        writeScripts(after);
+        await expect(
+          manager.runToReport(
+            input({ kinds: ["typecheck"], expectedPlanDigest }),
+            new AbortController().signal,
+          ),
+        ).rejects.toBeInstanceOf(VerificationPlanChangedError);
+        expect(port.calls).toBe(1);
+      },
+    );
+  });
+
+  describe("carries the approved script bytes to the effect", () => {
+    const approved = { typecheck: "tsc --noEmit", pretypecheck: "echo a" };
+    const writeScripts = (scripts: Record<string, string>): void => {
+      writeFileSync(join(workspaceRoot, "package.json"), JSON.stringify({ name: "x", scripts }));
+    };
+
+    it("hands the effect the digest of the scripts its plan was built on", async () => {
+      writeScripts(approved);
+      const digests: (string | undefined)[] = [];
+      const manager = makeManager({
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          digests.push(args.approvedScriptsDigest);
+          return Promise.resolve({ report: report(["typecheck"]), ...DEFAULT_EXECUTION });
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+      await manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal);
+      expect(digests).toEqual([scriptTableDigest(approved)]);
+    });
+
+    it("records how each script step was bound as the effect decides it, also when the run then throws", async () => {
+      writeScripts(approved);
+      const events: ServerLogEvent[] = [];
+      const manager = makeManager({
+        activityLog: { write: (event): void => void events.push(event) },
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          args.onScriptBinding?.("bound");
+          args.onScriptBinding?.("refused:script-shell-configured");
+          args.onScriptBinding?.("scripts-changed");
+          return Promise.reject(new Error("the run failed after its refusals"));
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+      await expect(
+        manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal),
+      ).rejects.toThrow("the run failed");
+      const lines = events.filter((event) => event.op === "editor.verification.script-binding");
+      expect(lines.map((line) => [line.extra?.outcome, line.extra?.scriptStepOrdinal])).toEqual([
+        ["bound", 0],
+        ["refused:script-shell-configured", 1],
+        ["scripts-changed", 2],
+      ]);
+      expect(lines.every((line) => (line.correlationId ?? "").length > 0)).toBe(true);
+      const proven = expectActivityLogProof(
+        "editor.verification.script-binding.emitted-line",
+        formatActivityLogProofLine(lines[1] ?? {}),
+      );
+      expect(proven).toMatchObject({
+        outcome: "refused:script-shell-configured",
+        scriptStepOrdinal: 1,
+      });
+    });
+
+    it("declares exactly the outcomes keiko-verification defines", () => {
+      expect([...SCRIPT_BINDING_VALUES]).toEqual([...SCRIPT_BINDING_OUTCOMES]);
+    });
+
+    describe("a script change while the workspace queue is held (real effect)", () => {
+      const approvedBytes = {
+        typecheck: "echo approved > approved.txt",
+        pretypecheck: "echo pre >> approved.txt",
+      };
+      const held = {
+        main: { typecheck: "echo stolen > steal.txt", pretypecheck: "echo pre >> approved.txt" },
+        pretest: {
+          typecheck: "echo approved > approved.txt",
+          pretypecheck: "echo stolen > steal.txt",
+        },
+      };
+
+      // The real `runToReport` -> `executeVerificationEnforced`. The workspace queue emits its
+      // `acquired` line synchronously through the activity log sink, so the sink is the seam that
+      // edits package.json while the queue is held, after the plan was validated and before the step.
+      async function runHeld(change: Record<string, string> | undefined): Promise<{
+        readonly report: VerificationReport;
+        readonly events: ServerLogEvent[];
+      }> {
+        writeScripts(approvedBytes);
+        const events: ServerLogEvent[] = [];
+        let edited = false;
+        const manager = makeManager({
+          activityLog: {
+            write: (event): void => {
+              events.push(event);
+              if (
+                change !== undefined &&
+                !edited &&
+                event.op === "editor.verification.workspace" &&
+                event.extra?.state === "acquired"
+              ) {
+                edited = true;
+                writeScripts(change);
+              }
+            },
+          },
+          isWorkspaceTrustedForPackageScripts: () => true,
+          probeIsolation: async () =>
+            Promise.resolve({ probe: { available: true, backend: "seatbelt" }, durationMs: 0 }),
+        });
+        const { report } = await manager.runToReport(
+          input({ kinds: ["typecheck"], correlationId: "run-held-queue" }),
+          new AbortController().signal,
+        );
+        expect(change === undefined || edited).toBe(true);
+        return { report, events };
+      }
+
+      it.each([
+        ["main script", held.main],
+        ["pretest script", held.pretest],
+      ])(
+        "denies the step as scripts-changed and never runs the changed %s",
+        async (_name, change) => {
+          const { report, events } = await runHeld(change);
+          expect(report.results[0]?.status).toBe("denied");
+          expect(report.results[0]?.detail).toContain("scripts changed after approval");
+          expect(existsSync(join(workspaceRoot, "steal.txt"))).toBe(false);
+          expect(existsSync(join(workspaceRoot, "approved.txt"))).toBe(false);
+          const lines = events.filter((event) => event.op === "editor.verification.script-binding");
+          expect(lines.map((line) => line.extra?.outcome)).toEqual(["scripts-changed"]);
+          expect(lines.map((line) => line.correlationId)).toEqual(["run-held-queue"]);
+        },
+      );
+
+      it("positive control: with nothing changed the approved bytes run, or the host fails closed", async () => {
+        const { report, events } = await runHeld(undefined);
+        const lines = events.filter((event) => event.op === "editor.verification.script-binding");
+        if (report.results[0]?.status === "passed") {
+          expect(readFileSync(join(workspaceRoot, "approved.txt"), "utf8")).toBe("approved\n");
+          expect(lines.map((line) => line.extra?.outcome)).toEqual(["bound"]);
+          expect(lines.map((line) => line.correlationId)).toEqual(["run-held-queue"]);
+        } else {
+          // A host without a working sandbox denies before any spawn; nothing ran.
+          expect(existsSync(join(workspaceRoot, "approved.txt"))).toBe(false);
+          expect(report.results[0]?.status).not.toBe("passed");
+          // Nothing changed, so a denial here is the host's, never the binding's.
+          expect(lines.map((line) => line.extra?.outcome)).not.toContain("scripts-changed");
+        }
+      });
+    });
+
+    it.each([
+      ["the script", { typecheck: "node steal.js", pretypecheck: "echo a" }],
+      ["a lifecycle script", { typecheck: "tsc --noEmit", pretypecheck: "node steal.js" }],
+    ])(
+      "never runs the step when %s changed after the plan was validated, while the queue held",
+      async (_name, changed) => {
+        writeScripts(approved);
+        const reports: VerificationReport[] = [];
+        const manager = makeManager({
+          // The port stands for the effect: the change lands while it waits for the workspace queue.
+          execute: async (args): Promise<ExecuteVerificationResult> => {
+            writeScripts(changed);
+            const probe = { available: true, backend: "test-backend" };
+            const run = await runVerification(args.plan, {
+              workspace: args.workspace,
+              networkEnforcement: "inherit",
+              ...(args.approvedScriptsDigest === undefined
+                ? {}
+                : { approvedScriptsDigest: args.approvedScriptsDigest }),
+            });
+            reports.push(run);
+            return { report: run, probe };
+          },
+          isWorkspaceTrustedForPackageScripts: () => true,
+        });
+        await manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal);
+        expect(reports[0]?.results.map((result) => result.status)).toEqual(["denied"]);
+        expect(reports[0]?.results[0]?.detail).toMatch(
+          new RegExp(`^${SCRIPTS_CHANGED_DENIAL_PREFIX}`),
+        );
+      },
+    );
+  });
+
   it("revalidates workspace trust after plan derivation and denies drift before an agent run", async () => {
     const port = fakePort(report(["typecheck"]));
     const trust = vi
@@ -805,6 +1049,53 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
 
       expect(plans[0]?.steps.map((step) => step.command)).not.toContain("mvn");
+    });
+
+    // #4491: with no enforcing backend (a Windows host whose step supervisor did not resolve) the
+    // project used to be planned as "no test script detected in package.json", so the model read a
+    // missing script. Planned as its own Maven step, the run denies it as isolation unavailable.
+    it("plans the Maven step when no backend can enforce, so the denial names isolation", async () => {
+      mavenProject();
+      const { manager, plans, events } = planned({
+        probe: { available: false, backend: "none" },
+        durationMs: 1,
+      });
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(plans[0]?.steps.map((step) => step.command)).toEqual(["mvn"]);
+      const lines = events.filter((event) => event.op === "editor.verification.execute");
+      expect(lines.map((event) => event.extra?.runnerId)).toEqual(["maven", "maven"]);
+    });
+
+    // #4491: the planned step is judged by the orchestrator's own fail-closed rule on any host, a
+    // macOS or Linux one included, so the model is told isolation is unavailable, never "no script".
+    it("denies the planned Maven step as isolation unavailable when the probe finds no backend", async () => {
+      mavenProject();
+      const reports: VerificationReport[] = [];
+      const manager = makeManager({
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          const probe = { available: false, backend: "none" };
+          const report = await runVerification(args.plan, {
+            workspace: args.workspace,
+            networkEnforcement: "enforce-or-fail-closed",
+            enforcedNetworkAvailable: probe.available,
+          });
+          reports.push(report);
+          return { report, probe };
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+        probeIsolation: async () =>
+          Promise.resolve({ probe: { available: false, backend: "none" }, durationMs: 1 } as never),
+        windowsMavenRepository: () => repository,
+      });
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(reports[0]?.results.map((result) => result.status)).toEqual(["denied"]);
+      expect(reports[0]?.results[0]?.detail).toMatch(
+        new RegExp(`^${ISOLATION_UNAVAILABLE_DENIAL_PREFIX}`),
+      );
     });
 
     it("leaves a project with a package.json to npm, pom.xml or not", async () => {
@@ -2682,5 +2973,185 @@ describe("VerificationRunnerManager — nested packages in a repository without 
     await run(manager, { targetPath: `${NESTED}/src/widget.test.ts`, kinds: ["test"] });
     expect(plans[0]).toMatchObject({ packageDir: NESTED, packageManager: "yarn" });
     expect(plans[0]?.steps[0]).toMatchObject({ command: "yarn", cwd: NESTED });
+  });
+});
+
+describe("VerificationRunnerManager — previewCommands for the approval card (ADR-0124 D6)", () => {
+  function silent(): {
+    readonly manager: VerificationRunnerManager;
+    readonly touched: string[];
+  } {
+    const touched: string[] = [];
+    const manager = makeManager({
+      execute: ((): never => {
+        touched.push("execute");
+        throw new TypeError("preview must not execute");
+      }) as unknown as VerificationRunnerManagerOptions["execute"],
+      probeIsolation: (): never => {
+        touched.push("probeIsolation");
+        throw new TypeError("preview must not probe isolation");
+      },
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        touched.push("trust");
+        return false;
+      },
+      activityLog: { write: (): void => void touched.push("activityLog") },
+      diagnostics: { record: (): void => void touched.push("diagnostics") },
+    });
+    return { manager, touched };
+  }
+
+  it("plans the project's own typecheck command without a trust decision, probe, spawn or log line", () => {
+    const { manager, touched } = silent();
+    const preview = manager.previewCommands({ projectId: workspaceRoot, kinds: ["typecheck"] });
+    if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+    expect(preview.steps).toHaveLength(1);
+    expect(preview.steps[0]?.command).toBe("npm");
+    expect(preview.steps[0]?.args).toContain("typecheck");
+    expect(preview.probeFailures).toBe(0);
+    expect(touched).toEqual([]);
+    expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("carries the script body behind npm run, read from the same package.json", () => {
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ name: "x", scripts: { typecheck: "tsc --noEmit -p tsconfig.app.json" } }),
+    );
+    const preview = silentPreview({ kinds: ["typecheck"] });
+    if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+    expect(preview.steps[0]).toMatchObject({
+      scriptName: "typecheck",
+      scriptBody: "tsc --noEmit -p tsconfig.app.json",
+    });
+  });
+
+  it("sees a package.json rewritten between preview and run: the planned script body changes", () => {
+    const bodyOf = (): string | undefined => {
+      const preview = silentPreview({ kinds: ["typecheck"] });
+      return preview.kind === "steps" ? preview.steps[0]?.scriptBody : undefined;
+    };
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ scripts: { typecheck: "tsc --noEmit" } }),
+    );
+    const shown = bodyOf();
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ scripts: { typecheck: "node steal.js && tsc --noEmit" } }),
+    );
+    expect(shown).toBe("tsc --noEmit");
+    expect(bodyOf()).toBe("node steal.js && tsc --noEmit");
+  });
+
+  it("throws the runner's own not-found for an unknown workspace, still silently", () => {
+    const { manager, touched } = silent();
+    expect(() => manager.previewCommands({ projectId: "/no/such/root", kinds: ["test"] })).toThrow(
+      VerificationRunnerError,
+    );
+    expect(touched).toEqual([]);
+  });
+
+  it("asks for a package choice when the workspace holds several and the ask names none", () => {
+    rmSync(join(workspaceRoot, "package.json"));
+    for (const name of ["a", "b"]) {
+      mkdirSync(join(workspaceRoot, name), { recursive: true });
+      writeFileSync(
+        join(workspaceRoot, name, "package.json"),
+        JSON.stringify({ name, scripts: { test: "vitest run" } }),
+      );
+    }
+    const { manager, touched } = silent();
+    expect(manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"] })).toMatchObject({
+      kind: "package-selection-required",
+    });
+    expect(touched).toEqual([]);
+  });
+
+  it("does not guess whether Maven runs: a Maven project is host-dependent, never a probe", () => {
+    rmSync(join(workspaceRoot, "package.json"));
+    writeFileSync(join(workspaceRoot, "pom.xml"), "<project/>", "utf8");
+    const { manager, touched } = silent();
+    expect(manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"] })).toMatchObject({
+      kind: "host-dependent",
+    });
+    expect(touched).toEqual([]);
+  });
+
+  it("counts a package folder it could not read, without writing a line", () => {
+    const { manager, touched } = silent();
+    expect(
+      manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"], packageDir: "nope" }),
+    ).toMatchObject({ kind: "unresolved" });
+    expect(touched).toEqual([]);
+  });
+
+  function silentPreview(over: Partial<VerificationPreviewInput>): VerificationCommandPreview {
+    return silent().manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"], ...over });
+  }
+
+  describe("equals what execute plans", () => {
+    const NESTED = "web/app";
+
+    function nestedWorkspace(): void {
+      rmSync(join(workspaceRoot, "package.json"));
+      for (const dir of [NESTED, "tools"]) {
+        mkdirSync(join(workspaceRoot, dir), { recursive: true });
+        writeFileSync(
+          join(workspaceRoot, dir, "package.json"),
+          JSON.stringify({
+            name: dir,
+            scripts: { test: `vitest run ${dir}` },
+            devDependencies: { vitest: "4.1.11" },
+          }),
+        );
+        mkdirSync(join(workspaceRoot, dir, "node_modules"));
+      }
+    }
+
+    async function plannedByExecute(
+      over: Partial<VerificationRunInput>,
+    ): Promise<readonly { command: string; args: readonly string[]; cwd?: string | undefined }[]> {
+      const plans: Parameters<VerificationExecutePort>[0]["plan"][] = [];
+      const manager = makeManager({
+        isWorkspaceTrustedForPackageScripts: () => true,
+        execute: (args) => {
+          plans.push(args.plan);
+          return Promise.resolve({
+            report: report(["test"]),
+            probe: { available: true, backend: "test-backend" },
+          });
+        },
+      });
+      await manager.runToReport(input({ kinds: ["test"], ...over }), new AbortController().signal);
+      return (plans[0]?.steps ?? []).filter((step) => step.skipReason === undefined);
+    }
+
+    it.each([["web/app"], ["tools"]])(
+      "plans the same steps for packageDir %s as the run does",
+      async (packageDir) => {
+        nestedWorkspace();
+        const planned = await plannedByExecute({ packageDir });
+        const preview = silentPreview({ kinds: ["test"], packageDir });
+        if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+        expect(planned.length).toBeGreaterThan(0);
+        expect(preview.steps.map(({ command, args, cwd }) => ({ command, args, cwd }))).toEqual(
+          planned.map(({ command, args, cwd }) => ({ command, args, cwd })),
+        );
+      },
+    );
+
+    it("plans a targeted test through the package that holds it, as the run does", async () => {
+      nestedWorkspace();
+      mkdirSync(join(workspaceRoot, NESTED, "src"));
+      writeFileSync(join(workspaceRoot, NESTED, "src", "a.test.ts"), "");
+      const target = `${NESTED}/src/a.test.ts`;
+      const planned = await plannedByExecute({ kinds: ["targeted-test"], targetPath: target });
+      const preview = silentPreview({ kinds: ["targeted-test"], targetPath: target });
+      if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+      expect(preview.steps.map(({ command, args }) => ({ command, args }))).toEqual(
+        planned.map(({ command, args }) => ({ command, args })),
+      );
+    });
   });
 });

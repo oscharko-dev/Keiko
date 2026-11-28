@@ -49,7 +49,9 @@
 .statusBadge[data-tone="success"],
 .resourceState[data-tone="success"],
 .activityBadge[data-state="succeeded"],
-.activityBadge[data-state="completed"] {
+.activityBadge[data-state="completed"],
+.activityBadge[data-state="committed"],
+.activityBadge[data-state="carried-out"] {
   color: var(--feedback-success);
 }
 
@@ -385,18 +387,24 @@
   padding-block-start: var(--space-3);
 }
 
+/* U-29: one flex column, so every notice (alert, in-place activation, tool check, status) keeps
+   its own height in document flow and the session columns take what is left. */
 .body {
-  display: grid;
+  display: flex;
   min-width: 0;
   min-height: 0;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
   background: transparent;
 }
 
-.body:has(> .alert) {
-  grid-template-rows: auto minmax(0, 1fr);
+.body > * {
+  flex: 0 0 auto;
+}
+
+.body > .session {
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .session {
@@ -441,8 +449,10 @@
   scrollbar-gutter: stable both-edges;
 }
 
+/* The conversation is as wide as the Chat window's (owner, 2026-11-28): no fixed column, so a wide
+   window gives answer tables and code room. */
 .sessionStream > * {
-  width: min(100%, 760px);
+  width: 100%;
   flex: 0 0 auto;
 }
 
@@ -585,6 +595,14 @@
 }
 
 /* A polite status (a stream the browser is reconnecting): present, but not an alarm. */
+/* U-29: the in-place model activation sits in the body flow under the alert, on the same inline
+   inset, instead of flush against the window edge. */
+.cmpModelActivation {
+  display: flex;
+  min-width: 0;
+  margin: 0 var(--space-6) var(--space-3);
+}
+
 .cmpStreamNotice {
   display: flex;
   min-width: 0;
@@ -606,7 +624,8 @@
   z-index: 2;
   border-end-start-radius: inherit;
   border-end-end-radius: inherit;
-  width: min(100% - 2 * var(--space-5), 760px);
+  /* As wide as the session stream above it (Chat parity, owner 2026-11-28): no fixed column. */
+  width: calc(100% - 2 * var(--space-5));
   min-width: 0;
   min-height: 0;
   max-height: 100%;
@@ -675,6 +694,11 @@
   justify-self: start;
 }
 
+/* The status region stays mounted for screen readers but takes no room while it is empty. */
+.cmpRepositorySelectorNotice:empty {
+  position: absolute;
+}
+
 /* The trigger hugs its label: the shared select trigger stretches to its container and pushes the
    caret to the far edge, which left a wide gap after a short name such as "main" (#3897 UI
    review). */
@@ -719,6 +743,7 @@
 }
 
 .cmpRepositorySelectorNotice {
+  display: block;
   flex-basis: 100%;
   margin: 0;
   color: var(--feedback-warning);
@@ -727,7 +752,7 @@
 
 .composerContext {
   display: flex;
-  width: min(100%, 760px);
+  width: 100%;
   min-width: 0;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -1279,6 +1304,9 @@
   margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
+  /* A directory stage can name hundreds of files: the list scrolls instead of growing the card. */
+  max-height: 16rem;
+  overflow-y: auto;
 }
 
 .approvalChangedFile {
@@ -1381,29 +1409,6 @@
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.cmpRunCheckAction {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  background: var(--surface-primary);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-caption);
-  cursor: pointer;
-}
-
-.cmpRunCheckAction:hover {
-  background: var(--surface-secondary);
-}
-
-.cmpRunCheckAction:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 .messageText {
@@ -2105,6 +2110,12 @@ details[open] > .cmpActivitySummary::after {
 .cmpAnswerLoading {
   display: block;
   margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.cmpOutputLimitNote {
+  margin: var(--space-1) 0 0;
   color: var(--text-secondary);
   font-size: var(--text-caption);
 }

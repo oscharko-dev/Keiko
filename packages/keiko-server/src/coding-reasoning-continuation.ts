@@ -112,7 +112,15 @@ function withoutChangedTexts(original: AvailableFeed, redacted: AvailableFeed): 
     const { presentation } = tool;
     if (presentation === undefined) return tool;
     if (JSON.stringify(redactedById.get(tool.callId)) === JSON.stringify(presentation)) return tool;
-    const { command: _command, output: _output, errorText: _errorText, ...facts } = presentation;
+    const {
+      command: _command,
+      output: _output,
+      errorText: _errorText,
+      taskPrompt: _taskPrompt,
+      agentName: _agentName,
+      taskDescription: _taskDescription,
+      ...facts
+    } = presentation;
     return { ...tool, presentation: { ...facts, detailOmitted: true } };
   });
 }

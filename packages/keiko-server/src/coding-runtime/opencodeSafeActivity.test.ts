@@ -58,6 +58,23 @@ function completedPlanState(todos: unknown, metadataCanary = ""): Record<string,
 }
 
 describe("OpenCode safe-activity normalization", () => {
+  it.each([
+    ["length", true],
+    ["stop", false],
+    [undefined, false],
+  ] as const)("reads the output limit from an assistant finish of %s", (finish, limited) => {
+    const info = { ...assistantInfo(), ...(finish === undefined ? {} : { finish }) };
+    const { signals } = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.updated.1", { sessionID: "ses_safe", info }),
+    ]);
+    expect(signals).toHaveLength(1);
+    const signal = signals[0]?.signal;
+    expect(signal).toMatchObject({ kind: "message", messageId: "msg_assistant" });
+    expect(signal !== undefined && "outputLimit" in signal && signal.outputLimit === true).toBe(
+      limited,
+    );
+  });
+
   it("normalizes admitted message and tool parts while discarding raw arguments and results", () => {
     const canary = "RAW_TOOL_CANARY_2479";
     const normalized = normalizeOpenCodeSafeActivityHistory([

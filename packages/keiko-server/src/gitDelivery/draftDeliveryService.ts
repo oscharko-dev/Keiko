@@ -2,6 +2,7 @@ import type {
   CodingRuntimeDeliveryResult,
   CodingRuntimeDeliveryReview,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   isDraftDeliveryBranchBinding,
   isDraftDeliveryIssueBinding,
@@ -551,7 +552,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
       command: Object.freeze(command),
       review: Object.freeze(review),
       expectedRemoteHead,
-      expiresAtMs: draftNow(this.options) + 300_000,
+      expiresAtMs: draftNow(this.options) + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
       approvalBinding: {
         projectId: context.workspace.root,
         operation: command.kind === "push" ? ("push" as const) : ("pr" as const),

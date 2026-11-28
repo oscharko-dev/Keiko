@@ -230,9 +230,15 @@ describe("the closed Git outcome on the rendering record (#4271)", () => {
     const fromMs = Date.now() - 1;
     const activityLog = createBufferedServerLogSink();
     const refused = CODING_SAFE_ACTIVITY_GIT_OUTCOMES.filter(
-      (outcome) => outcome !== "completed" && outcome !== "waiting-for-approval",
+      (outcome) =>
+        outcome !== "completed" && outcome !== "waiting-for-approval" && outcome !== "prepared",
     );
-    const outcomes = [...refused, "waiting-for-approval" as const, "completed" as const];
+    const outcomes = [
+      ...refused,
+      "waiting-for-approval" as const,
+      "prepared" as const,
+      "completed" as const,
+    ];
     for (const gitOutcome of outcomes) {
       recordGovernedToolModelContent(
         activityLog,
@@ -255,6 +261,14 @@ describe("the closed Git outcome on the rendering record (#4271)", () => {
         "not-staged",
         "unsaved-changes",
         "blocked",
+        "commit-protected-branch",
+        "branch-invalid-name",
+        "branch-protected-name",
+        "branch-exists",
+        "branch-not-on-base",
+        "branch-not-local-checkout",
+        "branch-executable-filters",
+        "branch-preflight",
         "changed",
         "not-done",
       ],

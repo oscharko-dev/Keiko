@@ -41,6 +41,8 @@ import {
   planPackageTargetedTests,
   resolveStepNetwork,
   resolveVerificationPackage,
+  scriptTableDigest,
+  type ScriptBindingOutcome,
   type VerificationPackage,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
@@ -77,6 +79,7 @@ import {
 } from "./verificationExecutionLog.js";
 import {
   PackageSelectionRequiredError,
+  VerificationPlanChangedError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
   type VerificationRunnerErrorCode,
@@ -281,6 +284,70 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// How one script step was bound to the approved package scripts (keiko-verification's
+// ScriptBindingOutcome), declared as literals because the registry reads them from this file;
+// `recordScriptBindings` passes a ScriptBindingOutcome, so an outcome this list lacks fails to compile.
+export const SCRIPT_BINDING_VALUES = [
+  "bound",
+  "fenced-windows",
+  "scripts-changed",
+  "refused:script-shell-configured",
+  "refused:ignore-scripts-configured",
+  "refused:package-manager-configuration",
+  "refused:lifecycle-order-unknown",
+  "refused:package-config-unsupported",
+  "refused:script-not-runnable",
+  "refused:yarn-pnp-unsupported",
+  "refused:approval-missing",
+  "refused:windows-step-copy-missing",
+] as const satisfies readonly ScriptBindingOutcome[];
+
+// One line per script step of a finished run: whether Keiko ran the approved bytes itself (`bound`),
+// the package manager ran against the private Windows step copy under the digest fence
+// (`fenced-windows`), the scripts differed from the approval (`scripts-changed`), or the approved
+// bytes could not be run unbound (`refused:<closed reason>`). Never a script, a name or a path.
+const EDITOR_VERIFICATION_SCRIPT_BINDING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.script-binding",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.verificationRunner.recordScriptBindings",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: SCRIPT_BINDING_VALUES,
+    },
+    // The 0-based ordinal of the script step among the run's script steps (not the plan step index).
+    scriptStepOrdinal: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  diagnosticWhen: [
+    {
+      field: "outcome",
+      values: [
+        "scripts-changed",
+        "refused:script-shell-configured",
+        "refused:ignore-scripts-configured",
+        "refused:package-manager-configuration",
+        "refused:lifecycle-order-unknown",
+        "refused:package-config-unsupported",
+        "refused:script-not-runnable",
+        "refused:yarn-pnp-unsupported",
+        "refused:approval-missing",
+        "refused:windows-step-copy-missing",
+      ],
+    },
+  ],
+  analyzerProjection: "timeline",
+  failureClasses: ["verification-runner-refusal"],
+  proofIds: ["editor.verification.script-binding.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function verificationActivityErrorKind(code: VerificationRunnerErrorCode): ActivityLogErrorKind {
   if (code === "WORKSPACE_TRUST_REQUIRED") return "authority-denied";
   if (code === "RUN_LIMIT_EXCEEDED") return "rate-limited";
@@ -336,6 +403,10 @@ export interface VerificationRunInput {
   // narrower modes, and every caller that supplies none, keep the operator's explicit decision.
   // Never accepted from a parsed client payload.
   readonly autonomyMode?: CodingWorkbenchMode | undefined;
+  // Server-owned: the digest of the plan the person approved. The plan built for the effect itself
+  // (after any trust wait, so on every retry) must digest to it, or the run refuses before any step
+  // starts. Never accepted from a parsed client payload.
+  readonly expectedPlanDigest?: string | undefined;
 }
 
 export interface VerificationRunStart {
@@ -396,9 +467,108 @@ export interface VerificationRunnerManager {
     projectId: string,
     autonomyMode?: CodingWorkbenchMode,
   ) => ScriptTrustDecision | undefined;
+  /**
+   * The command lines a governed verification would run, planned from the project exactly as
+   * `execute` plans them, as a strictly side-effect-free read: no trust decision, no isolation
+   * probe, no spawn, no evidence and no log line. It exists so the approval card can show the
+   * person what Approve runs. A workspace that cannot be resolved throws the runner's own `PROJECT_NOT_FOUND`
+   * (the caller owns the one log line); a refused package folder answers `unresolved`.
+   */
+  readonly previewCommands: (input: VerificationPreviewInput) => VerificationCommandPreview;
   readonly subscribe: (listener: VerificationRunnerEventEmitter) => () => void;
   readonly inFlightCount: () => number;
 }
+
+export interface VerificationPreviewInput {
+  readonly projectId: string;
+  readonly kinds: readonly VerificationKind[];
+  readonly packageDir?: string | undefined;
+  readonly targetPath?: string | undefined;
+}
+
+export interface VerificationPreviewStep {
+  readonly command: string;
+  readonly args: readonly string[];
+  /** Workspace-relative folder of a nested package; absent for the workspace root. */
+  readonly cwd?: string | undefined;
+  /** The package script behind the step and its body, so the person sees what `npm run x` runs. */
+  readonly scriptName?: string | undefined;
+  readonly scriptBody?: string | undefined;
+  /**
+   * The digest of EVERY script of the step's package: npm runs the script's pre and post
+   * lifecycle scripts and any script the body calls, none of which the body above shows.
+   */
+  readonly scriptsDigest?: string | undefined;
+}
+
+/**
+ * The digest of what a plan runs: command, arguments, folder, script body and the digest of the
+ * package's whole script table of every step, in order. The approval card's preview and the run's
+ * own plan both digest through here.
+ */
+export function verificationPlanDigest(steps: readonly VerificationPreviewStep[]): string {
+  const canonical = steps.map((step) => [
+    step.command,
+    [...step.args],
+    step.cwd ?? null,
+    step.scriptBody ?? null,
+    step.scriptsDigest ?? null,
+  ]);
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+}
+
+// The script table digest each built plan was approved on, read from the bytes of that very plan.
+// The effect carries it to the orchestrator, which re-proves it on the workspace the step runs in,
+// after the exclusive queue and the dependency bootstrap, immediately before each script step.
+/**
+ * A plan together with the digest of the package scripts it was built on (undefined for a plan with
+ * no package script, such as Maven's). The digest travels ON the plan, so a plan rebuilt without it
+ * does not compile, and the effect refuses a script step that arrives without one.
+ */
+export interface ApprovedVerificationPlan extends VerificationPlan {
+  readonly approvedScriptsDigest: string | undefined;
+}
+
+function scriptsBinding(plan: ApprovedVerificationPlan): {
+  readonly approvedScriptsDigest?: string;
+} {
+  return plan.approvedScriptsDigest === undefined
+    ? {}
+    : { approvedScriptsDigest: plan.approvedScriptsDigest };
+}
+
+/** The runnable steps of a plan as the approval preview and the effect's own check both see them. */
+function previewStepsOf(
+  all: VerificationPlan["steps"],
+  scripts: Readonly<Record<string, string>>,
+): readonly VerificationPreviewStep[] {
+  const scriptsDigest = scriptTableDigest(scripts);
+  return all
+    .filter((step) => step.skipReason === undefined)
+    .map((step) => ({
+      command: step.command,
+      args: step.args,
+      ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
+      ...(step.scriptName === undefined || scripts[step.scriptName] === undefined
+        ? {}
+        : { scriptName: step.scriptName, scriptBody: scripts[step.scriptName], scriptsDigest }),
+    }));
+}
+
+/**
+ * `probeFailures` counts package folders the planning could not read; the preview itself writes no
+ * log line, so its caller reports the count. `host-dependent` is a Maven project: whether Maven
+ * runs depends on the isolation backend of this computer, which only a spawning probe can tell.
+ */
+export type VerificationCommandPreview =
+  | {
+      readonly kind: "steps";
+      readonly steps: readonly VerificationPreviewStep[];
+      readonly probeFailures: number;
+    }
+  | { readonly kind: "package-selection-required"; readonly probeFailures: number }
+  | { readonly kind: "host-dependent"; readonly probeFailures: number }
+  | { readonly kind: "unresolved"; readonly probeFailures: number };
 
 export interface VerificationRunnerManagerOptions {
   readonly store: UiStore;
@@ -520,7 +690,7 @@ const MAVEN_RUNNER: VerificationRunner = Object.freeze({ testFramework: "maven" 
 
 interface PreparedVerificationRun {
   readonly resolved: ResolvedVerificationWorkspace;
-  readonly plan: VerificationPlan;
+  readonly plan: ApprovedVerificationPlan;
   // The runner the run reports: the nested package's test framework when it has one.
   readonly runnerWorkspace: VerificationRunner;
   // The probe the script-trust decision was made on, when one was taken before it (#4519).
@@ -691,19 +861,25 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   // each other. One helper now owns the shared shape; the agent path layers its own
   // `onStepOutput` sink on top of it.
   private buildExecuteArgs(
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
   ): ExecuteVerificationArgs {
+    let scriptStepOrdinal = 0;
     return {
       plan,
       workspace: resolved.workspace,
       signal: entry.controller.signal,
       correlationId: entry.correlationId,
+      onScriptBinding: (outcome): void => {
+        this.recordScriptBinding(entry.correlationId, outcome, scriptStepOrdinal);
+        scriptStepOrdinal += 1;
+      },
       activityLog: this.activityLog,
       diagnostics: this.diagnostics,
       fs: resolved.access.fs,
       dependencyBootstrap: "auto",
+      ...scriptsBinding(plan),
       onTargetedProjectFailure: (error): void => {
         this.recordRunnerFailure(resolved.workspace, entry.correlationId, error, true);
       },
@@ -715,7 +891,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   // port's whole result is kept, not only its report: the completion line also names the isolation
   // the run executed under and how long the probe took (F14, #3873).
   private async executeAgentPlan(
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
     host: {
@@ -827,36 +1003,68 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     isolation: TimedNetworkIsolationProbe | undefined,
   ): {
-    readonly plan: VerificationPlan;
+    readonly plan: ApprovedVerificationPlan;
     readonly trust: ScriptTrustAdmission | undefined;
     readonly runnerWorkspace: VerificationRunner;
   } {
     const { workspace } = resolved;
     const fs = resolved.access.fs;
     const pkg = this.resolvePackage(workspace, input, fs);
-    const scriptKinds = input.kinds.filter(isScriptBackedKind);
     const maven = pkg === undefined && this.runsMaven(workspace, fs, isolation);
-    const scriptSteps = maven
-      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
-          cacheRepository: this.mavenCacheRepository(),
-        })
-      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    const { script: scriptSteps, all: steps } = this.plannedSteps(workspace, fs, input, pkg, maven);
+    const scripts = detectScripts(workspace, fs, pkg?.dir).scripts;
+    this.assertApprovedPlan(input, steps, scripts);
     const trust = this.assertWorkspaceTrustForSteps(
       resolved,
       scriptSteps,
       input.autonomyMode,
       isolation?.probe.available,
     );
-    const steps = [...scriptSteps, ...this.targetedSteps(workspace, input, fs, pkg)];
+    const plan: ApprovedVerificationPlan = {
+      workspaceRoot: workspace.root,
+      steps,
+      ...(pkg === undefined ? {} : { packageDir: pkg.dir, packageManager: pkg.manager }),
+      approvedScriptsDigest: maven ? undefined : scriptTableDigest(scripts),
+    };
     return {
-      plan: {
-        workspaceRoot: workspace.root,
-        steps,
-        ...(pkg === undefined ? {} : { packageDir: pkg.dir, packageManager: pkg.manager }),
-      },
+      plan,
       trust,
       runnerWorkspace: maven ? MAVEN_RUNNER : (pkg?.workspace ?? workspace),
     };
+  }
+
+  // The plan the effect is about to run must be the one the person approved. Built from the same
+  // projection as the preview, on the bytes read for this very plan, so a retry after a trust wait
+  // re-proves it and a script changed between approval and execution refuses before any step starts.
+  private assertApprovedPlan(
+    input: VerificationRunInput,
+    steps: VerificationPlan["steps"],
+    scripts: Readonly<Record<string, string>>,
+  ): void {
+    if (input.expectedPlanDigest === undefined) return;
+    if (verificationPlanDigest(previewStepsOf(steps, scripts)) !== input.expectedPlanDigest) {
+      throw new VerificationPlanChangedError();
+    }
+  }
+
+  // The ONE place the steps of a verification are planned. `execute` and the approval preview both
+  // call it, so a command shown for approval is the command a run plans, by construction. `script`
+  // holds the package-script (or Maven) steps the trust decision is asked about; `all` adds the
+  // targeted-test steps.
+  private plannedSteps(
+    workspace: WorkspaceInfo,
+    fs: WorkspaceFs,
+    input: Pick<VerificationRunInput, "kinds" | "targetPath">,
+    pkg: VerificationPackage | undefined,
+    maven: boolean,
+  ): { readonly script: VerificationPlan["steps"]; readonly all: VerificationPlan["steps"] } {
+    const scriptKinds = input.kinds.filter(isScriptBackedKind);
+    const script = maven
+      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
+          cacheRepository: this.mavenCacheRepository(),
+        })
+      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    return { script, all: [...script, ...this.targetedSteps(workspace, input, fs, pkg)] };
   }
 
   private mavenCacheRepository(): string | undefined {
@@ -865,14 +1073,18 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   // A Maven project's tests run on the Windows step backend only (#4492, ADR-0043 D20): it reads the
-  // person's Maven and Java offline from their own folders. Every other backend's image carries no
-  // Maven, so there the project keeps its closed "no script" skip, exactly as before.
+  // person's Maven and Java offline from their own folders. Every other enforcing backend's image
+  // carries no Maven, so there the project keeps its closed "no script" skip, exactly as before.
+  // With no enforcing backend at all (#4491) the step is planned too, so the run denies it as
+  // isolation unavailable instead of reporting a script that was never missing.
   private runsMaven(
     workspace: WorkspaceInfo,
     fs: WorkspaceFs,
     isolation: TimedNetworkIsolationProbe | undefined,
   ): boolean {
-    return isolation?.probe.backend === "windows-appcontainer" && isMavenProject(workspace, fs);
+    if (isolation === undefined) return false;
+    const { available, backend } = isolation.probe;
+    return (backend === "windows-appcontainer" || !available) && isMavenProject(workspace, fs);
   }
 
   // The nested package the run verifies, or undefined for the workspace root (the unchanged path).
@@ -882,12 +1094,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     fs: WorkspaceFs,
   ): VerificationPackage | undefined {
-    const resolution = resolveVerificationPackage(workspace, fs, {
-      packageDir: input.packageDir,
-      targetPath: input.targetPath,
-      onProbeFailure: (error) => {
-        this.recordPackageProbeFailure(input.correlationId, error);
-      },
+    const resolution = this.packageResolution(workspace, input, fs, (error) => {
+      this.recordPackageProbeFailure(input.correlationId, error);
     });
     switch (resolution.kind) {
       case "root":
@@ -902,6 +1110,21 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           "The requested package folder is not a package of this workspace.",
         );
     }
+  }
+
+  // The package a verification resolves to, as an outcome rather than a throw; `execute` turns the
+  // two closed refusals into errors, the approval preview into a plain sentence.
+  private packageResolution(
+    workspace: WorkspaceInfo,
+    input: Pick<VerificationRunInput, "packageDir" | "targetPath">,
+    fs: WorkspaceFs,
+    onProbeFailure: (error: unknown) => void,
+  ): ReturnType<typeof resolveVerificationPackage> {
+    return resolveVerificationPackage(workspace, fs, {
+      packageDir: input.packageDir,
+      targetPath: input.targetPath,
+      onProbeFailure,
+    });
   }
 
   // Asked at plan time and again at effect. A host whose isolation verdict refuses every script
@@ -945,7 +1168,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   private targetedSteps(
     workspace: WorkspaceInfo,
-    input: VerificationRunInput,
+    input: Pick<VerificationRunInput, "kinds" | "targetPath">,
     fs: WorkspaceFs,
     pkg: VerificationPackage | undefined,
   ): VerificationPlan["steps"] {
@@ -962,7 +1185,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private async runPlan(
     run: EditorVerificationRun,
     resolved: ResolvedVerificationWorkspace,
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
   ): Promise<void> {
     const entry = this.runs.get(run.runId);
     if (entry === undefined) return;
@@ -1004,7 +1227,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private async executeAndReport(
     runId: string,
     resolved: ResolvedVerificationWorkspace,
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
     entry: InFlightRun,
     startedAtMs: number,
   ): Promise<void> {
@@ -1135,6 +1358,22 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           resourceExceededCount: report.counts["resource-exceeded"],
           ...verificationCompletionLogFields(execution),
         },
+      ),
+    );
+  }
+
+  // One line per script step, written as the effect decides it, so a run that is cancelled or fails
+  // later has still logged the refusals it reached.
+  private recordScriptBinding(
+    correlationId: string,
+    outcome: ScriptBindingOutcome,
+    scriptStepOrdinal: number,
+  ): void {
+    this.activityLog.write(
+      activityLogEvent(
+        EDITOR_VERIFICATION_SCRIPT_BINDING_OPERATION,
+        { correlationId },
+        { outcome, scriptStepOrdinal },
       ),
     );
   }
@@ -1361,6 +1600,32 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       // path the moment verification is actually attempted, so nothing is lost from the log.
       return undefined;
     }
+  };
+
+  public readonly previewCommands = (
+    input: VerificationPreviewInput,
+  ): VerificationCommandPreview => {
+    const resolved = this.resolveWorkspace(input.projectId);
+    const { workspace } = resolved;
+    const fs = resolved.access.fs;
+    let probeFailures = 0;
+    const resolution = this.packageResolution(workspace, input, fs, () => {
+      probeFailures += 1;
+    });
+    if (resolution.kind === "ambiguous") {
+      return { kind: "package-selection-required", probeFailures };
+    }
+    if (resolution.kind === "refused") return { kind: "unresolved", probeFailures };
+    const pkg = resolution.kind === "package" ? resolution.package : undefined;
+    // Whether a Maven project runs Maven turns on the isolation backend (`runsMaven`), which only a
+    // probe can answer and a probe spawns a process. The preview never guesses: it says the answer
+    // depends on this computer's setup.
+    if (pkg === undefined && isMavenProject(workspace, fs)) {
+      return { kind: "host-dependent", probeFailures };
+    }
+    const { all } = this.plannedSteps(workspace, fs, input, pkg, false);
+    const scripts = detectScripts(workspace, fs, pkg?.dir).scripts;
+    return { kind: "steps", probeFailures, steps: previewStepsOf(all, scripts) };
   };
 
   private scriptTrust(

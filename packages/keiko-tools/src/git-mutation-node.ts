@@ -14,10 +14,13 @@
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export { canonicalGitHubPushUrl } from "./git-push-destination.js";
 import type {
+  GitCommitSigningDecision,
+  GitCommitSigningReadFailure,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import type { CodingRuntimeGitStageCause } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   buildAbortArgv,
   buildBranchCreateArgv,
@@ -27,13 +30,14 @@ import {
   buildStageArgv,
   buildUnstageArgv,
   GIT_MUTATION_COMMAND_RULES,
+  type GitBranchCreateExecRequest,
   type GitCommitExecRequest,
   type GitStageExecRequest,
   type GitUnstageExecRequest,
   type GitLocalMutationAdapter,
   type GitMutationArgvPlan,
 } from "./git-mutation-adapter.js";
-import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import {
   type CommandTerminationEvidence,
   type ExecutableResolver,
@@ -58,23 +62,143 @@ import {
   readGitCommitIdentity,
   readGitRevision,
   readGitTreeDigest,
+  readGitHeadState,
+  readGitCheckoutBranch,
+  readGitBranchRefFacts,
+  readGitBaseState,
+  readGitWorktreeSnapshot,
+  createGitReadSession,
+  GitWorktreeReadError as GitWorktreeReadFailure,
+  type NodeGitWorktreeReaderDeps,
+  type GitReadSession,
+  type GitStagedObjectIdPort,
 } from "./git-worktree-snapshot-node.js";
+import {
+  gitHeadStateObjectId,
+  gitZeroObjectId,
+  sameGitHeadState,
+  type GitHeadState,
+} from "./git-head-state.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import {
   stageExactFiles,
-  gitStageAttributesSupported,
+  gitStageAttributeRefusal,
   gitStageFilesSupported,
   filterDriversOverridable,
   unstageExactFiles,
+  gitStagedObjectIdOf,
+  gitStagedObjectPortArgvAllowed,
   type GitStageEffectContext,
   type GitStageLineEndings,
 } from "./git-stage-node.js";
+// The size-proportional deadline of one large-file hash, so the outer catalog budget of a staging
+// call is proven against the step it must not cut short.
+export { largeHashTimeoutMs } from "./git-stage-node.js";
+import type {
+  GitCleanupOptions,
+  GitObjectQuarantine,
+  GitRefLockCleanupReport,
+  RemovePath,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
+import { GIT_COMMIT_MESSAGE_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
+import {
+  GIT_REF_LOCK_HELD,
+  GIT_HEAD_CHANGED,
+  GIT_HEAD_AUTHORITY_LAPSED,
+  gitSequencerOperationInProgress,
+  repointSymbolicHead,
+  removeGitCommitState,
+  GIT_REF_LOCK_UNAVAILABLE,
+  withGitBranchRefLocks,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
+
+/** A failed `commit.gpgsign` read, reported once with its closed class and the cause. */
+export interface GitCommitSigningReadFailureReport {
+  readonly readFailure: GitCommitSigningReadFailure;
+  readonly error: unknown;
+}
+
+/**
+ * What a governed Git cleanup could not finish, body-free: which operation owned it and how many
+ * leftovers stayed (counts and flags only, never a path). `quarantines`, `temporaryIndex` and `lock`
+ * come from an index transaction; `refLocks` and `directories` from the branch ref locks of an unborn
+ * branch creation.
+ */
+export interface GitCleanupIncompleteReport {
+  readonly caller: "stage" | "unstage" | "branch-ref-lock" | "commit-state";
+  readonly quarantines: number;
+  readonly temporaryIndex: boolean;
+  readonly lock: boolean;
+  /** Lock descriptors that could not be closed (never a statement about the lock file). */
+  readonly descriptors: number;
+  readonly refLocks: number;
+  readonly directories: number;
+  /** Merge or squash state files a successful commit could not remove. */
+  readonly stateFiles: number;
+  /** The error that ended the cleanup, when one did (never a statement about its text). */
+  readonly error?: unknown;
+}
+
+/**
+ * The closed reasons a bound interactive commit writes nothing or fails: each is one distinct
+ * statement about the repository or the request, never a free string.
+ */
+export const GIT_COMMIT_REFUSAL_CAUSES = [
+  "not-on-prepared-branch",
+  "authority-lapsed",
+  "sequencer-in-progress",
+  "sequencer-unreadable",
+  "empty-message",
+  "message-invalid",
+  "message-too-large",
+  "ref-symbolic",
+  "cleanup-unavailable",
+  "landed-after-failure",
+  "nothing-to-commit",
+  "ref-moved",
+  "checkout-unreadable",
+  "revision-unreadable",
+  "git-command-failed",
+  "interrupted",
+  "unexpected-error",
+] as const;
+export type GitCommitRefusalCause = (typeof GIT_COMMIT_REFUSAL_CAUSES)[number];
+
+/** One refused or failed interactive commit: the closed cause and, when a throw ended it, the error. */
+export interface GitCommitRefusedReport {
+  readonly cause: GitCommitRefusalCause;
+  readonly error?: unknown;
+}
 
 export interface NodeGitMutationAdapterDeps {
+  /**
+   * The trusted branch-protection verdict for the branch a commit lands on: true only when the
+   * trusted reader says the branch requires signatures. Supplied by the server, never by model
+   * input; unknown, unavailable or no remote is `false`. A rejection propagates, so the commit is
+   * not made on a state that could not be proved (ADR-0006).
+   */
+  readonly signingRequiredByBranchProtection?: (() => Promise<boolean | "unavailable">) | undefined;
+  /** Injected log port for a failed `commit.gpgsign` read (frames and cause chain stay with the owner). */
+  readonly onSigningReadFailure?: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
+  /** Injected log port for a cleanup the index transaction or the ref locks could not finish. */
+  readonly onCleanupIncomplete?: ((report: GitCleanupIncompleteReport) => void) | undefined;
+  /** Injected log port for an interactive commit that was refused or failed, with its closed cause. */
+  readonly onCommitRefused?: ((report: GitCommitRefusedReport) => void) | undefined;
+  /** A test seam: removes one path of a cleanup (default: the workspace owner's own removal). */
+  readonly removePath?: RemovePath | undefined;
   /** Re-proves live server authority immediately before the sole ref-changing effect. */
   readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
   readonly beforeIndexUpdate?: (() => boolean) | undefined;
+  /**
+   * The checkout an unverified (interactive) commit was prepared on: its signing decision is made
+   * for this branch (`undefined` for a detached HEAD). The commit is refused when the checkout is
+   * on another branch by the time the decision is made, so a switch during the signing read can
+   * never land an unsigned commit on a branch that requires signatures.
+   */
+  readonly preparedCheckout?: { readonly branchName: string | undefined } | undefined;
+  /** The filesystem port the repository's sequencer state is read through (default: workspace port). */
+  readonly metadataFs?: WorkspaceFs | undefined;
   // The repository root the mutations run in. Reused as the spawn-boundary workspace root.
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -96,6 +220,8 @@ export interface NodeGitMutationAdapterDeps {
   // Optional cancellation signal threaded into every governed git invocation.
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+  // The operation scope the governed reads of this adapter count their processes in.
+  readonly readSession?: GitReadSession | undefined;
 }
 
 function executionResult(
@@ -184,6 +310,14 @@ interface RunContext {
   readonly timeoutMs: number | undefined;
   readonly beforeCommitRefUpdate: (() => boolean) | undefined;
   readonly beforeIndexUpdate: (() => boolean) | undefined;
+  readonly preparedCheckout: { readonly branchName: string | undefined } | undefined;
+  readonly metadataFs: WorkspaceFs | undefined;
+  readonly readSession: GitReadSession | undefined;
+  readonly signingRequiredByBranchProtection: (() => Promise<boolean | "unavailable">) | undefined;
+  readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
+  readonly onCleanupIncomplete: ((report: GitCleanupIncompleteReport) => void) | undefined;
+  readonly onCommitRefused: ((report: GitCommitRefusedReport) => void) | undefined;
+  readonly removePath: RemovePath | undefined;
 }
 
 const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
@@ -218,6 +352,17 @@ const GIT_CONFIG_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   },
 ]);
 
+/**
+ * The deadline of a run that reads a large file by path: the size-proportional one, but never below
+ * the lane's own deadline, which is the lane's `timeoutMs` or else the run policy's default.
+ */
+export function scaledRunTimeoutMs(
+  scaledMs: number,
+  laneMs: number | undefined,
+  policyDefaultMs: number,
+): number {
+  return Math.max(scaledMs, laneMs ?? policyDefaultMs);
+}
 // Every mutating spawn goes through here, so the version-gated lazy-fetch/replace-objects guard
 // (git-worktree-snapshot-node.ts, reviewer 3941836280) protects the write lane exactly the way it
 // protects the read lane — cached after the first call, so this costs nothing beyond it. This
@@ -229,14 +374,21 @@ async function runOne(
   ctx: RunContext,
   argv: readonly string[],
   stdin?: string | Uint8Array,
+  // A run that reads a large file by path gets time in proportion to the file; never less than the
+  // lane's own deadline.
+  scaledTimeoutMs?: number,
 ): Promise<CommandResult> {
   await ensureGitLazyFetchGuardSupported(commitReadDeps(ctx));
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
   return runCommand(
     {
       command: "git",
       args: [...GOVERNED_GIT_MUTATION_CONFIG_ARGS, ...argv],
       cwd: undefined,
-      timeoutMs: ctx.timeoutMs,
+      timeoutMs:
+        scaledTimeoutMs === undefined
+          ? ctx.timeoutMs
+          : scaledRunTimeoutMs(scaledTimeoutMs, ctx.timeoutMs, ctx.runDeps.policy.defaultTimeoutMs),
       signal: ctx.signal,
       stdin,
     },
@@ -275,6 +427,7 @@ async function readStageConfig(ctx: RunContext): Promise<StageConfig | undefined
     commandRules: GIT_CONFIG_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
   const result = await runCommand(
     {
       command: "git",
@@ -410,10 +563,53 @@ function verifiedIndexEffect(
         (await configuredStageLineEndings(ctx)) === stagedLineEndings),
     // Read once per staging, not once per hashed file (PR #4568 audit: Windows spawn cost).
     filterDriverNames: () => (filterDrivers ??= readStageConfig(ctx).then((c) => c?.filterDrivers)),
+    onIndexCleanupFailure: (report) =>
+      ctx.onCleanupIncomplete?.({
+        caller: stagedLineEndings === undefined ? "unstage" : "stage",
+        refLocks: 0,
+        directories: 0,
+        stateFiles: 0,
+        quarantines: report.quarantines,
+        temporaryIndex: report.temporaryIndex,
+        lock: report.lock,
+        descriptors: report.descriptor ? 1 : 0,
+      }),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
-    run: (argv, stdin, indexPath) =>
-      runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+    signal: ctx.signal,
+    run: (argv, stdin, indexPath, timeoutMs, quarantine) =>
+      runOne(
+        withObjectQuarantine(
+          indexPath === undefined ? ctx : withIndexPath(ctx, indexPath),
+          quarantine,
+        ),
+        argv,
+        stdin,
+        timeoutMs,
+      ),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
+  };
+}
+
+// Objects the run writes go to the quarantine; the live store stays readable as an alternate so an
+// object that already exists is recognised and not written again.
+function withObjectQuarantine(
+  ctx: RunContext,
+  quarantine: GitObjectQuarantine | undefined,
+): RunContext {
+  if (quarantine === undefined) return ctx;
+  return {
+    ...ctx,
+    runDeps: {
+      ...ctx.runDeps,
+      policy: {
+        ...ctx.runDeps.policy,
+        pinnedEnv: {
+          ...ctx.runDeps.policy.pinnedEnv,
+          GIT_OBJECT_DIRECTORY: quarantine.directory,
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: quarantine.liveDirectory,
+        },
+      },
+    },
   };
 }
 
@@ -434,25 +630,588 @@ async function execCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
-  if (request.verified !== undefined) return execVerifiedCommit(ctx, request);
-  const result = await execPlan(ctx, () => buildCommitArgv(request));
+  // Contradictory verified operands are refused before any Git process starts, the signing read
+  // included; such a refusal carries no `signing` field because no signing decision was made.
+  if (request.verified !== undefined && !validVerifiedOperands(request))
+    return failureFromExit(0, 0);
+  const read = await readCommitSigning(ctx);
+  const signing = {
+    signing: read.decision,
+    ...(read.failure === undefined ? {} : { signingReadFailure: read.failure.readFailure }),
+  };
+  const sign = !UNSIGNED_SIGNING_DECISIONS.has(read.decision);
+  const outcome =
+    request.verified === undefined
+      ? await execInteractiveCommit(ctx, request, sign)
+      : await execVerifiedCommit(ctx, request, sign);
+  return { ...outcome, ...signing };
+}
+
+// The decision above was made for the prepared branch. A prepared branch is committed to through
+// one explicit ref update that names that branch and the HEAD the commit was built on, so a
+// checkout that moves on at any point can never land the commit on another branch. A checkout
+// that has no branch to bind (detached) keeps the plain commit after its checkout read.
+async function execInteractiveCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  sign: boolean,
+): Promise<GitDeliveryExecutionResult> {
+  const branch = ctx.preparedCheckout?.branchName;
+  if (branch !== undefined) return execBoundCommit(ctx, request, sign, branch);
+  const sized = await plainLaneMessageRefusal(ctx, request.message);
+  if (sized !== undefined) return sized;
+  const prepared = await checkoutStillPrepared(ctx).catch((error: unknown) => error);
+  if (prepared === false) return reportCommitRefusal(ctx, "not-on-prepared-branch");
+  if (prepared !== true) {
+    reportCommitRefusal(ctx, "checkout-unreadable", prepared);
+    return failureFromThrow(prepared, 0, 0);
+  }
+  const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
   if (result.outcome !== "succeeded") return result;
   try {
     return { ...result, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
   } catch (error) {
+    reportCommitRefusal(ctx, "revision-unreadable", error);
     return failureFromThrow(error, result.durationMs, 1);
   }
+}
+
+// A refusal writes nothing: it is one closed cause on the adapter's log port and a closed result.
+function reportCommitRefusal(
+  ctx: RunContext,
+  cause: GitCommitRefusalCause,
+  error?: unknown,
+  errorCode: GitDeliveryExecutionErrorCode = "precondition-failed",
+): GitDeliveryExecutionResult {
+  deliverCommitRefusal(ctx, error === undefined ? { cause } : { cause, error });
+  return failureFromExit(0, 0, errorCode);
+}
+
+// A log port that throws can never replace the real failure it was told about; the lost line
+// surfaces as a closed Node process warning instead.
+function deliverCommitRefusal(ctx: RunContext, report: GitCommitRefusedReport): void {
+  try {
+    ctx.onCommitRefused?.(report);
+  } catch {
+    process.emitWarning("Git commit refusal was not recorded", {
+      code: "KEIKO_GIT_COMMIT_REFUSAL_UNREPORTED",
+    });
+  }
+}
+
+// The interactive commit on a prepared branch, written with Git's own plumbing: the staged tree, one
+// commit object on the HEAD read here (signed when the decision says so), then ONE ref update whose
+// old value is that HEAD. The branch the signing decision was made for is the branch that moves, or
+// nothing does. Hooks are off for every Keiko Git process, so no hook is skipped. A commit inside a
+// merge, an empty commit without `allowEmpty` and a checkout that is not on the branch are refused
+// before any object is written; a failed read is a failed commit, never a pass.
+async function execBoundCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  sign: boolean,
+  branch: string,
+): Promise<GitDeliveryExecutionResult> {
+  let refAttempted = false;
+  try {
+    const prepared = await prepareBoundCommit(ctx, request, branch);
+    if ("outcome" in prepared) return prepared;
+    const { head, message, tree } = prepared;
+    const commit = await checkedObjectCommand(
+      ctx,
+      [
+        "commit-tree",
+        tree,
+        ...(sign ? ["-S"] : []),
+        ...(head.kind === "born" ? ["-p", head.sha] : []),
+        "-F",
+        "-",
+      ],
+      Buffer.from(message, "utf8"),
+    );
+    const moved = await boundCheckoutRefusal(ctx, branch, head);
+    if (moved !== undefined) return reportCommitRefusal(ctx, moved);
+    refAttempted = true;
+    return await updateBoundCommitRef(ctx, branch, head, commit, message);
+  } catch (error) {
+    reportCommitRefusal(ctx, boundFailureCause(error), error);
+    return failureFromVerifiedCommitError(error, refAttempted);
+  }
+}
+
+function boundFailureCause(error: unknown): GitCommitRefusalCause {
+  if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
+    return "interrupted";
+  return error instanceof GitObjectCommandFailure ? "git-command-failed" : "unexpected-error";
+}
+
+// The commit object is written from a bounded standard input (64 KiB) that carries the message and
+// its closing line break, so the effective message (after the cleanup Git itself would apply) is at
+// most this many bytes with its line break. Both interactive lanes refuse the same input.
+const COMMIT_INPUT_MAX_BYTES = GIT_COMMIT_MESSAGE_MAX_BYTES + 1;
+
+// The plain lane hands the message to `git commit`, which cleans it itself; it only has to know
+// whether the effective message fits. A message that fits before any cleanup needs no process.
+async function plainLaneMessageRefusal(
+  ctx: RunContext,
+  raw: string,
+): Promise<GitDeliveryExecutionResult | undefined> {
+  if (Buffer.byteLength(raw, "utf8") <= GIT_COMMIT_MESSAGE_MAX_BYTES) return undefined;
+  const effective = await effectiveCommitMessage(ctx, raw);
+  return typeof effective === "string" ? undefined : effective;
+}
+
+// What `git commit --message` records, made by Git itself: the cleanup mode the repository's
+// effective `commit.cleanup` names, applied by `git stripspace` (`strip` also drops comment lines
+// with the configured comment character), or the message unchanged for `verbatim`. `default` and
+// `scissors` clean like `whitespace` for a message that is not edited. The text ends with the line
+// break `git commit` completes. Returns the refusal (already reported) when it cannot be produced.
+async function effectiveCommitMessage(
+  ctx: RunContext,
+  raw: string,
+): Promise<string | GitDeliveryExecutionResult> {
+  if (raw === "") return reportCommitRefusal(ctx, "empty-message");
+  if (raw.includes("\0")) return reportCommitRefusal(ctx, "message-invalid");
+  if (Buffer.byteLength(raw, "utf8") > COMMIT_INPUT_MAX_BYTES)
+    return reportCommitRefusal(ctx, "message-too-large");
+  let cleaned: CleanedMessage;
+  try {
+    cleaned = await cleanedByGit(ctx, raw);
+  } catch (error) {
+    if (cleanupFailureCause(error) === "interrupted") {
+      reportCommitRefusal(ctx, "interrupted", error);
+      return failureFromThrow(error, 0, 0);
+    }
+    return reportCommitRefusal(ctx, "cleanup-unavailable", error);
+  }
+  // Verbatim keeps even a blank message, as Git does; the other modes refuse one that is empty once
+  // cleaned (Git aborts such a commit).
+  if (cleaned.text.trim() === "" && !cleaned.verbatim)
+    return reportCommitRefusal(ctx, "empty-message");
+  if (Buffer.byteLength(cleaned.text, "utf8") > COMMIT_INPUT_MAX_BYTES)
+    return reportCommitRefusal(ctx, "message-too-large");
+  return cleaned.text;
+}
+
+function cleanupFailureCause(error: unknown): GitCommitRefusalCause {
+  if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
+    return "interrupted";
+  return "cleanup-unavailable";
+}
+
+type CommitCleanupMode = "whitespace" | "strip" | "verbatim";
+
+class GitCleanupUnavailable extends Error {
+  public constructor() {
+    super("git-commit-cleanup-unavailable");
+    this.name = "GitCleanupUnavailable";
+  }
+}
+
+interface CleanedMessage {
+  readonly text: string;
+  readonly verbatim: boolean;
+}
+
+async function cleanedByGit(ctx: RunContext, raw: string): Promise<CleanedMessage> {
+  const config = await readCommitCleanupConfig(ctx);
+  // Git refuses `auto` for a message that starts a line with every candidate in every mode.
+  if (config.comment === "auto") autoCommentCharacter(raw);
+  if (config.mode === "verbatim")
+    return { text: raw.endsWith("\n") ? raw : `${raw}\n`, verbatim: true };
+  const result = await runOne(
+    stripspaceContext(ctx),
+    config.mode === "strip" ? stripCommentsArgv(config.comment, raw) : ["stripspace"],
+    Buffer.from(raw, "utf8"),
+  );
+  // The output is the commit text itself: a run that was cut short or altered by a scrub is not it.
+  if (result.exitCode !== 0 || result.truncated || result.outputRedacted === true)
+    throw new GitCleanupUnavailable();
+  return { text: result.stdout, verbatim: false };
+}
+
+// `git stripspace` resolves `auto` to `#`, while `git commit` picks the first of these characters
+// that starts no line of the message; every other value is handed over explicitly, so the comment
+// marker is exactly the one `git commit` would use. A multi-character marker is `core.commentString`.
+const AUTO_COMMENT_CHARACTERS = "#;@!$%^&|:";
+
+function stripCommentsArgv(comment: string, raw: string): string[] {
+  const marker = comment === "auto" ? autoCommentCharacter(raw) : comment;
+  const key = marker.length === 1 ? "core.commentChar" : "core.commentString";
+  return ["-c", `${key}=${marker}`, "stripspace", "--strip-comments"];
+}
+
+// The character `git commit` selects for `auto`; Git itself refuses a message that starts a line
+// with every candidate, and so does the lane.
+function autoCommentCharacter(raw: string): string {
+  const lines = raw.split("\n");
+  const free = Array.from(AUTO_COMMENT_CHARACTERS).find((c) => !lines.some((l) => l.startsWith(c)));
+  if (free === undefined) throw new GitCleanupUnavailable();
+  return free;
+}
+
+// This one read's stdout is the value the caller needs: only credentials are scrubbed, and nothing
+// is dropped for size.
+function stripspaceContext(ctx: RunContext): RunContext {
+  return {
+    ...ctx,
+    runDeps: {
+      ...ctx.runDeps,
+      policy: {
+        ...ctx.runDeps.policy,
+        outputScrub: "credentials-only",
+        maxOutputBytes: Math.max(ctx.runDeps.policy.maxOutputBytes, 4 * COMMIT_INPUT_MAX_BYTES),
+      },
+    },
+  };
+}
+
+interface CommitCleanupConfig {
+  readonly mode: CommitCleanupMode;
+  /** The effective comment marker: `core.commentChar` or `core.commentString`, `auto` included. */
+  readonly comment: string;
+}
+
+// The effective `commit.cleanup` and comment marker, read in ONE call through the repository's own
+// Git (every config scope and include; the last entry of each wins, as Git reads them). Unset is
+// `default` (which cleans a message that is not edited like `whitespace`) and `#`; a value Git itself
+// would reject, a failed read or a cut-short or scrubbed answer is unavailable, never a guess.
+async function readCommitCleanupConfig(ctx: RunContext): Promise<CommitCleanupConfig> {
+  const runDeps = { ...ctx.runDeps, commandRules: GIT_CONFIG_COMMAND_RULES };
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
+  const result = await runCommand(
+    {
+      command: "git",
+      args: [
+        "config",
+        "--null",
+        "--get-regexp",
+        String.raw`^(commit\.cleanup|core\.comment(char|string))$`,
+      ],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
+    runDeps,
+  );
+  if (result.truncated || result.outputRedacted === true) throw new GitCleanupUnavailable();
+  if (result.exitCode === 1) return { mode: "whitespace", comment: "#" };
+  if (result.exitCode !== 0) throw new GitCleanupUnavailable();
+  let mode = "default";
+  let comment = "#";
+  for (const entry of result.stdout.split("\0").filter((e) => e !== "")) {
+    const split = entry.indexOf("\n");
+    const key = split < 0 ? entry : entry.slice(0, split);
+    const value = split < 0 ? "" : entry.slice(split + 1);
+    if (key === "commit.cleanup") mode = value;
+    else comment = value;
+  }
+  return { mode: cleanupModeOf(mode), comment: validCommentMarker(comment) };
+}
+
+function cleanupModeOf(value: string): CommitCleanupMode {
+  switch (value) {
+    case "default":
+    case "whitespace":
+    case "scissors":
+      return "whitespace";
+    case "strip":
+      return "strip";
+    case "verbatim":
+      return "verbatim";
+    default:
+      throw new GitCleanupUnavailable();
+  }
+}
+
+// Git refuses an empty marker and one with a line break; the lane never guesses at either.
+function validCommentMarker(value: string): string {
+  if (value === "" || /[\r\n\0]/u.test(value)) throw new GitCleanupUnavailable();
+  return value;
+}
+
+interface PreparedBoundCommit {
+  readonly head: GitHeadState;
+  readonly message: string;
+  readonly tree: string;
+}
+
+// Everything that can refuse the commit before an object is written, each with its own cause; the
+// result is the refusal, or the facts the commit is built from.
+async function prepareBoundCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  branch: string,
+): Promise<PreparedBoundCommit | GitDeliveryExecutionResult> {
+  const bound = await boundCommitHead(ctx, branch);
+  if ("outcome" in bound) return bound;
+  const message = await effectiveCommitMessage(ctx, request.message);
+  if (typeof message !== "string") return message;
+  const tree = await checkedObjectCommand(ctx, ["write-tree"]);
+  if (!request.allowEmpty && (await commitsNothing(ctx, bound.head, tree)))
+    return reportCommitRefusal(ctx, "nothing-to-commit");
+  return { head: bound.head, message, tree };
+}
+
+// The HEAD a bound commit builds on, or the refusal (already reported with its one closed cause) when
+// it cannot be bound to the prepared branch. A state that cannot be read is refused like one that is
+// there, and keeps its error.
+async function boundCommitHead(
+  ctx: RunContext,
+  branch: string,
+): Promise<{ readonly head: GitHeadState } | GitDeliveryExecutionResult> {
+  const moved = await boundCheckoutRefusal(ctx, branch);
+  if (moved !== undefined) return reportCommitRefusal(ctx, moved);
+  // A merge, cherry-pick or revert in progress has state this commit does not bind.
+  let sequencing: boolean;
+  try {
+    sequencing = await gitSequencerOperationInProgress(
+      ctx.runDeps.workspace.root,
+      ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+    );
+  } catch (error) {
+    return reportCommitRefusal(ctx, "sequencer-unreadable", error);
+  }
+  if (sequencing) return reportCommitRefusal(ctx, "sequencer-in-progress");
+  return { head: await readGitHeadState(commitReadDeps(ctx)) };
+}
+
+// The checkout must be on the prepared branch and the run still authorized. The read right before
+// the ref update of a born branch is one `for-each-ref` that also tells whether the destination is a
+// symbolic ref; an unborn branch has no ref to read, and Git refuses a dangling symref by itself.
+async function boundCheckoutRefusal(
+  ctx: RunContext,
+  branch: string,
+  final?: GitHeadState,
+): Promise<GitCommitRefusalCause | undefined> {
+  const deps = commitReadDeps(ctx);
+  if (final?.kind === "born") {
+    const facts = await readGitBranchRefFacts(deps, branch);
+    if (facts.symbolic) return "ref-symbolic";
+    if (!facts.head) return "not-on-prepared-branch";
+  } else if ((await readGitCheckoutBranch(deps)) !== branch) return "not-on-prepared-branch";
+  return commitEffectAuthorized(ctx) ? undefined : "authority-lapsed";
+}
+
+async function commitsNothing(ctx: RunContext, head: GitHeadState, tree: string): Promise<boolean> {
+  const deps = commitReadDeps(ctx);
+  const current =
+    head.kind === "born"
+      ? (await readGitCommitIdentity(deps, head.sha)).treeDigest
+      : await readGitTreeDigest(
+          deps,
+          await checkedObjectCommand(ctx, ["hash-object", "-t", "tree", "--stdin"], ""),
+        );
+  return (await readGitTreeDigest(deps, tree)) === current;
+}
+
+// The reflog entry `git commit` writes: its subject is the first line of the cleaned message, and
+// the root commit of an unborn branch says so. Capped so the argument stays far below the
+// command-line limit of the smallest platform; a first line that long is not a subject.
+const REFLOG_SUBJECT_MAX_CODE_POINTS = 1_024;
+
+function commitReflogMessage(head: GitHeadState, message: string): string {
+  const subject = Array.from(message.split("\n")[0] ?? "")
+    .slice(0, REFLOG_SUBJECT_MAX_CODE_POINTS)
+    .join("");
+  return `commit${head.kind === "born" ? "" : " (initial)"}: ${subject}`;
+}
+
+async function updateBoundCommitRef(
+  ctx: RunContext,
+  branch: string,
+  head: GitHeadState,
+  commit: string,
+  message: string,
+): Promise<GitDeliveryExecutionResult> {
+  const oldValue = head.kind === "born" ? head.sha : gitZeroObjectId(head.objectIdLength);
+  const result = await runOne(
+    ctx,
+    ["update-ref", "--no-deref", "-m", commitReflogMessage(head, message), "--stdin"],
+    `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
+  );
+  let landedAfterFailure = false;
+  if (result.exitCode !== 0) {
+    const failed = await classifyRefUpdateFailure(ctx, branch, head, commit);
+    if (failed !== undefined) return failed;
+    landedAfterFailure = true;
+  }
+  await removeCommitState(ctx);
+  // The success carries a closed note, so a late Git error is never invisible to the person.
+  return executionResult("succeeded", result.durationMs, {
+    externalId: commit,
+    ...(landedAfterFailure ? { completionNote: "recorded-despite-late-error" as const } : {}),
+  });
+}
+
+// `update-ref` follows a symref by default, and with an expected old value it only verifies the
+// resolved value, so every final update runs with `--no-deref` (it can never move a symref's target),
+// and a symbolic destination is refused from the reads the lane already makes right before the update
+// (the branch read of a born commit) and after a failed update (the re-read of the tip).
+// A non-zero `update-ref` is a conflict only when the branch really is not at the value the commit
+// was built on; a held ref lock or any other Git failure leaves it there and is a plain failure of
+// the command (its exit class only, never its text), as the plain lane reports it.
+//
+// A branch that already names the commit just written means the update landed although the command
+// reported failure (a late failure after the ref was written): the commit exists on the branch and a
+// retry would duplicate it, so it is a success (`undefined`), and the late failure is recorded as the
+// closed cause `landed-after-failure` rather than hidden.
+async function classifyRefUpdateFailure(
+  ctx: RunContext,
+  branch: string,
+  head: GitHeadState,
+  commit: string,
+): Promise<GitDeliveryExecutionResult | undefined> {
+  const facts = await readGitBranchRefFacts(commitReadDeps(ctx), branch);
+  if (facts.symbolic) return reportCommitRefusal(ctx, "ref-symbolic");
+  const tip = facts.tip;
+  if (tip === commit) {
+    reportCommitRefusal(ctx, "landed-after-failure");
+    return undefined;
+  }
+  const expected = head.kind === "born" ? head.sha : undefined;
+  if (tip !== expected) return reportCommitRefusal(ctx, "ref-moved", undefined, "conflict");
+  return reportCommitRefusal(ctx, "git-command-failed");
+}
+
+// A successful `git commit` removes the merge and squash message state it consumed. A failure to
+// remove it never replaces the success: it is reported through the cleanup port.
+async function removeCommitState(ctx: RunContext): Promise<void> {
+  try {
+    const stayed = await removeGitCommitState(
+      ctx.runDeps.workspace.root,
+      ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+      ctx.removePath,
+    );
+    if (stayed > 0) reportCommitStateLeft(ctx, stayed);
+  } catch (error) {
+    // The state of the repository could not even be examined: one unit stayed unproven, and the
+    // report carries the error for the log port's structured failure fields.
+    reportCommitStateLeft(ctx, 1, error);
+  }
+}
+
+function reportCommitStateLeft(ctx: RunContext, stateFiles: number, error?: unknown): void {
+  ctx.onCleanupIncomplete?.({
+    ...(error === undefined ? {} : { error }),
+    caller: "commit-state",
+    quarantines: 0,
+    temporaryIndex: false,
+    lock: false,
+    descriptors: 0,
+    refLocks: 0,
+    directories: 0,
+    stateFiles,
+  });
+}
+
+// The decisions that commit exactly as Git would, with neither `--gpg-sign` nor `--no-gpg-sign`.
+const UNSIGNED_SIGNING_DECISIONS: ReadonlySet<GitCommitSigningDecision> = new Set([
+  "not-configured",
+  "not-configured-protection-unavailable",
+]);
+
+async function checkoutStillPrepared(ctx: RunContext): Promise<boolean> {
+  if (ctx.preparedCheckout === undefined) return true;
+  return (await readGitCheckoutBranch(commitReadDeps(ctx))) === ctx.preparedCheckout.branchName;
+}
+
+interface CommitSigningRead {
+  readonly decision: GitCommitSigningDecision;
+  readonly failure?: GitCommitSigningReadFailureReport;
+}
+
+class GitSigningReadError extends Error {
+  public readonly readFailure: GitCommitSigningReadFailure;
+
+  public constructor(readFailure: GitCommitSigningReadFailure) {
+    super(`git-signing-read-${readFailure}`);
+    this.name = "GitSigningReadError";
+    this.readFailure = readFailure;
+  }
+}
+
+function failedSigningRead(
+  readFailure: GitCommitSigningReadFailure,
+  error: unknown = new GitSigningReadError(readFailure),
+): CommitSigningRead {
+  return { decision: "unknown-fail-closed", failure: { readFailure, error } };
+}
+
+// The signing decision (ADR-0006). Git's effective `commit.gpgsign` read as a Git boolean through
+// the identity lane the commit itself runs in (system, global, repository and included scopes):
+// true signs; unset or false means the person has not asked for signing, so the commit is made
+// exactly as Git would make it, unless the trusted branch-protection verdict for the target branch
+// requires signatures, which signs it too. A failed, cut-short or malformed read fails closed toward
+// the strict behaviour: the commit attempts to sign, so any failure stays a visible
+// `signature-failed`, and the cause is reported through the injected port.
+async function readCommitSigning(ctx: RunContext): Promise<CommitSigningRead> {
+  const configured = await readConfiguredCommitSigning(ctx);
+  if (configured.failure !== undefined) ctx.onSigningReadFailure?.(configured.failure);
+  if (configured.decision !== "not-configured") return configured;
+  const protection = await ctx.signingRequiredByBranchProtection?.();
+  if (protection === true) return { decision: "required-by-branch-protection" };
+  return protection === "unavailable"
+    ? { decision: "not-configured-protection-unavailable" }
+    : configured;
+}
+
+function readConfiguredCommitSigning(ctx: RunContext): Promise<CommitSigningRead> {
+  const runDeps = { ...ctx.runDeps, commandRules: GIT_CONFIG_COMMAND_RULES };
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
+  // A read that throws (spawn failure, denial, timeout, cancellation) is not swallowed: its closed
+  // class and the error itself travel with the decision to the injected port, and the commit that
+  // follows attempts to sign (a cancellation is reported by that commit as an abort).
+  return runCommand(
+    {
+      command: "git",
+      args: ["config", "--type=bool", "--get", "commit.gpgsign"],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
+    runDeps,
+  ).then(commitSigningOfConfigRead, signingReadRejected);
+}
+
+function signingReadRejected(error: unknown): CommitSigningRead {
+  if (error instanceof CommandTimeoutError) return failedSigningRead("timeout", error);
+  if (error instanceof CommandCancelledError) return failedSigningRead("cancelled", error);
+  if (error instanceof CommandDeniedError) return failedSigningRead("denied", error);
+  return failedSigningRead("spawn", error);
+}
+
+const MALFORMED_CONFIG_PATTERN = /bad (?:boolean )?config (?:value|line)|bad numeric config/iu;
+
+function commitSigningOfConfigRead(result: CommandResult): CommitSigningRead {
+  if (result.truncated) return failedSigningRead("truncated");
+  if (result.exitCode === 1) return { decision: "not-configured" };
+  if (result.exitCode !== 0) {
+    return failedSigningRead(MALFORMED_CONFIG_PATTERN.test(result.stderr) ? "malformed" : "exit");
+  }
+  const value = result.stdout.trim();
+  if (value === "true") return { decision: "configured" };
+  return value === "false" ? { decision: "not-configured" } : failedSigningRead("malformed");
 }
 
 function commitReadDeps(
   ctx: RunContext,
 ): import("./git-worktree-snapshot-node.js").NodeGitWorktreeReaderDeps {
-  return { ...ctx.runDeps, signal: ctx.signal, timeoutMs: ctx.timeoutMs };
+  return {
+    ...ctx.runDeps,
+    signal: ctx.signal,
+    timeoutMs: ctx.timeoutMs,
+    readSession: ctx.readSession,
+  };
 }
 
 type VerifiedCommitExecRequest = GitCommitExecRequest & {
   readonly verified: NonNullable<GitCommitExecRequest["verified"]>;
 };
+
+function validRevisionState(state: GitHeadState): boolean {
+  if (state.kind === "born") return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(state.sha);
+  return isSafeGitRefName(state.branch);
+}
 
 function validVerifiedOperands(
   request: GitCommitExecRequest,
@@ -460,8 +1219,13 @@ function validVerifiedOperands(
   const v = request.verified;
   if (v === undefined) return false;
   return [
-    /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(v.headSha),
-    /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(v.baseSha),
+    validRevisionState(v.head),
+    validRevisionState(v.base),
+    // An unborn head is the branch being committed to. An unborn base is the base the run names:
+    // the same branch, or the protected branch a task branch was cut from, which stays unborn
+    // while the task branch gains commits (#4491).
+    v.head.kind === "born" || v.head.branch === v.branchName,
+    v.base.kind === "born" || v.base.branch === v.baseRef,
     /^[a-f0-9]{64}$/u.test(v.stagedTreeDigest),
     isSafeGitRefName(v.branchName),
     isSafeGitRefName(v.baseRef),
@@ -485,25 +1249,54 @@ class GitObjectCommandFailure extends Error {
 async function verifiedFactsMatch(
   ctx: RunContext,
   request: Pick<GitCommitExecRequest, "verified">,
+  onSymbolic?: () => void,
 ): Promise<boolean> {
   const expected = request.verified;
   if (expected === undefined || ctx.signal.aborted || ctx.beforeCommitRefUpdate?.() === false)
     return false;
   const deps = commitReadDeps(ctx);
-  const headSha = await readGitRevision(deps, "HEAD");
-  const branch = await readGitFullRef(deps, "HEAD");
+  // A head that was unborn and is born now (or the reverse) is drift like any moved head: the
+  // comparison is on the whole state, branch included.
+  const head = await readGitHeadState(deps);
+  const branch =
+    head.kind === "unborn"
+      ? head.branch
+      : await bornBranchName(deps, expected.branchName, onSymbolic);
   const indexDigest = await readGitIndexTreeDigest(deps);
-  const baseSha = await readGitRevision(deps, expected.baseRef);
+  // The review-time fact is the record: a base that was never born then may still be absent now.
+  const base = await readGitBaseState(
+    deps,
+    expected.baseRef,
+    head,
+    expected.base.kind === "unborn",
+  );
   return (
-    headSha === expected.headSha &&
-    branch === `refs/heads/${expected.branchName}` &&
+    sameGitHeadState(head, expected.head) &&
+    branch === expected.branchName &&
     indexDigest === expected.stagedTreeDigest &&
-    baseSha === expected.baseSha
+    sameGitHeadState(base, expected.base)
   );
 }
 
-async function checkedObjectCommand(ctx: RunContext, argv: readonly string[]): Promise<string> {
-  const result = await runOne(ctx, argv);
+// The branch a born HEAD is on, as the comparison with the reviewed branch needs it. One
+// `for-each-ref` of the reviewed branch answers whether HEAD resolves to it (then it is that branch)
+// and whether it is a symbolic ref, which a commit never moves (`onSymbolic` reports it).
+async function bornBranchName(
+  deps: NodeGitWorktreeReaderDeps,
+  reviewed: string,
+  onSymbolic: (() => void) | undefined,
+): Promise<string | undefined> {
+  const facts = await readGitBranchRefFacts(deps, reviewed);
+  if (facts.symbolic) onSymbolic?.();
+  return facts.present && facts.head && !facts.symbolic ? reviewed : undefined;
+}
+
+async function checkedObjectCommand(
+  ctx: RunContext,
+  argv: readonly string[],
+  stdin?: string | Uint8Array,
+): Promise<string> {
+  const result = await runOne(ctx, argv, stdin);
   const objectId = result.stdout.trim();
   if (
     result.exitCode !== 0 ||
@@ -523,18 +1316,24 @@ interface PreparedVerifiedCommit {
 async function prepareVerifiedCommit(
   ctx: RunContext,
   request: VerifiedCommitExecRequest,
+  sign: boolean,
 ): Promise<PreparedVerifiedCommit | undefined> {
-  if (!(await verifiedFactsMatch(ctx, request))) return undefined;
+  if (!(await verifiedFactsMatch(ctx, request, symbolicRefusal(ctx)))) return undefined;
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
   const deps = commitReadDeps(ctx);
-  const baseRef = await readGitFullRef(deps, request.verified.baseRef);
+  // An unborn base has no ref to resolve yet; its full name is the branch's own.
+  const baseRef =
+    request.verified.base.kind === "unborn"
+      ? `refs/heads/${request.verified.base.branch}`
+      : await readGitFullRef(deps, request.verified.baseRef);
   if ((await readGitTreeDigest(deps, tree)) !== request.verified.stagedTreeDigest) return undefined;
+  // The first commit of an unborn branch is a root commit: no parent.
+  const parent = request.verified.head.kind === "born" ? ["-p", request.verified.head.sha] : [];
   const head = await checkedObjectCommand(ctx, [
     "commit-tree",
     tree,
-    "-S",
-    "-p",
-    request.verified.headSha,
+    ...(sign ? ["-S"] : []),
+    ...parent,
     "-m",
     request.message,
   ]);
@@ -551,10 +1350,19 @@ function verifiedCommitRefTransaction(
   prepared: PreparedVerifiedCommit,
 ): string | undefined {
   const branchRef = `refs/heads/${verified.branchName}`;
-  const update = `update ${branchRef} ${prepared.head} ${verified.headSha}\n`;
-  if (prepared.baseRef !== branchRef)
-    return `start\nverify ${prepared.baseRef} ${verified.baseSha}\n${update}prepare\ncommit\n`;
-  return verified.baseSha === verified.headSha ? `start\n${update}prepare\ncommit\n` : undefined;
+  // An unborn branch is created with the all-zero old value, so a branch that appeared since the
+  // review fails the compare-and-swap instead of being overwritten.
+  const update =
+    verified.head.kind === "born"
+      ? `update ${branchRef} ${prepared.head} ${verified.head.sha}\n`
+      : `update ${branchRef} ${prepared.head} ${gitZeroObjectId(verified.head.objectIdLength)}\n`;
+  if (prepared.baseRef !== branchRef) {
+    // An unborn base (the protected branch a task branch was cut from, #4491) must still not exist.
+    return `start\nverify ${prepared.baseRef} ${gitHeadStateObjectId(verified.base)}\n${update}prepare\ncommit\n`;
+  }
+  return sameGitHeadState(verified.base, verified.head)
+    ? `start\n${update}prepare\ncommit\n`
+    : undefined;
 }
 
 async function updateVerifiedCommitRef(
@@ -564,7 +1372,7 @@ async function updateVerifiedCommitRef(
 ): Promise<GitDeliveryExecutionResult> {
   const transaction = verifiedCommitRefTransaction(request.verified, prepared);
   if (transaction === undefined) return failureFromExit(0, 0);
-  const result = await runOne(ctx, ["update-ref", "--stdin"], transaction);
+  const result = await runOne(ctx, ["update-ref", "--no-deref", "--stdin"], transaction);
   if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
   return executionResult("succeeded", result.durationMs, { externalId: prepared.head });
 }
@@ -587,11 +1395,12 @@ function failureFromVerifiedCommitError(
 async function execVerifiedCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
+  sign: boolean,
 ): Promise<GitDeliveryExecutionResult> {
   if (!validVerifiedOperands(request)) return failureFromExit(0, 0);
   let refAttempted = false;
   try {
-    const prepared = await prepareVerifiedCommit(ctx, request);
+    const prepared = await prepareVerifiedCommit(ctx, request, sign);
     if (prepared === undefined) return failureFromExit(0, 0);
     refAttempted = true;
     return await updateVerifiedCommitRef(ctx, request, prepared);
@@ -600,11 +1409,19 @@ async function execVerifiedCommit(
   }
 }
 
+function symbolicRefusal(ctx: RunContext): () => void {
+  return () => {
+    reportCommitRefusal(ctx, "ref-symbolic");
+  };
+}
+
 async function verifiedEffectReady(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<boolean> {
-  return (await verifiedFactsMatch(ctx, request)) && commitEffectAuthorized(ctx);
+  return (
+    (await verifiedFactsMatch(ctx, request, symbolicRefusal(ctx))) && commitEffectAuthorized(ctx)
+  );
 }
 
 function commitEffectAuthorized(ctx: RunContext): boolean {
@@ -619,12 +1436,111 @@ async function createdCommitMatches(
   const expected = request.verified;
   if (expected === undefined) return false;
   const actual = await readGitCommitIdentity(commitReadDeps(ctx), head);
+  // Exactly the reviewed parent: one for a born head, none for the root commit of an unborn one.
+  const parents = expected.head.kind === "born" ? [expected.head.sha] : [];
   return (
-    actual.parentShas.length === 1 &&
-    actual.parentShas[0] === expected.headSha &&
+    actual.parentShas.length === parents.length &&
+    actual.parentShas.every((sha, index) => sha === parents[index]) &&
     actual.treeDigest === expected.stagedTreeDigest &&
     actual.messageDigest === gitCommitMessageDigest(request.message)
   );
+}
+
+// A branch from an unborn HEAD re-points HEAD instead of branching from a commit. The unborn state
+// and the absence of the new branch are proved again right before the write, while Git's own lock on
+// the old and the new branch is held: a commit or branch another process creates meanwhile fails on
+// that lock instead of being switched away from or onto. A state that cannot be proved, or a lock
+// that cannot be taken, writes nothing.
+async function execUnbornBranch(
+  ctx: RunContext,
+  req: GitBranchCreateExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  const fromBranch = req.fromUnbornBranch;
+  if (fromBranch === undefined) return failureFromExit(0, 0);
+  try {
+    return await withGitBranchRefLocks(
+      ctx.runDeps.workspace.root,
+      [fromBranch, req.branchName],
+      async () => {
+        const deps = commitReadDeps(ctx);
+        const head = await readGitHeadState(deps);
+        if (head.kind !== "unborn" || head.branch !== fromBranch) return failureFromExit(0, 0);
+        const snapshot = await readGitWorktreeSnapshot(deps);
+        if (snapshot.existingLocalBranchNames.includes(req.branchName))
+          return failureFromExit(0, 0);
+        return await repointUnbornHead(ctx, fromBranch, req);
+      },
+      ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+      branchLockCleanupOptions(ctx),
+    );
+  } catch (error) {
+    return failureFromUnbornBranchThrow(error);
+  }
+}
+
+// The cleanup of the branch ref locks and of HEAD.lock reaches the adapter's cleanup port.
+function branchLockCleanupOptions(ctx: RunContext): GitCleanupOptions<GitRefLockCleanupReport> {
+  return {
+    ...(ctx.removePath === undefined ? {} : { removePath: ctx.removePath }),
+    onCleanupFailure: (report) =>
+      ctx.onCleanupIncomplete?.({
+        caller: "branch-ref-lock",
+        quarantines: 0,
+        temporaryIndex: false,
+        lock: false,
+        stateFiles: 0,
+        ...report,
+      }),
+  };
+}
+
+// HEAD is re-pointed under Git's own HEAD.lock with the expected old symbolic value checked while
+// the lock is held, so an ordinary checkout of another branch between the proof and this write is
+// refused instead of overwritten (the branch ref locks do not cover HEAD itself). The live authority
+// is re-proved immediately before the write; a name Git would not accept writes nothing.
+async function repointUnbornHead(
+  ctx: RunContext,
+  fromBranch: string,
+  req: GitBranchCreateExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  if (!isSafeGitRefName(req.branchName) || !commitEffectAuthorized(ctx))
+    return failureFromExit(0, 0);
+  const startedAtMs = ctx.runDeps.now();
+  await repointSymbolicHead(
+    ctx.runDeps.workspace.root,
+    fromBranch,
+    req.branchName,
+    ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+    // The live authority is asked again after the metadata is resolved, after the old value is
+    // proved and immediately before the publication: a Stop during any await writes nothing.
+    { ...branchLockCleanupOptions(ctx), authorize: () => commitEffectAuthorized(ctx) },
+  );
+  return executionResult("succeeded", ctx.runDeps.now() - startedAtMs);
+}
+
+// Nothing was written when the lock or a state read throws. A branch ref lock another process holds
+// is a `conflict`; a lock that cannot be created or a state that cannot be read or proved is
+// `precondition-failed`; a timeout or cancellation keeps its own closed result; any other throw
+// (a denied command, an argv fault) is an internal error, never a statement about the repository.
+export function failureFromUnbornBranchThrow(error: unknown): GitDeliveryExecutionResult {
+  if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
+    return failureFromThrow(error, 0, 0);
+  const message = error instanceof Error ? error.message : undefined;
+  // The run's authority lapsed (a Stop) while HEAD was being re-pointed: nothing was written.
+  if (message === GIT_HEAD_AUTHORITY_LAPSED) return executionResult("aborted", 0);
+  if (message === GIT_REF_LOCK_HELD || message === GIT_HEAD_CHANGED)
+    return failureFromExit(0, 0, "conflict");
+  const unproven = error instanceof GitWorktreeReadFailure || message === GIT_REF_LOCK_UNAVAILABLE;
+  return unproven ? failureFromExit(0, 0, "precondition-failed") : failureFromThrow(error, 0, 0);
+}
+
+function execBranchCreate(
+  ctx: RunContext,
+  req: GitBranchCreateExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  return req.fromUnbornBranch === undefined
+    ? execPlan(ctx, () => buildBranchCreateArgv(req))
+    : execUnbornBranch(ctx, req);
 }
 
 // Builds the argv plan, then runs it. A builder throw (invalid operand) is an internal error that
@@ -677,19 +1593,34 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     timeoutMs: deps.timeoutMs,
     beforeCommitRefUpdate: deps.beforeCommitRefUpdate,
     beforeIndexUpdate: deps.beforeIndexUpdate,
+    preparedCheckout: deps.preparedCheckout,
+    metadataFs: deps.metadataFs,
+    readSession: deps.readSession,
+    signingRequiredByBranchProtection: deps.signingRequiredByBranchProtection,
+    onSigningReadFailure: deps.onSigningReadFailure,
+    onCleanupIncomplete: deps.onCleanupIncomplete,
+    onCommitRefused: deps.onCommitRefused,
+    removePath: deps.removePath,
   };
 }
+
+/**
+ * What a verified staging of `paths` can do: `supported`, or the one closed cause it refuses for
+ * (the first found, in the order configuration, filter driver, attribute rule, file content).
+ */
+export type GitStageSupport = "supported" | CodingRuntimeGitStageCause;
 
 export async function readGitStageSupport(
   deps: NodeGitMutationAdapterDeps,
   paths: readonly string[],
   fs?: WorkspaceFs,
-): Promise<boolean> {
+): Promise<GitStageSupport> {
   const ctx = buildRunContext(deps);
   // One configuration read for the whole admission; a driver that cannot be neutralized refuses
   // here as an unsupported transformation instead of failing a hash (PR #4568 audit).
   const config = await readStageConfig(ctx);
-  if (config === undefined || !filterDriversOverridable(config.filterDrivers)) return false;
+  if (config === undefined) return "config-unsupported";
+  if (!filterDriversOverridable(config.filterDrivers)) return "filter-driver";
   const { lineEndings, filterDrivers } = config;
   const effect: GitStageEffectContext = {
     workspaceRoot: deps.workspace.root,
@@ -697,27 +1628,66 @@ export async function readGitStageSupport(
     authorized: () => !ctx.signal.aborted,
     check: () => Promise.resolve(!ctx.signal.aborted),
     filterDriverNames: () => Promise.resolve(filterDrivers),
-    run: (argv, stdin) => runOne(ctx, argv, stdin),
+    signal: ctx.signal,
+    run: (argv, stdin, _indexPath, timeoutMs) => runOne(ctx, argv, stdin, timeoutMs),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
-  return (
-    (await gitStageAttributesSupported(effect, paths)) &&
-    (await gitStageFilesSupported(effect, paths, lineEndings))
-  );
+  const attribute = await gitStageAttributeRefusal(effect, paths);
+  if (attribute !== undefined) return attribute;
+  return (await gitStageFilesSupported(effect, paths, lineEndings))
+    ? "supported"
+    : "content-conversion";
 }
 
+/**
+ * The raw reader's staged-object port (#4491): what Git's staging would store for a file's bytes,
+ * computed by the very conversion the verified staging uses (`gitStagedObjectIdOf`), under the same
+ * governed lane, effective `core.autocrlf` and filter-driver neutralisation. It writes no object and
+ * never touches the index, so "staged as X" and "the working tree reads as X" agree.
+ */
+export function createGitStagedObjectIdPort(
+  deps: NodeGitWorktreeReaderDeps,
+): GitStagedObjectIdPort {
+  const ctx = buildRunContext({ ...deps, policy: deps.policy });
+  return async (files, stats) => {
+    const config = await readStageConfig(ctx);
+    if (config === undefined) return "config-unreadable";
+    const effect: GitStageEffectContext = {
+      workspaceRoot: deps.workspace.root,
+      fs: workspaceFsOf(ctx.runDeps),
+      authorized: () => !ctx.signal.aborted,
+      check: () => Promise.resolve(!ctx.signal.aborted),
+      filterDriverNames: () => Promise.resolve(config.filterDrivers),
+      signal: ctx.signal,
+      run: (argv, stdin, _indexPath, timeoutMs) => {
+        if (!gitStagedObjectPortArgvAllowed(argv)) throw new Error("git-staged-object-port-denied");
+        return runOne(ctx, argv, stdin, timeoutMs);
+      },
+      indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
+    };
+    return gitStagedObjectIdOf(effect, config.lineEndings, files, stats);
+  };
+}
+
+/**
+ * The adapter's operations each run in a Git read session of their own unless the caller scopes one
+ * (`deps.readSession`, a caller that owns one logical operation): the promisor probe that guards
+ * every governed Git process runs once per operation instead of once per process, and the session
+ * ends with the operation, so an earlier verdict never authorizes a later, riskier one (#4491).
+ */
 export function createNodeGitMutationAdapter(
   deps: NodeGitMutationAdapterDeps,
 ): GitLocalMutationAdapter {
-  const ctx = buildRunContext(deps);
+  const scoped = (): RunContext =>
+    buildRunContext({ ...deps, readSession: deps.readSession ?? createGitReadSession() });
   return {
-    createBranch: (req) => execPlan(ctx, () => buildBranchCreateArgv(req)),
-    switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
-    stage: (req) => execStage(ctx, req),
-    unstage: (req) => execUnstage(ctx, req),
-    commit: (req) => execCommit(ctx, req),
-    abort: (req) => execPlan(ctx, () => buildAbortArgv(req)),
-    recover: (req) => execPlan(ctx, () => buildRecoveryArgv(req)),
+    createBranch: (req) => execBranchCreate(scoped(), req),
+    switchBranch: (req) => execPlan(scoped(), () => buildBranchSwitchArgv(req)),
+    stage: (req) => execStage(scoped(), req),
+    unstage: (req) => execUnstage(scoped(), req),
+    commit: (req) => execCommit(scoped(), req),
+    abort: (req) => execPlan(scoped(), () => buildAbortArgv(req)),
+    recover: (req) => execPlan(scoped(), () => buildRecoveryArgv(req)),
   };
 }
 
@@ -735,14 +1705,27 @@ export {
   readGitTreeEntries,
   readGitUntrackedPaths,
   readGitBlobText,
+  readGitBlobTextWithin,
+  readGitBlobTextsWithin,
+  type GitReadFailureReason,
   readGitCommitIdentity,
   readGitRevision,
+  readGitLocalBranchTip,
+  readGitHeadState,
+  readGitBaseState,
+  readGitObjectIdLength,
   readGitTreeDigest,
   readGitWorktreeSnapshot,
   readGitStagedDiff,
+  readGitStagedChangeSummary,
+  type GitStagedChangeEntry,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
+  createGitReadSession,
   type NodeGitWorktreeReaderDeps,
+  type GitReadSession,
+  type GitStagedObjectIdPort,
+  type GitStagedConversionEvidence,
 } from "./git-worktree-snapshot-node.js";
 export { readGitStageCandidate } from "./git-stage-node.js";
 export { gitCommitMessageDigest } from "./git-index-identity.js";
@@ -811,10 +1794,23 @@ export {
 export {
   GitRawWorktreeReadError,
   readGitRawWorktreeSnapshot,
+  readGitRawWorktreeSnapshotAtHead,
   readGitRawChanges,
+  readGitRawChangesAtHead,
+  type GitRawChangesAtHead,
 } from "./git-raw-worktree-node.js";
 
+export {
+  gitHeadStateObjectId,
+  gitZeroObjectId,
+  isGitZeroObjectId,
+  sameGitHeadState,
+  type GitHeadState,
+  type GitObjectIdLength,
+} from "./git-head-state.js";
+
 export { gitBlobObjectId } from "./git-index-identity.js";
+export { blobIdOfLargeFile } from "./git-stage-stream.js";
 
 export type { GitCiProviderReader, GitCiFactsResult, GitCiProviderFacts } from "./git-ci-facts.js";
 

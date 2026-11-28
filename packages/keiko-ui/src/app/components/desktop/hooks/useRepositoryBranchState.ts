@@ -50,7 +50,7 @@ function isOrdinaryFolder(state: BranchReadState): boolean {
 
 function currentBranchOf(response: GitBranchListResponse | null): string | null {
   if (response?.available !== true) return null;
-  return response.branches.find((branch) => branch.current)?.name ?? null;
+  return response.branches.find((branch) => branch.current)?.name ?? response.unbornBranch ?? null;
 }
 
 function useRepositoryInvalidation(root: string | null, refresh: () => Promise<void>): void {

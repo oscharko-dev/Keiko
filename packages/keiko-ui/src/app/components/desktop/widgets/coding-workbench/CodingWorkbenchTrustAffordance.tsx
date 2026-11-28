@@ -278,7 +278,9 @@ function TrustRestrictedNotice({
 }): ReactNode {
   return (
     <div className={styles["cmp-trust-notice"]} data-testid="coding-workbench-trust-affordance">
-      <span className={styles["cmp-trust-notice-text"]}>{notice}</span>
+      <span className={styles["cmp-trust-notice-text"]} role="alert">
+        {notice}
+      </span>
       <button
         type="button"
         className={styles.button}

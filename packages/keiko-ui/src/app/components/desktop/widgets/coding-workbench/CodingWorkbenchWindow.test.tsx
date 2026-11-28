@@ -11,13 +11,13 @@ import {
   startsShown,
 } from "./_restoredConversationTestSupport";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { SELECTION_MISMATCH_ERROR_CODE } from "@/lib/coding-workbench-runtime-mutations";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import * as reportApi from "@/lib/support-report-api";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
@@ -43,12 +43,19 @@ import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbench
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
 import {
+  codingWorkbenchSourceFromManaged,
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import type { FilesSearchResponse, ProjectWithAvailability } from "@/lib/types";
+import { sessionCatalogState } from "../../hooks/useChatSession";
+import type {
+  FilesSearchResponse,
+  GatewayReadinessReport,
+  ProjectWithAvailability,
+} from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import {
+  boundCheckoutBranch,
   CodingWorkbenchWindow,
   newTaskReferenceRoot,
   sessionGrowthKey,
@@ -69,6 +76,7 @@ import {
   loadLocaleMessages,
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
+import { PROBE_TIMED_OUT_WARNING } from "@oscharko-dev/keiko-contracts/bff-wire";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { ConnectorWindowsProvider } from "../../connector-windows-context";
 import {
@@ -206,20 +214,30 @@ vi.mock("./useCodingTaskSession", () => ({
 // Binding and restoration are covered by the execution-location hook's focused suite. Keep this
 // presentation suite on an already verified checkout so a network-free fixture stays startable.
 const locationInputs = vi.hoisted(
-  () => [] as { readonly folderMode: boolean; readonly location: string }[],
+  () =>
+    [] as {
+      readonly folderMode: boolean;
+      readonly location: string;
+      readonly locationsPending: boolean | undefined;
+    }[],
 );
 vi.mock("./useWorkbenchExecutionLocation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./useWorkbenchExecutionLocation")>()),
   useWorkbenchExecutionLocation: (input: {
     readonly folderMode: boolean;
     readonly location: string;
+    readonly locationsPending?: boolean | undefined;
   }): {
     ready: boolean;
     pending: boolean;
     error: boolean;
     retry: () => void;
   } => {
-    locationInputs.push({ folderMode: input.folderMode, location: input.location });
+    locationInputs.push({
+      folderMode: input.folderMode,
+      location: input.location,
+      locationsPending: input.locationsPending,
+    });
     return { ready: true, pending: false, error: false, retry: vi.fn() };
   },
 }));
@@ -233,6 +251,7 @@ function defaultTaskSession(): CodingTaskSession {
     error: false,
     newTask: vi.fn(),
     finish: vi.fn(),
+    retry: vi.fn(),
     fork: null,
     beginFork: vi.fn(),
     cancelFork: vi.fn(),
@@ -337,6 +356,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     setSelectedModel: vi.fn(),
     adoptModel: vi.fn(),
     setReasoningEffort: vi.fn(),
+    dismissRefusal: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),
@@ -879,12 +899,13 @@ describe("CodingWorkbenchWindow", () => {
       ];
     }
 
-    // #4491: a run whose changes were not checked names the gap and offers the check; the button
-    // starts the check through the composer's own start path, as the person's own request.
-    it("offers Run the check now on a not-verified run and starts the check as the person's request", () => {
+    // Follows the 2026-11-28 owner decision: a stored run of an older version (failed,
+    // verification-not-evidenced, no-check-run) carries no "Changes not checked" notice and no "Run
+    // the check now" button any more; it reads as the ordinary failed run with its gap sentence.
+    it("renders an older stored not-checked run without the notice and without a check button", () => {
       taskSessionHookMock.mockReturnValue(restoredSession());
       activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
-      const liveActions = renderWorkbench(
+      renderWorkbench(
         liveState({
           canStart: true,
           run: {
@@ -903,20 +924,13 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
-      const [card] = settledRows("Changes not checked");
+      const [card] = settledRows("Coding run failed");
       expect(card).toHaveTextContent("no check ran after the last change");
-      expect(card).not.toHaveTextContent("Coding run failed");
+      expect(screen.queryByText("Changes not checked")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
       expect(
         within(card as HTMLElement).queryByRole("button", { name: "Create error report" }),
       ).toBeNull();
-      fireEvent.click(
-        within(card as HTMLElement).getByRole("button", { name: "Run the check now" }),
-      );
-
-      expect(liveActions.start).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(liveActions.start).mock.calls[0]?.[0]).toBe(
-        "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
-      );
     });
 
     it("keeps the server's own activity projection while it is still held", () => {
@@ -1131,7 +1145,7 @@ describe("CodingWorkbenchWindow", () => {
         );
         expect(prompt).toBeLessThan(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
         // The line is the feed's, not one turn's: it falls beyond what one turn holds.
-        expect(fillers).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN);
+        expect(fillers * fillerChars).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES);
         const labels = [
           "P1",
           ...Array.from({ length: fillers }, (_, index) => `F${String(index + 1)}`),
@@ -1331,6 +1345,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
   });
 
@@ -1381,6 +1396,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Create one focused test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
   });
 
@@ -1500,6 +1516,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
 
     // The mutation queue starts the "start" mutation…
@@ -3020,6 +3037,61 @@ describe("CodingWorkbenchWindow", () => {
     expect(workspace.refresh).toHaveBeenCalledTimes(1);
   });
 
+  // U-39 audit: a refused start compares the checkout with the branch the BINDING holds, never with
+  // the base branch the person picked in the chip. Rendered through the window, so the wiring of the
+  // refusal's remembered branch is pinned, not only the helper.
+  describe("a start refused for the selection, after a pending base-branch pick", () => {
+    const refusedState = (): CodingWorkbenchRuntimeState =>
+      liveState({
+        mutation: {
+          status: "error",
+          kind: "start",
+          requestId: "req-mismatch",
+          error: { code: SELECTION_MISMATCH_ERROR_CODE, message: "redacted", retryable: false },
+        },
+      });
+
+    function renderRefusal(checkoutBranch: string): void {
+      const bound = activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko", {
+        taskBranch: "chore/mark-reviewed",
+      });
+      const workspace: ActiveWorkspaceApi = {
+        ...bound,
+        activeInstance:
+          bound.activeInstance === null ? null : { ...bound.activeInstance, baseBranch: "main" },
+      };
+      repositoryBranchHookMock.mockImplementation((root) => ({
+        root,
+        response: null,
+        loading: false,
+        error: null,
+        denied: false,
+        branches: [],
+        currentBranch: root === null ? null : checkoutBranch,
+        ordinaryFolder: false,
+        refresh: vi.fn(() => Promise.resolve()),
+      }));
+      runtimeHookMock.mockReturnValue({ state: refusedState(), actions: actions() });
+      render(
+        <ActiveWorkspaceProvider value={workspace}>
+          <CodingWorkbenchWindow selectedRoot="/repos/keiko" selectedBranch="develop" />
+        </ActiveWorkspaceProvider>,
+      );
+    }
+
+    it("does not blame an outside branch change while the checkout is on the bound branch", async () => {
+      renderRefusal("chore/mark-reviewed");
+      expect(await screen.findByText(/not the one Keiko had open for this start/u)).toBeVisible();
+      expect(screen.queryByText(/outside Keiko/u)).toBeNull();
+    });
+
+    it("names the branch the checkout moved to when it differs from the bound one", async () => {
+      renderRefusal("other");
+      expect(await screen.findByText(/changed to other outside Keiko/u)).toBeVisible();
+      expect(screen.queryByText(/not the one Keiko had open for this start/u)).toBeNull();
+    });
+  });
+
   it("follows the newest activity again once the person decides a changeset review", async () => {
     const user = userEvent.setup();
     const deny = vi.fn();
@@ -3055,6 +3127,86 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(deny).toHaveBeenCalledTimes(1);
     expect(scrollTop.value).toBe(1720);
+  });
+
+  // U-21: a file change held for the person's review travels over the editor bridge, so the run
+  // itself still reads `running` and its change-files call is `running` too. The row and the header
+  // must say what the run waits for, as they do for a held command or branch.
+  describe("a file change held for review (U-21)", (): void => {
+    const REVIEW = {
+      actionId: "action-1",
+      diff: { files: [], truncated: false, totalBytes: 0 },
+      deciding: false,
+      deliveryFailed: false,
+      deliveryFailure: null,
+    };
+
+    function renderHeld(tool: string, reviewPending: boolean): void {
+      editorBridgeHookMock.mockReturnValue({
+        pendingReview: reviewPending ? REVIEW : null,
+        approve: vi.fn(),
+        deny: vi.fn(),
+        retry: vi.fn(),
+        bridgeUnavailable: false,
+      });
+      const base = activityFeed();
+      activityHookMock.mockReturnValue({
+        ...IDLE_ACTIVITY,
+        status: "live",
+        feed: {
+          ...base,
+          turns: [
+            {
+              ...base.turns[0]!,
+              tools: [{ callId: "call-edit", tool, state: "running", occurredAt: AT }],
+            },
+          ],
+        },
+      });
+      renderWorkbench(
+        liveState({
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({ state: "running", runId: "run-1", revision: 4 }),
+          },
+          events: [],
+        }),
+      );
+    }
+
+    function rowTimers(): readonly HTMLElement[] {
+      return screen
+        .queryAllByRole("timer")
+        .filter((timer) => timer.dataset["testid"] !== "coding-runtime-elapsed");
+    }
+
+    it("reads waiting for approval, without a timer, and the header reads approval required", async (): Promise<void> => {
+      renderHeld("keiko_changeset_edit", true);
+
+      expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
+      expect(screen.queryByText("Running")).toBeNull();
+      expect(rowTimers()).toHaveLength(0);
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+        /^Approval required$/u,
+      );
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("keeps a change-files call running while no review is pending", (): void => {
+      renderHeld("keiko_changeset_edit", false);
+
+      expect(screen.queryByText("Waiting for approval")).toBeNull();
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
+      expect(rowTimers()).toHaveLength(1);
+    });
+
+    it("leaves another open call running beside a pending review", (): void => {
+      renderHeld("keiko_verification", true);
+
+      expect(screen.queryByText("Waiting for approval")).toBeNull();
+      expect(rowTimers()).toHaveLength(1);
+    });
   });
 
   // #3897 review: a native OpenCode edit ask names no supervised action kind and no command label;
@@ -3217,6 +3369,199 @@ describe("CodingWorkbenchWindow", () => {
     expect(
       screen.getByRole("list", { name: "Requested command, paths, or addresses" }).textContent,
     ).toBe("npm run build\n  && npm test");
+  });
+
+  // ADR-0124 D6: in Ask for approval the person decides about the command Approve runs.
+  function verificationAskState(): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "permission-verify-1",
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            actionKind: "verification-command",
+            commandLabel: "test",
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function verificationReview(
+    verificationPreview: NonNullable<
+      NonNullable<UseCodingWorkbenchApprovalReviewResult["review"]>["verificationPreview"]
+    >,
+    status: UseCodingWorkbenchApprovalReviewResult["status"] = "ready",
+  ): UseCodingWorkbenchApprovalReviewResult {
+    return {
+      status,
+      review: {
+        requestId: "permission-verify-1",
+        verificationPreview,
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult;
+  }
+
+  it("ADR-0124 D6: a governed verification card shows the command Keiko runs and passes axe", async () => {
+    approvalReviewHookMock.mockReturnValue(
+      verificationReview({ status: "commands", commands: ["mvn -B test"], truncated: true }),
+    );
+    renderWorkbench(verificationAskState());
+
+    expect(screen.getByRole("list", { name: "Commands Keiko runs" }).textContent).toBe(
+      "mvn -B test",
+    );
+    const card = screen.getByRole("group", { name: "What Approve runs" });
+    expect(card).toHaveTextContent("credentials are masked");
+    expect(card).toHaveTextContent("A very long command is cut");
+    expect(screen.queryByText(/remain hidden/u)).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it.each([
+    [
+      { status: "deferred", reason: "targeted-test" } as const,
+      "Keiko runs the tests for the changed file",
+    ],
+    [
+      { status: "deferred", reason: "package-selection" } as const,
+      "Keiko picks the package's test command",
+    ],
+    [
+      { status: "deferred", reason: "host-setup" } as const,
+      "depends on how this computer is set up",
+    ],
+    [{ status: "unavailable", reason: "preview-failed" } as const, "could not look up the command"],
+  ])(
+    "ADR-0124 D6: %j says so in a plain sentence and never blocks Approve",
+    (preview, sentence) => {
+      approvalReviewHookMock.mockReturnValue(verificationReview(preview));
+      renderWorkbench(verificationAskState());
+
+      expect(screen.getByRole("group", { name: "What Approve runs" })).toHaveTextContent(sentence);
+      expect(screen.queryByRole("list", { name: "Commands Keiko runs" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    },
+  );
+
+  it("ADR-0124 D6: Approve waits while the verification review loads and Deny stays available", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "loading",
+      review: null,
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult);
+    renderWorkbench(verificationAskState());
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  // U-27: the person approves a NAMED branch, never a bare "create a task branch" card.
+  function branchAskState(): CodingWorkbenchRuntimeState {
+    const base = verificationAskState();
+    const pending = base.run.value?.pendingPermission;
+    if (pending === undefined) throw new Error("expected a pending permission");
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            ...pending,
+            requestId: "permission-branch-1",
+            risk: "medium",
+            actionKind: "git-branch",
+            commandLabel: "branch",
+          },
+        }),
+      },
+    });
+  }
+
+  function branchReview(
+    gitBranch: { readonly branchName: string } | undefined,
+    status: UseCodingWorkbenchApprovalReviewResult["status"] = "ready",
+  ): UseCodingWorkbenchApprovalReviewResult {
+    return {
+      status,
+      review:
+        gitBranch === undefined
+          ? null
+          : {
+              requestId: "permission-branch-1",
+              gitBranch,
+              paths: [],
+              pathsTruncated: false,
+              fileCount: 0,
+              addedLines: 0,
+              deletedLines: 0,
+            },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult;
+  }
+
+  it("U-27: a task-branch approval names the branch in its title and body and passes axe", async () => {
+    approvalReviewHookMock.mockReturnValue(branchReview({ branchName: "refactor/retry-limit" }));
+    renderWorkbench(branchAskState());
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Create task branch refactor/retry-limit and switch to it",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Branch to create" })).toHaveTextContent(
+      "refactor/retry-limit",
+    );
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("U-27: Approve stays disabled while the branch name is not loaded, Deny stays", () => {
+    approvalReviewHookMock.mockReturnValue(branchReview(undefined, "loading"));
+    renderWorkbench(branchAskState());
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  it("U-27: Approve stays disabled when the ready review names no branch", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-branch-1",
+        // A valid review of another shape bound to this request: it names no branch.
+        verificationPreview: { status: "commands", commands: ["mvn -B test"], truncated: false },
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult);
+    renderWorkbench(branchAskState());
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
   });
 
   it("#3897: a native web ask names the internet and Full access, never the task workspace", () => {
@@ -3514,6 +3859,26 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
+  it("G-5: says line counts are unavailable instead of showing a silent zero", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/huge.txt"],
+        pathsTruncated: false,
+        fileCount: 1,
+        addedLines: 0,
+        deletedLines: 0,
+        countsUnavailable: true,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("Line counts are unavailable because a file is too large");
+  });
+
   it("#2802: marks a truncated file list instead of understating the blast radius", () => {
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
@@ -3532,6 +3897,82 @@ describe("CodingWorkbenchWindow", () => {
     const changes = screen.getByRole("group", { name: "Files this change would write" });
     expect(changes).toHaveTextContent("Only the first 1 of 9 files are listed.");
     expect(changes).toHaveTextContent("9");
+  });
+
+  // U-28: a directory stage binds hundreds of files. The card states the full count, lists the
+  // first fifty in a list the keyboard can scroll, and says how many it leaves out.
+  it("U-28: renders a 302-file stage review as a count, a bounded scrollable list and a remainder", async () => {
+    const paths = Array.from(
+      { length: 50 },
+      (_unused, at) => `src/m${String(at).padStart(3, "0")}.js`,
+    );
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths,
+        pathsTruncated: true,
+        fileCount: 302,
+        addedLines: 604,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("302");
+    expect(changes).toHaveTextContent("Only the first 50 of 302 files are listed.");
+    const list = within(changes).getByRole("list", { name: "Files this change would write" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(50);
+    expect(list).toHaveAttribute("tabindex", "0");
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  // U-28 audit: the card names the scope the model asked for, so "." never looks like a few
+  // hand-picked files and the operator sees it above a list that is cut at fifty.
+  it.each([
+    [["src", "test"], "Scope: src, test"],
+    [["."], "Scope: entire workspace (.)"],
+  ])("U-28: names the requested scope %j above the file list", async (requested, text) => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/a.js", "src/b.js"],
+        pathsTruncated: true,
+        requested,
+        fileCount: 302,
+        addedLines: 604,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    const scope = within(changes).getByText(text);
+    const list = within(changes).getByRole("list");
+    expect(scope.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("U-28: shows no scope line when the request is the listed files themselves", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/a.js"],
+        pathsTruncated: false,
+        requested: ["src/a.js"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+    expect(screen.queryByText(/^Scope:/u)).not.toBeInTheDocument();
   });
 
   // Workbench audit, 2026-09-03: a transient failure while the operator is deciding a file-edit
@@ -3717,6 +4158,18 @@ describe("CodingWorkbenchWindow", () => {
       expect(await axe(document.body)).toHaveNoViolations();
     },
   );
+
+  it("shows a staged rename as the old path, an arrow and the new path", () => {
+    const review = {
+      ...commitReview(),
+      paths: ["src/renamed.ts"],
+      renames: [{ path: "src/renamed.ts", from: "src/original.ts" }],
+    };
+    approvalReviewHookMock.mockReturnValue({ status: "ready", review, retry: vi.fn() });
+    renderWorkbench(commitApprovalState("supervised-coding"));
+    const files = screen.getByRole("group", { name: "Staged files for this commit" });
+    expect(files).toHaveTextContent("src/original.ts \u2192 src/renamed.ts");
+  });
 
   it.each([
     "missing-commit",
@@ -4157,6 +4610,72 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.getByText(/does not know whether the last action went through/)).toBeVisible();
     });
 
+    // U-22a: the card claimed the last action may have gone through even when the run never started
+    // a tool. The activity feed says so; when it cannot, the fail-safe wording stays.
+    function recoveryFeed(
+      toolCount: number,
+      over: { readonly feed?: object; readonly turn?: object; readonly toolState?: "denied" } = {},
+    ): AvailableCodingSafeActivityFeed {
+      const feed = activityFeed();
+      const [turn] = feed.turns;
+      if (turn === undefined) throw new Error("expected a turn");
+      const tools = Array.from({ length: toolCount }, (_, index) => ({
+        callId: `call-${String(index)}`,
+        tool: "workspace.read",
+        state: over.toolState ?? ("succeeded" as const),
+        occurredAt: AT,
+      }));
+      return {
+        ...feed,
+        truncated: false,
+        droppedEventCount: 0,
+        turns: [{ ...turn, truncated: false, tools, ...over.turn }],
+        ...over.feed,
+      };
+    }
+
+    const FAIL_SAFE = /does not know whether the last action went through/;
+    const RECORD_SHOWS_NONE = /activity record shows no action had started/;
+
+    it.each(["live", "recovery"] as const)(
+      "says the record shows no action when a complete feed is %s and holds no tool",
+      (status) => {
+        activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status, feed: recoveryFeed(0) });
+        renderWorkbench(recoveryState(false));
+        expect(screen.getByText(RECORD_SHOWS_NONE)).toBeVisible();
+      },
+    );
+
+    // A held pre-drop feed is not the run's record: only a live or recovering channel speaks.
+    it.each([
+      "idle",
+      "loading",
+      "paused",
+      "ended",
+      "unavailable",
+      "disconnected",
+      "offline",
+      "error",
+    ] as const)("keeps the fail-safe wording while the activity channel is %s", (status) => {
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status, feed: recoveryFeed(0) });
+      renderWorkbench(recoveryState(false));
+      expect(screen.getByText(FAIL_SAFE)).toBeVisible();
+    });
+
+    it.each([
+      ["a started tool", recoveryFeed(1)],
+      ["a denied call, which may have done partial work", recoveryFeed(1, { toolState: "denied" })],
+      ["no feed at all", null],
+      ["a shortened feed", recoveryFeed(0, { feed: { truncated: true } })],
+      ["dropped events", recoveryFeed(0, { feed: { droppedEventCount: 2 } })],
+      ["a shortened turn, which evicts calls", recoveryFeed(0, { turn: { truncated: true } })],
+      ["another run's feed", recoveryFeed(0, { feed: { runId: "run-2" } })],
+    ] as const)("keeps the fail-safe wording for %s", (_name, feed) => {
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
+      renderWorkbench(recoveryState(false));
+      expect(screen.getByText(FAIL_SAFE)).toBeVisible();
+    });
+
     it("offers the error report for the run that needs recovery", async () => {
       const runId = "run-272120967981827964065820685403290179367";
       const create = vi
@@ -4201,7 +4720,7 @@ describe("CodingWorkbenchWindow", () => {
       const liveActions = renderWorkbench(recoveryState(true));
       await user.type(screen.getByLabelText("Task instructions"), "Try again");
       await user.click(screen.getByRole("button", { name: "Retry as a fresh run" }));
-      expect(liveActions.retry).toHaveBeenCalledWith("Try again");
+      expect(liveActions.retry).toHaveBeenCalledWith("Try again", "/repo");
     });
   });
 
@@ -4235,6 +4754,7 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
   });
 
@@ -4916,7 +5436,7 @@ describe("Codex subscription sign-in surface", () => {
 // when Start arrived and keeps it for the run's life, so the composer chips, the session context
 // bar and the Git target must keep naming THAT workspace. Following the pointer instead labelled a
 // run in A with B's root and branch and opened B's Git — an invitation to act on the wrong tree.
-// #3390 wave: the header's "Allow package scripts for verification" affordance. It reads the SAME
+// #3390 wave: the header's "Trust this repository's build files" affordance. It reads the SAME
 // server-owned trust status the Editor's own trust surface reads, keyed on the bound repository —
 // the operator no longer has to already know the Editor's own command to unblock a run refused
 // WORKSPACE_TRUST_REQUIRED (2026-09-05 real run).
@@ -4937,7 +5457,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
 
     await user.click(
-      await screen.findByRole("button", { name: "Allow package scripts for verification" }),
+      await screen.findByRole("button", { name: "Trust this repository's build files" }),
     );
 
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
@@ -4980,7 +5500,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
 
     const action = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
+      name: "Trust this repository's build files",
     });
     expect(action).toBeEnabled();
     expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko");
@@ -5003,7 +5523,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     // Repository grant fires first while the repo is restricted...
     const repositoryAction = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
+      name: "Trust this repository's build files",
     });
     await user.click(repositoryAction);
     await waitFor(() =>
@@ -5014,7 +5534,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     // root. Granting it too clears the affordance — proving each grant target is accepted
     // independently rather than a single click masking the second decision.
     const worktreeAction = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
+      name: "Trust this repository's build files",
     });
     await user.click(worktreeAction);
     await waitFor(() =>
@@ -5022,7 +5542,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: /Allow package scripts/u }),
+        screen.queryByRole("button", { name: /Trust this repository's build files/u }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -5038,7 +5558,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", { name: /Allow package scripts/u }),
+      screen.queryByRole("button", { name: /Trust this repository's build files/u }),
     ).not.toBeInTheDocument();
   });
 
@@ -5047,7 +5567,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", { name: /Allow package scripts/u }),
+      screen.queryByRole("button", { name: /Trust this repository's build files/u }),
     ).not.toBeInTheDocument();
   });
 });
@@ -5114,6 +5634,13 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     });
   }
 
+  const IDLE_MUTATION_FIXTURE = {
+    status: "idle",
+    kind: null,
+    requestId: null,
+    error: null,
+  } as const;
+
   /** Start a run in workspace A, then move the singleton pointer to B while it is still live. */
   async function startInAThenSwitchToB(
     liveActions: CodingWorkbenchRuntimeActions,
@@ -5164,6 +5691,428 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
   }
 
+  // U-17: a run that creates and switches onto a task branch moves the checkout while it is still
+  // live; the composer's branch chip must follow at once, not only after the run settles.
+  describe("the branch chip while a run switches branch", () => {
+    const MOVED = "fix/zins-sup";
+
+    function branchFeed(
+      state: "succeeded" | "failed",
+      callIds: readonly string[] = ["call-branch"],
+    ): AvailableCodingSafeActivityFeed {
+      const feed = activityFeed();
+      const turn = feed.turns[0];
+      if (turn === undefined) throw new Error("fixture turn missing");
+      const branches = callIds.map((callId) => ({
+        callId,
+        tool: "keiko_git_branch",
+        state,
+        occurredAt: AT,
+      }));
+      return { ...feed, turns: [{ ...turn, tools: [...turn.tools, ...branches] }] };
+    }
+
+    function movedWorkspace(): ActiveWorkspaceApi {
+      return workspaceApi({ ...WORKSPACE_A, branch: MOVED });
+    }
+
+    function renderLive(
+      workspace: ActiveWorkspaceApi,
+      feed: AvailableCodingSafeActivityFeed,
+    ): ReactElement {
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
+      return (
+        <ActiveWorkspaceProvider value={workspace}>
+          <CodingWorkbenchWindow selectedRoot={undefined} />
+        </ActiveWorkspaceProvider>
+      );
+    }
+
+    function startLive(): void {
+      runtimeHookMock.mockReturnValue({
+        state: stateIn(WORKSPACE_A, { state: "running", runId: "run-1" }),
+        actions: actions(),
+      });
+    }
+
+    it("reads the workspace again on a successful branch move and shows the new branch", () => {
+      startLive();
+      const before = workspaceApi(WORKSPACE_A);
+      const view = render(renderLive(before, activityFeed()));
+      expect(document.body.textContent).toContain(WORKSPACE_A.branch);
+      expect(before.refresh).not.toHaveBeenCalled();
+
+      const after = movedWorkspace();
+      view.rerender(renderLive(after, branchFeed("succeeded")));
+
+      expect(after.refresh).toHaveBeenCalledTimes(1);
+      expect(document.body.textContent).toContain(MOVED);
+      expect(document.body.textContent).not.toContain(WORKSPACE_A.branch);
+    });
+
+    it("does not read the workspace again for a failed branch call", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
+      const after = workspaceApi(WORKSPACE_A);
+      view.rerender(renderLive(after, branchFeed("failed")));
+      expect(after.refresh).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain(WORKSPACE_A.branch);
+    });
+
+    // F1: a restored or replayed feed brings its past moves at once; they are already known.
+    it("reads nothing for moves a restored feed already holds", () => {
+      startLive();
+      const workspace = movedWorkspace();
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "idle", feed: null });
+      const view = render(
+        <ActiveWorkspaceProvider value={workspace}>
+          <CodingWorkbenchWindow selectedRoot={undefined} />
+        </ActiveWorkspaceProvider>,
+      );
+      view.rerender(renderLive(workspace, branchFeed("succeeded")));
+      view.rerender(renderLive(workspace, branchFeed("succeeded")));
+      expect(workspace.refresh).not.toHaveBeenCalled();
+    });
+
+    // F2: the feed's bound can evict a settled call in the update that adds the next one.
+    it("reads again when a new move replaces an evicted one under the same count", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), branchFeed("succeeded", ["old"])));
+      const after = movedWorkspace();
+      view.rerender(renderLive(after, branchFeed("succeeded", ["new"])));
+      expect(after.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    // F3: a read that reports no refresh is not repeated in a loop; the settle read follows.
+    it("does not loop on a refresh that reports false, and the settle read still follows", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
+      const failing = movedWorkspace();
+      vi.mocked(failing.refresh).mockResolvedValue(false);
+      view.rerender(renderLive(failing, branchFeed("succeeded")));
+      view.rerender(renderLive(failing, branchFeed("succeeded")));
+      expect(failing.refresh).toHaveBeenCalledTimes(1);
+
+      runtimeHookMock.mockReturnValue({
+        state: stateIn(WORKSPACE_A, { state: "failed", runId: "run-1" }),
+        actions: actions(),
+      });
+      view.rerender(renderLive(failing, branchFeed("succeeded")));
+      expect(failing.refresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the run's own branch when the pointer names another workspace", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
+      view.rerender(renderLive(workspaceApi(WORKSPACE_B), activityFeed()));
+      expect(document.body.textContent).toContain(WORKSPACE_A.branch);
+      expect(document.body.textContent).not.toContain(WORKSPACE_B.branch);
+    });
+  });
+
+  // F6: a run paused for the build-file trust decision executes nothing; the open call reads as
+  // waiting for that decision and shows no running timer.
+  it("shows an open step as waiting while the run is paused for the trust decision", () => {
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, {
+        state: "paused",
+        pauseReason: "workspace-script-trust",
+        runId: "run-1",
+      }),
+      actions: actions(),
+    });
+    const feed = activityFeed();
+    const turn = feed.turns[0];
+    if (turn === undefined) throw new Error("fixture turn missing");
+    const open = {
+      callId: "call-verify",
+      tool: "keiko_verification",
+      state: "running",
+      occurredAt: AT,
+    };
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: { ...feed, turns: [{ ...turn, tools: [...turn.tools, open] }] },
+    });
+    const { container } = render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(container.querySelector('[data-state="waiting-for-trust"]')).not.toBeNull();
+    expect(container.querySelector('[data-state="running"]')).toBeNull();
+    expect(container.querySelector('[role="timer"]')).toBeNull();
+  });
+
+  // U-3: the repository a run works in becomes the window's own, so no later remount or workspace
+  // read can hand the window another repository (the Git window's) unasked.
+  it("pins the repository of a live run that this window started", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "start", requestId: "req-pin", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    expect(onPinRepository).not.toHaveBeenCalled();
+
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-pin" }),
+        mutation: { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-pin" },
+      },
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+  });
+
+  // A successful follow-up of run A whose revision moved on meanwhile re-reads the run; the read
+  // can show another window's run B in the very render the mutation settles in.
+  it("does not pin another window's run that the re-read after this window's successful follow-up shows", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "follow-up", requestId: "req-mine", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-b" }),
+        mutation: { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-a" },
+      },
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).not.toHaveBeenCalled();
+  });
+
+  // The acknowledgement and the run snapshot are separate reads: either may render first, and the
+  // pin must follow once both are known whichever order they arrive in.
+  it.each([
+    ["the run is visible before the acknowledgement", true],
+    ["the acknowledgement renders before the run is visible", false],
+  ] as const)("pins this window's own run when %s", (_name, runFirst) => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    const pending = {
+      status: "pending",
+      kind: "start",
+      requestId: "req-own",
+      error: null,
+    } as const;
+    const running = stateIn(WORKSPACE_A, { state: "running", runId: "run-own" });
+    const acknowledged = { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-own" };
+    runtimeHookMock.mockReturnValue({
+      state: { ...stateIn(WORKSPACE_A), mutation: pending },
+      actions: actions(),
+    });
+    const view = render(window());
+    const steps = runFirst
+      ? [
+          { ...running, mutation: pending },
+          { ...running, mutation: acknowledged },
+        ]
+      : [
+          { ...stateIn(WORKSPACE_A), mutation: acknowledged },
+          { ...running, mutation: IDLE_MUTATION_FIXTURE },
+        ];
+    for (const state of steps) {
+      runtimeHookMock.mockReturnValue({ state, actions: actions() });
+      view.rerender(window());
+    }
+
+    expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+  });
+
+  it("does not pin a later run of another window after its own run ended", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "start", requestId: "req-own", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-own" }),
+        mutation: { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-own" },
+      },
+      actions: actions(),
+    });
+    view.rerender(window());
+    expect(onPinRepository).toHaveBeenCalledTimes(1);
+
+    runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: actions() });
+    view.rerender(window());
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).toHaveBeenCalledTimes(1);
+  });
+
+  // The pin follows the run this window's own start was acknowledged with, never whichever run the
+  // shared runtime shows while that start is pending, refused or cancelled.
+  it.each([
+    [
+      "refused",
+      {
+        status: "error",
+        kind: "start",
+        requestId: "req-refused",
+        error: { code: "active-run", message: "refused" },
+      },
+    ],
+    ["cancelled", { status: "idle", kind: null, requestId: null, error: null, cancelled: true }],
+  ] as const)(
+    "does not pin another window's run that became visible while this window's start was pending and then %s",
+    (_name, ended) => {
+      const onPinRepository = vi.fn();
+      const window = (): ReactElement => (
+        <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+          <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+        </ActiveWorkspaceProvider>
+      );
+      runtimeHookMock.mockReturnValue({
+        state: {
+          ...stateIn(WORKSPACE_A),
+          mutation: { status: "pending", kind: "start", requestId: "req-mine", error: null },
+        },
+        actions: actions(),
+      });
+      const view = render(window());
+      runtimeHookMock.mockReturnValue({
+        state: {
+          ...stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+          mutation: { status: "pending", kind: "start", requestId: "req-mine", error: null },
+        },
+        actions: actions(),
+      });
+      view.rerender(window());
+      runtimeHookMock.mockReturnValue({
+        state: {
+          ...stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+          mutation: ended as unknown as CodingWorkbenchRuntimeState["mutation"],
+        },
+        actions: actions(),
+      });
+      view.rerender(window());
+      runtimeHookMock.mockReturnValue({
+        state: stateIn(WORKSPACE_A, { state: "running", runId: "run-other-again" }),
+        actions: actions(),
+      });
+      view.rerender(window());
+
+      expect(onPinRepository).not.toHaveBeenCalled();
+    },
+  );
+
+  // A refusal and the re-read that supersedes it can land in one render: the mutation settles idle
+  // with the refusal kept while the read already shows the run another window started.
+  it("does not pin another window's run that the read superseding this window's refused start shows", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "start", requestId: "req-mine", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+        mutation: {
+          status: "idle",
+          kind: null,
+          requestId: null,
+          error: null,
+          supersededFailure: { kind: "start", code: "active-run" },
+        },
+      },
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).not.toHaveBeenCalled();
+  });
+
+  // The runtime follows one run for every window: a window that never started it must not take the
+  // repository of another window's run as its own.
+  it("does not pin the run of another window", () => {
+    const onPinRepository = vi.fn();
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+      actions: actions(),
+    });
+    render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(onPinRepository).not.toHaveBeenCalled();
+  });
+
+  it("does not pin while idle or when the window already has its own repository", () => {
+    const onPinRepository = vi.fn();
+    runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: actions() });
+    const idle = render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>,
+    );
+    idle.unmount();
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-own" }),
+      actions: actions(),
+    });
+    render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot="/repos/own" onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(onPinRepository).not.toHaveBeenCalled();
+  });
+
   it("keeps the context bar on the run's workspace after a live pointer switch", async () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
@@ -5194,12 +6143,12 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     await startInAThenSwitchToB(actions(), vi.fn(), {
       beforeStart: async () => {
         expect(
-          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+          screen.queryByRole("button", { name: "Trust this repository's build files" }),
         ).not.toBeInTheDocument();
       },
       onPendingSwitch: async () => {
         expect(
-          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+          screen.queryByRole("button", { name: "Trust this repository's build files" }),
         ).not.toBeInTheDocument();
         expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
       },
@@ -5214,7 +6163,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith(WORKSPACE_A.repositoryRoot));
     await userEvent
       .setup()
-      .click(await screen.findByRole("button", { name: "Allow package scripts for verification" }));
+      .click(await screen.findByRole("button", { name: "Trust this repository's build files" }));
 
     expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot, "grant");
@@ -5693,35 +6642,46 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     },
     toolCallingRenewalPending: true,
   };
+  // The chat session publishes only activated models in `models`; every configured model stays in
+  // the unfiltered read. The catalog is derived from that producer, never restated.
+  const publishCatalog = (capabilities: readonly ModelCapability[]): void => {
+    const published = sessionCatalogState(capabilities, "bootstrap", "corr-catalog");
+    chatCatalogMock.models = [...published.models];
+    chatCatalogMock.configuredModelIds = published.configuredModelIds;
+    chatCatalogMock.modelCatalogRead = {
+      capabilities: published.catalogCapabilities,
+      source: published.catalogSource,
+      correlationId: "corr-catalog",
+    };
+  };
 
   it("elects the first freshly ready default while retaining unknown models as pending options", () => {
-    chatCatalogMock.models = [
+    publishCatalog([
       { ...MODEL_A, conversationReady: undefined },
       { ...MODEL_B, conversationReady: true },
-    ];
+    ]);
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
     expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
     expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
   });
 
-  it("preserves a saved unknown choice ahead of a freshly healthy fallback", () => {
+  it("does not adopt a saved model nobody activated; it elects the activated fallback", () => {
     window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
-    chatCatalogMock.models = [MODEL_A, { ...MODEL_B, conversationReady: undefined }];
+    publishCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }]);
     try {
       const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
-      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-b");
     } finally {
       window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     }
   });
 
   it("removes a refuted configured model from the picker and restores it after recovery", async () => {
-    chatCatalogMock.models = [
+    publishCatalog([
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: false },
-    ];
-    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    ]);
     const liveActions = actions();
     const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
@@ -5732,10 +6692,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(screen.queryByRole("option", { name: "model-b" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
     vi.mocked(liveActions.adoptModel).mockClear();
-    chatCatalogMock.models = [
+    publishCatalog([
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: true },
-    ];
+    ]);
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
     expect(screen.getByRole("option", { name: "model-b" })).toBeInTheDocument();
@@ -5744,8 +6704,9 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
   it("restores the saved choice after all refuted coding models recover", () => {
     window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
-    chatCatalogMock.models = [{ ...MODEL_B, conversationReady: false }];
-    chatCatalogMock.configuredModelIds = [MODEL_B.id];
+    publishCatalog([{ ...MODEL_B, conversationReady: false }]);
+    // The producer publishes no model here (the refuted one is filtered out); the refresh settled.
+    catalogRefreshMock.settled = true;
     const liveActions = actions();
     runtimeHookMock.mockReturnValue({
       state: liveState({ selectedModelId: "model-b" }),
@@ -5759,7 +6720,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         state: liveState({ selectedModelId: null }),
         actions: liveActions,
       });
-      chatCatalogMock.models = [{ ...MODEL_B, conversationReady: true }];
+      publishCatalog([{ ...MODEL_B, conversationReady: true }]);
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
       expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
     } finally {
@@ -5767,21 +6728,23 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     }
   });
 
-  // #3642 selection stability: a remembered choice whose chat answer is unknown is never replaced by
-  // a healthy default. Customer 1.3.4: it is usable as it is in Chat; its start checks the model on
-  // the server before admission, so Start no longer waits for a check nobody runs.
-  it("keeps a remembered unknown selection despite a healthy default and lets its start check it", async () => {
-    chatCatalogMock.models = [
+  // #3642 selection stability, ADR-0171 D2: a held choice that nobody activated in this process is
+  // never replaced by a healthy default, and it is never startable: the source may still say
+  // available (the person activated model-a and picked model-b), so the window itself keeps Start off
+  // until the person activates the model.
+  it("keeps a selected model nobody activated held and not startable while the source reads available", async () => {
+    publishCatalog([
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: undefined },
-    ];
-    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    ]);
     taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), visibleRun: false });
     const liveActions = actions();
     const state = liveState({
+      canStart: true,
       selectedModelId: "model-b",
       run: { status: "ready", value: null, error: null },
     });
+    expect(state.source.value?.available).toBe(true);
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
     const workspace = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1");
     render(
@@ -5791,9 +6754,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     );
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("Task instructions"), "Add a focused unit test");
-    expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).toHaveBeenCalledOnce();
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    expect(start).toHaveAttribute("aria-disabled", "true");
+    await user.click(start);
+    expect(liveActions.start).not.toHaveBeenCalled();
     expect(liveActions.adoptModel).not.toHaveBeenCalled();
   });
 
@@ -5869,6 +6833,314 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       });
       render(<CodingWorkbenchWindow selectedRoot="/repo" />);
       expect(screen.queryByRole("button", { name: "Check tool calling" })).not.toBeInTheDocument();
+    });
+  });
+
+  // U-12 (#4491): after every start a configured model is simply not activated in this server
+  // process (ADR-0171 D2). The Workbench says so and offers the person's own activation in place;
+  // it is the same route and readiness check Settings > Models runs. A failed check is a different
+  // fact with a different sentence and no retry button here.
+  describe("a model that is not activated in this session", () => {
+    const NOT_ACTIVATED: ModelCapability = { ...MODEL_A, conversationReady: undefined };
+    const FAILED_CHECK: ModelCapability = { ...MODEL_A, conversationReady: false };
+    // The server's own projection for a configured model nobody activated (the producer, not a copy).
+    const notReadySource = (): ReturnType<typeof liveState>["source"] => ({
+      status: "ready",
+      value: codingWorkbenchSourceFromManaged({
+        status: "unavailable",
+        reason: "conversation-not-ready",
+      }),
+      error: null,
+    });
+    const report = (chat: "passed" | "failed" | "skipped"): GatewayReadinessReport => ({
+      modelId: "model-a",
+      checkedAt: "2026-11-27T08:00:00.000Z",
+      overallStatus: chat === "passed" ? "ready" : chat === "failed" ? "failed" : "partial",
+      probes: [{ name: "chat", status: chat, latencyMs: 120, evidence: "chat probe" }],
+      verifiedCapabilities: {},
+    });
+    const readinessCalls = (fetchMock: ReturnType<typeof vi.fn>): unknown[][] =>
+      fetchMock.mock.calls.filter(([url]) => url === "/api/gateway/readiness");
+    const stubReadiness = (answer: () => Promise<Response>): ReturnType<typeof vi.fn> => {
+      const fetchMock = vi.fn(answer);
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    };
+    const jsonOk = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const renderNotReady = (model: ModelCapability, onOpenSettings?: () => void): void => {
+      publishCatalog([model]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: "model-a",
+          source: notReadySource(),
+        }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" onOpenSettings={onOpenSettings} />);
+    };
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("says it is not activated yet and offers the activation, with no Settings detour", async () => {
+      renderNotReady(NOT_ACTIVATED);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "model-a is not activated yet in this session.",
+      );
+      expect(screen.getByRole("button", { name: "Activate model-a" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: /Settings > Models/u })).not.toBeInTheDocument();
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    // U-29: at a 1024x768 window the session columns painted over the button. jsdom has no layout, so
+    // pin the structure; the frame-styles test pins the flow CSS of the shared parent.
+    it("renders the alert and the activation as in-flow siblings ahead of the session columns", () => {
+      renderNotReady(NOT_ACTIVATED);
+      const alert = screen.getByRole("alert");
+      const activation = screen.getByTestId("coding-workbench-model-activation");
+      const body = alert.parentElement;
+      expect(body).not.toBeNull();
+      expect(activation.parentElement).toBe(body);
+      const children = Array.from(body?.children ?? []);
+      expect(children.indexOf(alert)).toBeLessThan(children.indexOf(activation));
+      const columns = children[children.length - 1];
+      expect(children.indexOf(activation)).toBeLessThan(children.length - 1);
+      expect(columns?.contains(activation)).toBe(false);
+      expect(columns?.contains(alert)).toBe(false);
+      expect(activation.getAttribute("style")).toBeNull();
+    });
+
+    it("says a failed check is a failure and offers no activation, only the details", async () => {
+      const onOpenSettings = vi.fn();
+      renderNotReady(FAILED_CHECK, onOpenSettings);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "model-a did not pass its readiness check.",
+      );
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Details in Settings > Models" }));
+      expect(onOpenSettings).toHaveBeenCalledOnce();
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("calls the activation route once, from the Workbench, and shows the checking state", async () => {
+      let settle: (response: Response) => void = () => undefined;
+      const fetchMock = stubReadiness(() => new Promise<Response>((resolve) => (settle = resolve)));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+      expect(JSON.parse(String((readinessCalls(fetchMock)[0]?.[1] as RequestInit).body))).toEqual({
+        modelId: "model-a",
+        options: { surface: "coding-workbench" },
+      });
+      expect(screen.getByTestId("coding-workbench-model-activation-checking")).toHaveTextContent(
+        /still checking this model/u,
+      );
+      // U-29: the checking notice is a styled body notice, not bare text at the window edge.
+      expect(screen.getByTestId("coding-workbench-model-activation-checking").className).toMatch(
+        /cmpStreamNotice/u,
+      );
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/is not activated yet in this session/u)).not.toBeInTheDocument();
+      expect(await axe(document.body)).toHaveNoViolations();
+      await act(async () => {
+        settle(jsonOk(report("passed")));
+        await Promise.resolve();
+      });
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+    });
+
+    it("makes the model selectable and removes the notice once the check passes", async () => {
+      stubReadiness(() => Promise.resolve(jsonOk(report("passed"))));
+      renderNotReady(NOT_ACTIVATED);
+      const refreshed = vi.fn();
+      window.addEventListener("keiko:gateway-model-readiness-updated", refreshed);
+      try {
+        await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+        await waitFor(() => expect(refreshed).toHaveBeenCalledOnce());
+      } finally {
+        window.removeEventListener("keiko:gateway-model-readiness-updated", refreshed);
+      }
+      // The announcement is what refreshes the catalog and the source; model them as production does.
+      publishCatalog([MODEL_A]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: "model-a" }),
+        actions: actions(),
+      });
+      cleanup();
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /Coding model/u })).toHaveTextContent("model-a");
+    });
+
+    it("tells the truth when the readiness check fails, and links to Settings", async () => {
+      stubReadiness(() => Promise.resolve(jsonOk(report("failed"))));
+      const onOpenSettings = vi.fn();
+      renderNotReady(NOT_ACTIVATED, onOpenSettings);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(await screen.findByText("model-a did not pass its readiness check.")).toHaveRole(
+        "alert",
+      );
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Details in Settings > Models" }));
+      expect(onOpenSettings).toHaveBeenCalledOnce();
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    // The server reports a timed-out, overloaded or unreachable probe as `failed` with a closed
+    // warning, never as `skipped`; it is no verdict on the model (keiko-contracts/bff-wire).
+    it("keeps Activate offered after an activation that timed out", async () => {
+      const timedOut: GatewayReadinessReport = {
+        ...report("failed"),
+        probes: [
+          {
+            name: "chat",
+            status: "failed",
+            latencyMs: 30_000,
+            evidence: "chat probe",
+            warning: PROBE_TIMED_OUT_WARNING,
+          },
+        ],
+      };
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(timedOut)));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(await screen.findByRole("button", { name: "Activate model-a" })).toBeEnabled();
+      expect(
+        screen.queryByText("model-a did not pass its readiness check."),
+      ).not.toBeInTheDocument();
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+    });
+
+    it("keeps Activate offered when the chat probe reached no verdict", async () => {
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(report("skipped"))));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(await screen.findByRole("button", { name: "Activate model-a" })).toBeEnabled();
+      expect(
+        screen.queryByText("model-a did not pass its readiness check."),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("model-a is not activated yet in this session.")).toBeInTheDocument();
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+    });
+
+    // ADR-0171 D2: opening the Workbench never activates or checks a model; only the click does.
+    it("makes no readiness call on mount or rerender, until the button is clicked", async () => {
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(report("passed"))));
+      renderNotReady(NOT_ACTIVATED);
+      cleanup();
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.getByRole("button", { name: "Activate model-a" })).toBeInTheDocument();
+      expect(readinessCalls(fetchMock)).toHaveLength(0);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+    });
+
+    it("does not call a failed request a failed check", async () => {
+      stubReadiness(() => Promise.reject(new TypeError("Failed to fetch")));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(
+        await screen.findByText("Keiko could not reach the gateway to activate model-a."),
+      ).toHaveRole("alert");
+    });
+
+    // Live (Windows npm, fresh start): no model selected, the previous run restored as a settled
+    // failure, and the chat session publishes no activated model. The activation still shows.
+    it("offers the activation with no selected model and a restored settled failed run", async () => {
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(report("passed"))));
+      publishCatalog([NOT_ACTIVATED]);
+      expect(chatCatalogMock.models).toEqual([]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: null,
+          source: notReadySource(),
+          run: {
+            status: "ready",
+            value: snapshot({ state: "failed", failureCode: "delivery-not-evidenced" }),
+            error: null,
+          },
+        }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "model-a is not activated yet in this session.",
+      );
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+      expect(JSON.parse(String((readinessCalls(fetchMock)[0]?.[1] as RequestInit).body))).toEqual({
+        modelId: "model-a",
+        options: { surface: "coding-workbench" },
+      });
+    });
+
+    it("keeps the generic alert when no configured chat model exists to activate", () => {
+      publishCatalog([]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ canStart: false, selectedModelId: null, source: notReadySource() }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.queryByRole("button", { name: /^Activate / })).not.toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent(/not activated or did not pass/u);
+    });
+
+    it("offers the activation for a held selection that nobody activated", () => {
+      publishCatalog([NOT_ACTIVATED]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: "model-a",
+          source: notReadySource(),
+        }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.getByRole("button", { name: "Activate model-a" })).toBeEnabled();
+    });
+
+    it("names the last used model when none is selected", () => {
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
+      try {
+        publishCatalog([NOT_ACTIVATED, { ...MODEL_B, conversationReady: undefined }]);
+        runtimeHookMock.mockReturnValue({
+          state: liveState({
+            canStart: false,
+            selectedModelId: null,
+            source: notReadySource(),
+          }),
+          actions: actions(),
+        });
+        render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+        expect(screen.getByRole("button", { name: "Activate model-b" })).toBeInTheDocument();
+      } finally {
+        window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+      }
     });
   });
 
@@ -6379,6 +7651,24 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
     expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
     expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
+  });
+});
+
+// U-39 audit: a refused start compares the checkout with the branch the binding holds, never with a
+// base branch the person picked in the chip and has not started on yet.
+describe("boundCheckoutBranch", () => {
+  it("names the bound task branch for the shown repository, not a pending pick", () => {
+    const workspace = activeWorkspaceWithBinding("/repos/alpha", "/repos/alpha", {
+      taskBranch: "chore/mark-reviewed",
+    });
+    expect(boundCheckoutBranch(workspace, "/repos/alpha")).toBe("chore/mark-reviewed");
+  });
+
+  it("names nothing for another repository or without a binding", () => {
+    const workspace = activeWorkspaceWithBinding("/repos/alpha", "/repos/alpha");
+    expect(boundCheckoutBranch(workspace, "/repos/beta")).toBeNull();
+    expect(boundCheckoutBranch({ activeInstance: null }, "/repos/alpha")).toBeNull();
+    expect(boundCheckoutBranch(workspace, null)).toBeNull();
   });
 });
 
@@ -7169,6 +8459,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("look at @src/app.ts please", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
         references: [{ path: "src/app.ts" }],
       });
     });
@@ -7310,6 +8601,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
       await user.click(screen.getByRole("button", { name: "Start coding run" }));
       expect(live.start).toHaveBeenLastCalledWith("a different task", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
       });
     });
   });
@@ -7324,6 +8616,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("pr #13", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
         command: { name: "review" },
       });
       expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1]).issue).toBeUndefined();
@@ -7337,6 +8630,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
         command: { name: "init" },
       });
     });
@@ -7349,6 +8643,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("/foo bar", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
       });
       expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1])).not.toHaveProperty("command");
     });
@@ -7504,6 +8799,15 @@ describe("CodingWorkbenchWindow live-region and stream-status semantics", () => 
     expect(status.tagName).toBe("OUTPUT");
     expect(status.closest("[role='alert']")).toBeNull();
     expect(screen.queryByText("Event stream could not be refreshed.")).not.toBeInTheDocument();
+  });
+
+  it("says a run stream waits for a connection another tab uses, as a polite status", () => {
+    renderWorkbench(liveState({ run: runningRun, streamCapacityWaiting: true }));
+
+    const status = screen.getByText(/Waiting for a free connection/u);
+    expect(status.tagName).toBe("OUTPUT");
+    expect(status.closest("[role='alert']")).toBeNull();
+    expect(status).toHaveTextContent("Waiting for a free connection.");
   });
 
   it("escalates to an assertive alert once the stream is reported failed", () => {
@@ -7666,8 +8970,27 @@ describe("CodingWorkbenchWindow in an ordinary folder", () => {
     renderWorkbench();
     await screen.findByRole("button", { name: "Start coding run" });
     const last = locationInputs.at(-1);
-    expect(last).toEqual({ folderMode: true, location: "local" });
+    expect(last).toEqual({ folderMode: true, location: "local", locationsPending: false });
     expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();
+  });
+
+  // U-3: a remounted window reads as idle until its run is read, and an automatic activation then
+  // acts on a run it cannot see. Nothing is bound while the run state is unread.
+  it.each([
+    ["idle", true],
+    ["loading", true],
+    ["ready", false],
+  ] as const)("holds every activation while the run state is %s", async (status, pending) => {
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: { status, value: status === "ready" ? snapshot() : null, error: null },
+      }),
+      actions: actions(),
+    });
+    locationInputs.length = 0;
+    render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await screen.findByRole("button", { name: "Start coding run" });
+    expect(locationInputs.at(-1)?.locationsPending).toBe(pending);
   });
 
   it("keeps a repository out of folder mode", async () => {

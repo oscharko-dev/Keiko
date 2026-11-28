@@ -4,22 +4,22 @@
 // reason when neither resolves or the framework is unknown. Verification reuses the #7 orchestrator
 // unchanged; this stage only wires the plan and projects an output-text-free audit summary.
 
-import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
-import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
-  buildVerificationPlan,
-  detectScripts,
   resolveTargetedTests,
-  runVerification,
-  summarizeForAudit,
   DEFAULT_VERIFICATION_LIMITS,
-  type VerificationAuditSummary,
-  type VerificationPlan,
 } from "@oscharko-dev/keiko-verification";
+import type { VerificationAuditSummary, VerificationStep } from "@oscharko-dev/keiko-verification";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  resolvePlannedVerification,
+  runPlannedVerification,
+  SKIP_UNRESOLVED,
+  verificationResultFields,
+} from "../verification/planned-verification.js";
 import type { RunState } from "./internal.js";
 import type { UnitTestTarget } from "./types.js";
 
-export const SKIP_UNRESOLVED = "verification skipped: framework unknown or no test files resolved";
+export { SKIP_UNRESOLVED };
 
 // The source files the target points at — passed to resolveTargetedTests so it can find the
 // just-created sibling/mirrored test (steering note C). Test files are NOT passed here.
@@ -33,30 +33,6 @@ function targetSourceFiles(target: UnitTestTarget): readonly string[] {
   return [target.moduleDir];
 }
 
-function buildPlanFallback(workspace: WorkspaceInfo, fs: WorkspaceFs): VerificationPlan {
-  const catalog = detectScripts(workspace, fs);
-  return buildVerificationPlan(workspace, catalog, { only: ["test"] }, fs);
-}
-
-function resolveVerificationPlan(
-  workspace: WorkspaceInfo,
-  target: UnitTestTarget,
-  fs: WorkspaceFs,
-): VerificationPlan | undefined {
-  const targeted = resolveTargetedTests(
-    workspace,
-    targetSourceFiles(target),
-    fs,
-    DEFAULT_VERIFICATION_LIMITS,
-  );
-  if (targeted.length > 0) {
-    return { workspaceRoot: workspace.root, steps: targeted };
-  }
-  const fallback = buildPlanFallback(workspace, fs);
-  const runnable = fallback.steps.filter((step) => step.skipReason === undefined);
-  return runnable.length > 0 ? { workspaceRoot: workspace.root, steps: runnable } : undefined;
-}
-
 export interface VerificationOutcome {
   readonly summary: VerificationAuditSummary | undefined;
   readonly skipReason: string | undefined;
@@ -67,34 +43,22 @@ export async function runWorkflowVerification(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
 ): Promise<VerificationOutcome> {
-  const plan = resolveVerificationPlan(workspace, state.input.target, fs);
-  if (plan === undefined) {
+  const planned = resolvePlannedVerification(workspace, fs, [
+    (): readonly VerificationStep[] =>
+      resolveTargetedTests(
+        workspace,
+        targetSourceFiles(state.input.target),
+        fs,
+        DEFAULT_VERIFICATION_LIMITS,
+      ),
+  ]);
+  if (planned === undefined) {
     return { summary: undefined, skipReason: SKIP_UNRESOLVED };
   }
-  const report = await runVerification(plan, {
-    workspace,
-    signal: state.signal,
-    spawn: state.deps.spawn ?? nodeSpawnFn,
-    processEnv: state.deps.processEnv ?? process.env,
-    now: state.now,
-    fs,
-    // Explicit-only (ADR-0043 D8): leaving this undefined applies the orchestrator's fail-closed
-    // default. Deriving it from an injected dependency instead — `spawn !== undefined`, as shorthand
-    // for "a test harness is driving this" — also matched the production budget wrapper, which is
-    // exactly how a governed run injects its spawn, so the egress boundary was disabled on the one
-    // path that executes model-authored code.
-    networkEnforcement: state.deps.verificationNetworkEnforcement,
-    ...(state.deps.verificationEnforcedNetworkAvailable === undefined
-      ? {}
-      : { enforcedNetworkAvailable: state.deps.verificationEnforcedNetworkAvailable }),
-  });
-  const summary = summarizeForAudit(report);
+  const summary = await runPlannedVerification(state, workspace, fs, planned);
   state.emitter.emit({
     type: "workflow:verification:result",
-    overallStatus: summary.overallStatus,
-    stepCount: summary.results.length,
-    passedCount: summary.results.filter((r) => r.status === "passed").length,
-    durationMs: summary.durationMs,
+    ...verificationResultFields(summary),
   });
   return { summary, skipReason: undefined };
 }

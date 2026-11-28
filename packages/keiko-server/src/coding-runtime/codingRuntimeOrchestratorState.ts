@@ -23,6 +23,8 @@ export interface AuxiliaryEventFacts {
   readonly contentTrust?: CodingWorkbenchRuntimeEvent["contentTrust"];
   readonly verificationSummary?: CodingWorkbenchRuntimeEvent["verificationSummary"];
   readonly nativeRetry?: CodingWorkbenchRuntimeEvent["nativeRetry"];
+  readonly activeSubagentCount?: CodingWorkbenchRuntimeEvent["activeSubagentCount"];
+  readonly refusedAgentModelCount?: CodingWorkbenchRuntimeEvent["refusedAgentModelCount"];
 }
 
 /** Projects the forwardable auxiliary facts off an ingested runtime event. */
@@ -30,15 +32,32 @@ export function auxiliaryEventFacts(event: CodingWorkbenchRuntimeEvent): Auxilia
   return forwardedAuxiliaryEventFacts(event);
 }
 
+type MutableAuxiliaryEventFacts = {
+  -readonly [K in keyof AuxiliaryEventFacts]: AuxiliaryEventFacts[K];
+};
+
+// The forwarded facts, in the order a forwarded event lists them.
+const FORWARDED_AUXILIARY_FACTS: readonly (keyof AuxiliaryEventFacts)[] = [
+  "nativeRetry",
+  "activeSubagentCount",
+  "refusedAgentModelCount",
+  "auxiliaryOutcome",
+  "contentTrust",
+  "verificationSummary",
+];
+
 function forwardedAuxiliaryEventFacts(event: AuxiliaryEventFacts = {}): AuxiliaryEventFacts {
-  return {
-    ...(event.nativeRetry === undefined ? {} : { nativeRetry: event.nativeRetry }),
-    ...(event.auxiliaryOutcome === undefined ? {} : { auxiliaryOutcome: event.auxiliaryOutcome }),
-    ...(event.contentTrust === undefined ? {} : { contentTrust: event.contentTrust }),
-    ...(event.verificationSummary === undefined
-      ? {}
-      : { verificationSummary: event.verificationSummary }),
-  };
+  const facts: MutableAuxiliaryEventFacts = {};
+  for (const key of FORWARDED_AUXILIARY_FACTS) copyDefinedFact(facts, event, key);
+  return facts;
+}
+
+function copyDefinedFact(
+  target: MutableAuxiliaryEventFacts,
+  source: AuxiliaryEventFacts,
+  key: keyof AuxiliaryEventFacts,
+): void {
+  if (source[key] !== undefined) Object.assign(target, { [key]: source[key] });
 }
 
 export class CodingRuntimeOrchestratorState {
@@ -73,6 +92,10 @@ export class CodingRuntimeOrchestratorState {
       ...this.deps.runIdentity?.(snapshot.runId),
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
       ...(snapshot.verificationGap ? { verificationGap: snapshot.verificationGap } : {}),
+      ...(snapshot.verificationGapDetail
+        ? { verificationGapDetail: snapshot.verificationGapDetail }
+        : {}),
+      ...(snapshot.stopCause ? { stopCause: snapshot.stopCause } : {}),
       ...contextUsageProjection(this.deps.contextUsage?.(snapshot.runId)),
       ...this.stateBoundDetail(snapshot),
       ...snapshotDetail(snapshot),

@@ -16,8 +16,6 @@
 
 import { CORRELATION_HEADER } from "./bff-correlation";
 
-const inflight = new Map<string, Promise<Response>>();
-
 export interface CoalescedReadOptions {
   /** `false` when the caller names its own correlation id or supplies its own abort signal. */
   readonly joinable: boolean;
@@ -54,9 +52,117 @@ function copyOf(response: Response): Response {
   return typeof response.clone === "function" ? response.clone() : response;
 }
 
-/** Ends every join window; a request that may change server state calls it before and after. */
+/**
+ * Ends every join window; a request that may change server state calls it before and after. A
+ * healthy read still in flight keeps its joiners and its lifetime timer: it settles on its own,
+ * and its joiners must not each send a duplicate GET at every write (nor a replacement that could
+ * race the write and return data that predates it). Only a read that has already outlived
+ * `INFLIGHT_READ_MAX_MS` (truly hung) is evicted now, so its joiners are freed at once and share one
+ * replacement read, which begins after the write.
+ */
 export function endInflightReads(): void {
-  inflight.clear();
+  const ended = [...sharedReads.values()];
+  sharedReads.clear();
+  for (const entry of ended) {
+    if (Date.now() - entry.startedAt < INFLIGHT_READ_MAX_MS) continue;
+    clearTimeout(entry.timer);
+    entry.evict();
+  }
+}
+
+/**
+ * How long a shared read may stay joinable (U-45). A read that never settles (a request the BFF
+ * accepted and never answered) used to keep its entry for good, so every later identical read
+ * joined it and no request ever reached the network again. After this bound the entry is evicted
+ * and the joiners still waiting start ONE replacement read between them (the first to expire
+ * starts it, the others join it), so a hung server sees one duplicate request, not one per joiner.
+ * The bound evicts; it does not abort the request: a caller that opts in must also carry its own
+ * deadline or signal on the read (a read with its own signal is never shared at all), or the hung
+ * request itself stays open.
+ */
+export const INFLIGHT_READ_MAX_MS = 15_000;
+
+interface SharedRead {
+  readonly response: Promise<Response>;
+  readonly expired: Promise<void>;
+  readonly timer: ReturnType<typeof setTimeout>;
+  /** When the read began; a read older than `INFLIGHT_READ_MAX_MS` is hung. */
+  readonly startedAt: number;
+  /** Resolves `expired` now, ahead of the timer. */
+  readonly evict: () => void;
+}
+
+const sharedReads = new Map<string, SharedRead>();
+
+function share(key: string, read: Promise<Response>): void {
+  let evict: () => void = () => undefined;
+  const expired = new Promise<void>((resolve) => {
+    evict = resolve;
+  });
+  const timer = setTimeout(evict, INFLIGHT_READ_MAX_MS);
+  const entry: SharedRead = { response: read, expired, timer, evict, startedAt: Date.now() };
+  sharedReads.set(key, entry);
+  const release = (): void => {
+    clearTimeout(timer);
+    if (sharedReads.get(key) === entry) sharedReads.delete(key);
+  };
+  read.then(release, release);
+  void expired.then(release);
+}
+
+// The read a joiner starts once the one it joined has outlived its bound: the first joiner to
+// expire starts it and shares it, every later one joins that replacement.
+function replacementRead(
+  key: string,
+  path: string,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  const current = sharedReads.get(key);
+  if (current !== undefined) return joinSharedRead(key, path, init, current);
+  const read = Promise.resolve(fetch(path, init));
+  share(key, read);
+  return read.then(copyOf);
+}
+
+// A joiner waits for the shared read, but never longer than that read may live. Whichever side
+// loses the race is ignored: a response that settles after the bound is never cloned for nobody.
+function joinSharedRead(
+  key: string,
+  path: string,
+  init: RequestInit | undefined,
+  shared: SharedRead,
+): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    shared.response.then(
+      (response) => {
+        if (settled) return;
+        settled = true;
+        resolve(copyOf(response));
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+    // The first handler turns a synchronous throw of the replacement read into a rejection, so the
+    // second always settles this joiner.
+    void shared.expired
+      .then((): Promise<Response> | undefined => {
+        if (settled) return undefined;
+        settled = true;
+        return replacementRead(key, path, init);
+      })
+      .then(
+        (response) => {
+          if (response !== undefined) resolve(response);
+        },
+        (error: unknown) => {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+  });
 }
 
 export function coalescedFetch(
@@ -75,13 +181,9 @@ export function coalescedFetch(
   }
   if (!options.joinable) return Promise.resolve(fetch(path, init));
   const key = readKey(path, init);
-  const shared = inflight.get(key);
-  if (shared !== undefined) return shared.then(copyOf);
+  const shared = sharedReads.get(key);
+  if (shared !== undefined) return joinSharedRead(key, path, init, shared);
   const read = Promise.resolve(fetch(path, init));
-  inflight.set(key, read);
-  const settle = (): void => {
-    if (inflight.get(key) === read) inflight.delete(key);
-  };
-  read.then(settle, settle);
+  share(key, read);
   return read.then(copyOf);
 }

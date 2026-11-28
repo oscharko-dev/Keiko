@@ -11,6 +11,7 @@ import type {
 import type { GitDeliveryExecutionSeams, GitDeliveryMutationDeps } from "./execution.js";
 import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import type { GitCommitCommand } from "@oscharko-dev/keiko-tools";
+import type { GitHeadState, GitReadSession } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
@@ -26,16 +27,31 @@ export interface VerifiedCommitRunContext {
   readonly workspace: WorkspaceInfo;
   readonly baseRef: string;
   readonly headRef: string;
+  /**
+   * Keiko's own record that the base branch had no commit when the task branch was cut from it
+   * (#4491). Only then may a base ref that resolves to nothing be read as never born under a born
+   * HEAD; without it a missing base is a deleted branch or a typo and the read fails closed.
+   */
+  readonly baseNeverBorn?: true;
   readonly issueBindingDigest?: string;
   readonly correlationId: string;
   readonly signal?: AbortSignal;
   readonly buffersClean: () => boolean;
   readonly stillAuthorized: () => boolean;
+  /**
+   * The scope of the ONE logical operation this context serves (a runtime Git action, a commit
+   * execution): the operation's Git processes are counted in it and its reads share one promisor
+   * verdict. A service opens a fresh one per operation and never lets a stored context carry the
+   * previous operation's, so an earlier verdict cannot authorize a later, riskier one.
+   */
+  readonly readSession?: GitReadSession | undefined;
 }
 
 export interface VerifiedCommitFacts {
-  readonly headSha: string;
-  readonly baseSha: string;
+  /** The commit HEAD names, or the unborn branch whose first commit is a root commit (#4491). */
+  readonly head: GitHeadState;
+  /** The base the candidate is compared with; an unborn branch is its own base. */
+  readonly base: GitHeadState;
   readonly stagedTreeDigest: string;
   readonly repositoryDigest: string;
   readonly clean: boolean;
@@ -52,6 +68,12 @@ export interface VerifiedCommitProposal {
   readonly verificationFailed?: true;
   readonly review: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimePendingApprovalReview;
 }
+
+/** A validation plus the closed facts of the policy it was judged against (for the log only). */
+export type VerifiedCommitMessageVerdict = GitCommitMessageValidation & {
+  readonly policyMode?: "keiko-conventional" | "repository-native";
+  readonly policySource?: "setting" | "repository" | "fallback";
+};
 
 export interface VerifiedCommitServiceOptions {
   readonly context: () => VerifiedCommitRunContext | undefined;
@@ -74,7 +96,8 @@ export interface VerifiedCommitServiceOptions {
   readonly messageAllowed: (
     message: string,
     workspace: WorkspaceInfo,
-  ) => Promise<boolean | GitCommitMessageValidation>;
+    correlationId?: string,
+  ) => Promise<boolean | VerifiedCommitMessageVerdict>;
 }
 
 /**

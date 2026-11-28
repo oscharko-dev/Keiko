@@ -1,26 +1,113 @@
 import {
   constants,
   closeSync,
+  type Stats,
   fstatSync,
   lstatSync,
+  mkdirSync,
   openSync,
+  readdirSync,
+  readFileSync,
   readlinkSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { dirname, join, relative, resolve } from "node:path";
-import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import {
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+  type WorkspaceFileReader,
+  type WorkspaceFs,
+} from "./fs.js";
 import { resolveGitdir } from "./gitHistory.js";
 import { assertContainedRealPath, resolveExistingAllowedWorkspaceRealRoot } from "./realpath.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 
 const MAX_INDEX_BYTES = 16_777_216;
+/**
+ * A private object directory for candidate objects Git writes by path: nothing in it is visible to
+ * the repository until the transaction publishes the objects into the live store once every check
+ * passed (`publish` is idempotent and only for that moment and for tests), so
+ * bytes that were refused never become readable Git objects. It lives inside the live `objects`
+ * directory (as Git's own receive quarantine does), so publishing is a rename on one filesystem.
+ */
+export interface GitObjectQuarantine {
+  readonly directory: string;
+  readonly liveDirectory: string;
+  readonly publish: () => void;
+}
+/**
+ * Removes one path: a `file`, an empty `directory`, or a whole `tree`. A test seam: the default is
+ * `rmSync` / `rmdirSync`.
+ */
+export type RemovePath = (path: string, kind: "file" | "directory" | "tree") => void;
+/**
+ * What a transaction's cleanup could not finish, body-free: how many quarantine directories stayed,
+ * and whether the private index copy or Git's lock (with its descriptor) stayed. A leftover quarantine
+ * or private index is an invisible private file; a leftover lock blocks later index writes.
+ */
+export interface GitIndexCleanupReport {
+  readonly quarantines: number;
+  readonly temporaryIndex: boolean;
+  /** The lock file stayed, or it could not be proved to be this transaction's own. */
+  readonly lock: boolean;
+  /** The lock's descriptor could not be closed (distinct from a leftover lock file). */
+  readonly descriptor: boolean;
+}
+export interface GitCleanupOptions<R> {
+  /**
+   * The live authority of the caller's run, asked again at each step of a write that has awaited
+   * (never cached): `false` stops the write with `GIT_HEAD_AUTHORITY_LAPSED` and nothing is written.
+   */
+  readonly authorize?: (() => boolean) | undefined;
+  /** Receives the report only when something stayed; a port that throws never changes the result. */
+  readonly onCleanupFailure?: ((report: R) => void) | undefined;
+  readonly removePath?: RemovePath | undefined;
+  /** A test seam: closes a lock descriptor (default: `closeSync`). */
+  readonly closeDescriptor?: ((descriptor: number) => void) | undefined;
+  /** A test seam: proves a lock file is this holder's own (default: path and descriptor identity). */
+  readonly ownsLock?: ((path: string, descriptor: number) => boolean) | undefined;
+}
 export interface GitIndexTransaction {
   readonly temporaryIndexPath: string;
   readonly check: () => boolean;
+  // `hashLength` is the repository's object-id length (40 or 64): it fixes the one loose-object and
+  // pack name shape the quarantine may hold. The objects are published by the transaction itself,
+  // right before the index is promoted, after every check passed; a refused or failed transaction
+  // never publishes anything.
+  readonly openObjectQuarantine: (hashLength: number) => GitObjectQuarantine;
+}
+
+/**
+ * Sees the index of a transaction while Git's own `index.lock` is held: `copied` receives the
+ * private copy before anything changed it (the live index as it stood under the lock), `prepared`
+ * the same copy once every check passed and right before it replaces the live index. A person's
+ * staging can land in neither moment, so the difference is exactly what the transaction wrote.
+ * An observer must not throw; it never decides the transaction.
+ */
+export interface GitIndexTransactionObserver {
+  readonly copied: (indexPath: string) => Promise<void>;
+  readonly prepared: (indexPath: string) => Promise<void>;
+}
+
+const observers = new AsyncLocalStorage<GitIndexTransactionObserver>();
+
+/** Runs `run`; every index transaction it starts (in its async context) reports to `observer`. */
+export function observeGitIndexTransactions<T>(
+  observer: GitIndexTransactionObserver,
+  run: () => Promise<T>,
+): Promise<T> {
+  return observers.run(observer, run);
+}
+
+async function notifyObserver(phase: "copied" | "prepared", indexPath: string): Promise<void> {
+  await observers.getStore()?.[phase](indexPath);
 }
 
 /**
@@ -35,6 +122,7 @@ export async function withGitIndexTransaction<T>(
   mutate: (transaction: GitIndexTransaction) => Promise<T>,
   accept: (result: T) => boolean,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  options: GitCleanupOptions<GitIndexCleanupReport> = {},
 ): Promise<T> {
   const base = await resolveGitdir(fs, workspaceRoot);
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
@@ -48,38 +136,643 @@ export async function withGitIndexTransaction<T>(
   const temporaryIndexPath = join(base.path, `.keiko-index-${randomUUID()}`);
   const check = (): boolean => sameDirectory(base.path, directory) && sameLock(lock, descriptor);
   const temporary = { owned: false };
+  const quarantines: GitObjectQuarantine[] = [];
+  const held = { base: base.path, directory, lock, descriptor, temporaryIndexPath, temporary };
   try {
     if (!check()) throw new Error("git-index-metadata-drift");
-    await copyIndex(fs, base.path, temporaryIndexPath, () => {
+    const indexExisted = await copyIndex(fs, base.path, temporaryIndexPath, () => {
       temporary.owned = true;
     });
-    const result = await mutate({ temporaryIndexPath, check });
-    if (accept(result)) {
-      if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base.path)
-        throw new Error("git-index-metadata-drift");
-      if (!accept(result)) throw new Error("git-index-authority-denied");
-      assertIndexFile(temporaryIndexPath);
-      renameSync(temporaryIndexPath, join(base.path, "index"));
-    }
+    await notifyObserver("copied", temporaryIndexPath);
+    const result = await mutate({
+      temporaryIndexPath,
+      check,
+      openObjectQuarantine: (hashLength) =>
+        openObjectQuarantine(base.path, hashLength, quarantines),
+    });
+    if (accept(result))
+      await publishAccepted(
+        { workspaceRoot, fs, base: base.path, check, accept: () => accept(result) },
+        {
+          temporaryIndexPath,
+          indexExisted,
+          quarantines,
+        },
+      );
     return result;
   } finally {
-    cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
+    releaseTransaction(held, quarantines, options);
   }
 }
-function cleanupIndexTransaction(
-  base: string,
-  directory: NonNullable<ReturnType<typeof lstatSync>>,
-  lock: string,
-  descriptor: number,
-  temporaryIndexPath: string,
-  temporary: { readonly owned: boolean },
+interface AcceptedCheck {
+  readonly workspaceRoot: string;
+  readonly fs: WorkspaceFs;
+  readonly base: string;
+  readonly check: () => boolean;
+  readonly accept: () => boolean;
+}
+// Publishes the objects and replaces the live index once every check holds. The checks run again
+// after the observer, which reads asynchronously: a Stop or a drift that landed while it was pending
+// is caught immediately before publication and promotion.
+async function publishAccepted(
+  proof: AcceptedCheck,
+  candidate: {
+    readonly temporaryIndexPath: string;
+    readonly indexExisted: boolean;
+    readonly quarantines: readonly GitObjectQuarantine[];
+  },
+): Promise<void> {
+  const { workspaceRoot, fs, base, check, accept } = proof;
+  if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base)
+    throw new Error("git-index-metadata-drift");
+  if (!accept()) throw new Error("git-index-authority-denied");
+  await notifyObserver("prepared", candidate.temporaryIndexPath);
+  if (!check()) throw new Error("git-index-metadata-drift");
+  if (!accept()) throw new Error("git-index-authority-denied");
+  for (const quarantine of candidate.quarantines) quarantine.publish();
+  promoteIndex(base, candidate.temporaryIndexPath, candidate.indexExisted);
+}
+// Every cleanup step is its own guarded step, so one failure never skips another: a transient sharing
+// violation on a quarantine or the private index must never leave index.lock blocking every later
+// write. A leftover is counted into the report the caller's log port receives, and cleanup never
+// throws: it must not replace the outcome the transaction already settled.
+function releaseTransaction(
+  held: HeldIndexTransaction,
+  quarantines: readonly GitObjectQuarantine[],
+  options: GitCleanupOptions<GitIndexCleanupReport>,
 ): void {
+  const remove = options.removePath ?? defaultRemovePath;
+  const report = cleanupIndexTransaction(held, quarantines, remove, options);
+  if (report.quarantines > 0 || report.temporaryIndex || report.lock || report.descriptor)
+    deliverCleanupReport(report, options.onCleanupFailure);
+}
+// A step that threw is a failed step: it is counted by the caller and never rethrown.
+function stepFailed(step: () => void): boolean {
   try {
-    if (!sameDirectory(base, directory)) return;
-    if (temporary.owned) rmSync(temporaryIndexPath, { force: true });
-    if (sameLock(lock, descriptor)) rmSync(lock);
+    step();
+    return false;
+  } catch {
+    return true;
+  }
+}
+// The report reaches the caller's port after every release; a port that throws cannot replace the
+// settled result, so its failure surfaces as a Node process warning (body-free, a closed code).
+function deliverCleanupReport<R>(report: R, port: ((report: R) => void) | undefined): void {
+  if (port === undefined) {
+    warnUnreported();
+    return;
+  }
+  try {
+    port(report);
+  } catch {
+    warnUnreported();
+  }
+}
+function warnUnreported(): void {
+  process.emitWarning("Git cleanup report was not recorded", {
+    code: "KEIKO_GIT_CLEANUP_UNREPORTED",
+  });
+}
+function defaultRemovePath(path: string, kind: "file" | "directory" | "tree"): void {
+  if (kind === "tree") rmSync(path, { recursive: true, force: true });
+  else if (kind === "directory") rmdirSync(path);
+  else rmSync(path, { force: true });
+}
+// Every quarantine goes on every outcome (what was published already lives in the store). One that
+// cannot be removed is counted and does not stop the others; the number of failures is returned.
+function removeQuarantines(
+  quarantines: readonly GitObjectQuarantine[],
+  remove: RemovePath,
+): number {
+  let failed = 0;
+  for (const quarantine of quarantines)
+    if (
+      stepFailed(() => {
+        remove(quarantine.directory, "tree");
+      })
+    )
+      failed += 1;
+  return failed;
+}
+const LOOSE_FAN_OUT = /^[0-9a-f]{2}$/u;
+// The live object directory a gitdir writes to: a linked worktree shares its main repository's.
+function liveObjectsOf(gitdir: string): string {
+  const live = join(branchRefsBase(gitdir), "objects");
+  if (!lstatSync(live).isDirectory()) throw new Error("git-object-store-unavailable");
+  return live;
+}
+function openObjectQuarantine(
+  gitdir: string,
+  hashLength: number,
+  owned: GitObjectQuarantine[],
+): GitObjectQuarantine {
+  if (hashLength !== 40 && hashLength !== 64) throw new Error("git-object-quarantine-invalid");
+  const liveDirectory = liveObjectsOf(gitdir);
+  const directory = join(liveDirectory, `incoming-keiko-${randomUUID()}`);
+  mkdirSync(directory, { mode: 0o700 });
+  const quarantine: GitObjectQuarantine = {
+    directory,
+    liveDirectory,
+    publish: (): void => {
+      publishQuarantine(directory, liveDirectory, hashLength);
+    },
+  };
+  owned.push(quarantine);
+  return quarantine;
+}
+interface QuarantinedFile {
+  readonly source: string;
+  readonly target: string;
+}
+function regularFile(path: string): boolean {
+  const stat = lstatSync(path);
+  return stat.isFile() && !stat.isSymbolicLink();
+}
+// The loose objects of the quarantine: `xx/<hashLength - 2 hex characters>`, regular files only.
+function looseObjectsOf(
+  directory: string,
+  liveDirectory: string,
+  hashLength: number,
+): readonly QuarantinedFile[] {
+  const rest = new RegExp(`^[0-9a-f]{${String(hashLength - 2)}}$`, "u");
+  const files: QuarantinedFile[] = [];
+  for (const fanOut of readdirSync(directory).filter((name) => name !== "pack")) {
+    const source = join(directory, fanOut);
+    if (!LOOSE_FAN_OUT.test(fanOut) || !lstatSync(source).isDirectory())
+      throw new Error("git-object-quarantine-invalid");
+    for (const name of readdirSync(source)) {
+      if (!rest.test(name) || !regularFile(join(source, name)))
+        throw new Error("git-object-quarantine-invalid");
+      files.push({ source: join(source, name), target: join(liveDirectory, fanOut, name) });
+    }
+  }
+  return files;
+}
+const PACK_PART_ORDER = ["pack", "rev", "idx"] as const;
+// A file Git above `core.bigFileThreshold` wrote as a pack: `pack-<id>.pack`, optionally `.rev`, and
+// `.idx`. Readers find a pack through its index, so the index is published last. A pack without its
+// index or an index without its pack, or any other name, is refused.
+function packFilesOf(
+  directory: string,
+  liveDirectory: string,
+  hashLength: number,
+): readonly QuarantinedFile[] {
+  const packs = join(directory, "pack");
+  if (lstatSync(packs, { throwIfNoEntry: false }) === undefined) return [];
+  const name = new RegExp(String.raw`^pack-[0-9a-f]{${String(hashLength)}}\.(pack|rev|idx)$`, "u");
+  const names = readdirSync(packs);
+  const stems = new Set(names.map((entry) => entry.slice(0, entry.lastIndexOf("."))));
+  const ordered = [...stems].flatMap((stem) =>
+    PACK_PART_ORDER.map((part) => `${stem}.${part}`).filter((entry) => names.includes(entry)),
+  );
+  const complete = [...stems].every(
+    (stem) => names.includes(`${stem}.pack`) && names.includes(`${stem}.idx`),
+  );
+  if (
+    !lstatSync(packs).isDirectory() ||
+    !complete ||
+    ordered.length !== names.length ||
+    !names.every((entry) => name.test(entry) && regularFile(join(packs, entry)))
+  )
+    throw new Error("git-object-quarantine-invalid");
+  return ordered.map((entry) => ({
+    source: join(packs, entry),
+    target: join(liveDirectory, "pack", entry),
+  }));
+}
+// Moves the quarantine into the live store. The whole tree is validated before the first rename, so
+// an invalid entry never leaves a partial publication. An object that is already there (an earlier
+// write, or a concurrent writer of the same object) is the same content under the same name and is
+// left alone.
+function publishQuarantine(directory: string, liveDirectory: string, hashLength: number): void {
+  const plan = [
+    ...looseObjectsOf(directory, liveDirectory, hashLength),
+    ...packFilesOf(directory, liveDirectory, hashLength),
+  ];
+  for (const file of plan) {
+    mkdirSync(dirname(file.target), { recursive: true });
+    moveIfAbsent(file);
+  }
+}
+// An existing target counts only as the object a concurrent writer already published: a regular
+// file. A link, a directory or anything else where the object belongs is refused.
+function publishedAlready(target: string): boolean {
+  const stat = lstatSync(target, { throwIfNoEntry: false });
+  if (stat === undefined) return false;
+  if (!stat.isFile()) throw new Error("git-object-quarantine-invalid");
+  return true;
+}
+function moveIfAbsent(file: QuarantinedFile): void {
+  if (publishedAlready(file.target)) return;
+  try {
+    renameSync(file.source, file.target);
+  } catch (error) {
+    // A concurrent writer of the same object may win the race; Windows then reports EEXIST or EPERM
+    // for a rename onto an existing file. Only that case is success; every other error is rethrown.
+    const code = (error as NodeJS.ErrnoException).code;
+    const raced = code === "EEXIST" || code === "EPERM" || code === "EACCES";
+    if (!raced || !publishedAlready(file.target)) throw error;
+  }
+}
+// The private copy replaces the live index. An index that was absent under Git's own lock is still
+// absent: nothing wrote it meanwhile.
+function promoteIndex(gitdir: string, temporaryIndexPath: string, indexExisted: boolean): void {
+  assertIndexFile(temporaryIndexPath);
+  const index = join(gitdir, "index");
+  if (!indexExisted && lstatSync(index, { throwIfNoEntry: false }) !== undefined)
+    throw new Error("git-index-metadata-drift");
+  renameSync(temporaryIndexPath, index);
+}
+
+/** The message of the failure thrown when another process holds the branch ref lock (EEXIST). */
+export const GIT_REF_LOCK_HELD = "git-ref-lock-held";
+
+/** The message of the failure thrown when a branch ref lock cannot be created for another reason. */
+export const GIT_REF_LOCK_UNAVAILABLE = "git-ref-lock-unavailable";
+
+// The directory that holds `refs/heads`: the repository's own gitdir, or the common directory a
+// linked worktree's gitdir (`<repo>/.git/worktrees/<name>`) shares.
+function branchRefsBase(gitdir: string): string {
+  return basename(dirname(gitdir)) === "worktrees" ? dirname(dirname(gitdir)) : gitdir;
+}
+
+/** The message of the failure thrown when the sequencer state of a repository cannot be read. */
+export const GIT_SEQUENCER_STATE_UNAVAILABLE = "git-sequencer-state-unavailable";
+
+// Whether a gitdir entry exists, through the port's `stat` (an lstat on the Node port). Only a
+// missing entry is "absent": `WorkspaceFs.exists` reads EACCES, EIO or a sharing violation as absent
+// too, which would let a commit proceed in the middle of a merge, so every other error propagates.
+function entryPresent(fs: WorkspaceFs, path: string): boolean {
+  try {
+    fs.stat(path);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+const SEQUENCER_HEAD_FILES = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const;
+
+/**
+ * Whether a merge, cherry-pick or revert is in progress in this worktree: one of Git's sequencer
+ * head files exists in its own gitdir. Any entry counts, whatever it holds, and a gitdir or entry
+ * that cannot be examined throws, so an unreadable state is never reported as "none".
+ */
+export async function gitSequencerOperationInProgress(
+  workspaceRoot: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): Promise<boolean> {
+  try {
+    const base = await resolveGitdir(fs, workspaceRoot);
+    if (base === undefined) throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE);
+    return SEQUENCER_HEAD_FILES.some((name) => entryPresent(fs, join(base.path, name)));
+  } catch (error) {
+    throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE, { cause: error });
+  }
+}
+
+const COMMIT_MESSAGE_STATE_FILES = ["MERGE_MSG", "MERGE_MODE", "SQUASH_MSG"] as const;
+
+/**
+ * Removes the merge and squash message state a successful commit consumes (`MERGE_MSG`,
+ * `MERGE_MODE`, `SQUASH_MSG` in this worktree's own gitdir), as Git does. Every file is its own
+ * guarded step, so one that cannot be examined or removed never skips another; the number of files
+ * that stayed is returned and nothing is thrown for them. A repository whose gitdir cannot be
+ * resolved throws, and the caller reports it without replacing the commit it follows.
+ */
+export async function removeGitCommitState(
+  workspaceRoot: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  removePath: RemovePath = defaultRemovePath,
+): Promise<number> {
+  const base = await resolveGitdir(fs, workspaceRoot);
+  if (base === undefined) throw new Error("git-index-metadata-unavailable");
+  let stayed = 0;
+  for (const name of COMMIT_MESSAGE_STATE_FILES) {
+    const path = join(base.path, name);
+    const failed = stepFailed(() => {
+      if (entryPresent(fs, path)) removePath(path, "file");
+    });
+    if (failed) stayed += 1;
+  }
+  return stayed;
+}
+
+/** The message of the failure thrown when the caller's authority lapsed during a HEAD write. */
+export const GIT_HEAD_AUTHORITY_LAPSED = "git-head-authority-lapsed";
+
+/** The message of the failure thrown when HEAD no longer names the branch it was proved to name. */
+export const GIT_HEAD_CHANGED = "git-head-changed";
+
+const SAFE_HEAD_BRANCH = /^[A-Za-z0-9._/-]+$/u;
+
+/**
+ * Re-points the symbolic HEAD from `expectedBranch` to `targetBranch` under Git's own `HEAD.lock`,
+ * the lock every checkout, switch and commit takes to change HEAD. The expected old value is read
+ * while the lock is held and the new one is written into the lock file and renamed over HEAD, so an
+ * ordinary switch to an unrelated branch between the caller's proof and this write is refused
+ * (`GIT_HEAD_CHANGED`) instead of overwritten. A lock another process holds is `GIT_REF_LOCK_HELD`.
+ * Nothing but the lock file is written unless the expectation holds.
+ */
+export async function repointSymbolicHead(
+  workspaceRoot: string,
+  expectedBranch: string,
+  targetBranch: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  options: GitCleanupOptions<GitRefLockCleanupReport> = {},
+): Promise<void> {
+  if (!SAFE_HEAD_BRANCH.test(expectedBranch) || !SAFE_HEAD_BRANCH.test(targetBranch))
+    throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+  const base = await resolveGitdir(fs, workspaceRoot);
+  // A Stop that arrived while the metadata was being resolved is honoured before any lock is taken.
+  proveAuthority(options);
+  if (base === undefined) throw new Error("git-index-metadata-unavailable");
+  const head = join(base.path, "HEAD");
+  const lock = `${head}.lock`;
+  const held = {
+    path: lock,
+    descriptor: openRefLock(lock),
+    closeAttempted: false,
+    closeFailed: false,
+  };
+  const close = options.closeDescriptor ?? closeSync;
+  let published = false;
+  try {
+    if (readFileSync(head, "utf8") !== `ref: refs/heads/${expectedBranch}\n`)
+      throw new Error(GIT_HEAD_CHANGED);
+    proveAuthority(options);
+    writeSync(held.descriptor, `ref: refs/heads/${targetBranch}\n`);
+    held.closeAttempted = true;
+    held.closeFailed = stepFailed(() => {
+      close(held.descriptor);
+    });
+    if (held.closeFailed) throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+    // Immediately before the synchronous publication, with HEAD.lock still held.
+    proveAuthority(options);
+    renameSync(lock, head);
+    published = true;
   } finally {
-    closeSync(descriptor);
+    if (!published) releaseUnpublishedHeadLock(held, options);
+  }
+}
+
+function proveAuthority(options: GitCleanupOptions<GitRefLockCleanupReport>): void {
+  if (options.authorize?.() === false) throw new Error(GIT_HEAD_AUTHORITY_LAPSED);
+}
+
+// Every path that did not publish removes its own HEAD.lock and closes the descriptor exactly once
+// (never a second close after a failed one); what stayed is reported through the cleanup port and
+// never replaces the failure that ended the write.
+function releaseUnpublishedHeadLock(
+  held: {
+    readonly path: string;
+    readonly descriptor: number;
+    readonly closeAttempted: boolean;
+    readonly closeFailed: boolean;
+  },
+  options: GitCleanupOptions<GitRefLockCleanupReport>,
+): void {
+  const remove = options.removePath ?? defaultRemovePath;
+  const close = options.closeDescriptor ?? closeSync;
+  const descriptorFailed =
+    held.closeFailed ||
+    (!held.closeAttempted &&
+      stepFailed(() => {
+        close(held.descriptor);
+      }));
+  const lockFailed = stepFailed(() => {
+    remove(held.path, "file");
+  });
+  if (descriptorFailed || lockFailed)
+    deliverCleanupReport(
+      { refLocks: lockFailed ? 1 : 0, descriptors: descriptorFailed ? 1 : 0, directories: 0 },
+      options.onCleanupFailure,
+    );
+}
+
+function branchLockPath(heads: string, branch: string): string | undefined {
+  const parts = branch.split("/");
+  if (parts.some((part) => part === "" || part === "." || part === ".." || part.includes("\\")))
+    return undefined;
+  const target = join(heads, ...parts);
+  return relative(heads, target).startsWith("..") ? undefined : `${target}.lock`;
+}
+
+/**
+ * Holds Git's own `<ref>.lock` for each named local branch while `run` executes. Git refuses every
+ * update of a branch whose lock exists, so a state read inside `run` stays true until the write that
+ * follows it: a commit or branch created by another process meanwhile fails on the lock instead of
+ * being overwritten. A branch whose parent directory does not exist yet (a nested new name such as
+ * `feature/first`) gets its parent directories created first, so the lock is real for it too; the
+ * directories this call created are removed again when they are still empty, and a directory that
+ * cannot be created, or an existing parent that is not a plain directory, fails closed.
+ */
+export async function withGitBranchRefLocks<T>(
+  workspaceRoot: string,
+  branches: readonly string[],
+  run: () => Promise<T>,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  options: GitCleanupOptions<GitRefLockCleanupReport> = {},
+): Promise<T> {
+  const base = await resolveGitdir(fs, workspaceRoot);
+  if (base === undefined) throw new Error("git-index-metadata-unavailable");
+  const heads = join(branchRefsBase(base.path), "refs", "heads");
+  const held: { path: string; descriptor: number }[] = [];
+  const created: string[] = [];
+  try {
+    for (const branch of branches) {
+      const path = branchLockPath(heads, branch);
+      if (path === undefined) throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+      createMissingParents(heads, dirname(path), created);
+      held.push({ path, descriptor: openRefLock(path) });
+    }
+    return await run();
+  } finally {
+    releaseBranchRefLocks(held, created, options);
+  }
+}
+
+/** The entries from the last to the first, without changing the array. */
+function* newestFirst<T>(entries: readonly T[]): Generator<T> {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry !== undefined) yield entry;
+  }
+}
+
+/**
+ * What the release of the branch ref locks could not finish, body-free: locks (or their descriptors)
+ * that stayed, and directories this call created that could not be removed for a reason other than
+ * another writer having filled or removed them. A leftover lock blocks every later update of its ref.
+ */
+export interface GitRefLockCleanupReport {
+  /** Lock files that stayed, or whose ownership could not be proved. */
+  readonly refLocks: number;
+  /** Lock descriptors that could not be closed. */
+  readonly descriptors: number;
+  readonly directories: number;
+}
+// Each release and each directory removal is its own guarded step, so a failure never skips the
+// others and never replaces what `run` settled; what stayed is reported through the caller's port.
+function releaseBranchRefLocks(
+  held: { path: string; descriptor: number }[],
+  created: string[],
+  options: GitCleanupOptions<GitRefLockCleanupReport>,
+): void {
+  const remove = options.removePath ?? defaultRemovePath;
+  let refLocks = 0;
+  let descriptors = 0;
+  for (const lock of newestFirst(held)) {
+    const released = releaseRefLock(lock, remove, options);
+    if (released.lock) refLocks += 1;
+    if (released.descriptor) descriptors += 1;
+  }
+  let directories = 0;
+  for (const directory of newestFirst(created))
+    if (
+      stepFailed(() => {
+        removeEmptyDirectory(directory, remove);
+      })
+    )
+      directories += 1;
+  if (refLocks > 0 || descriptors > 0 || directories > 0)
+    deliverCleanupReport({ refLocks, descriptors, directories }, options.onCleanupFailure);
+}
+
+// Walks from `refs/heads` down to the lock's directory: every existing component must be a plain
+// directory, and a missing one is created (and remembered) so the lock has a directory to live in.
+function createMissingParents(heads: string, parent: string, created: string[]): void {
+  let current = heads;
+  for (const part of relative(heads, parent)
+    .split(sep)
+    .filter((name) => name !== "")) {
+    current = join(current, part);
+    if (lstatSync(current, { throwIfNoEntry: false }) === undefined)
+      makeDirectory(current, created);
+    const checked = lstatSync(current, { throwIfNoEntry: false });
+    if (checked === undefined || !checked.isDirectory() || checked.isSymbolicLink())
+      throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+  }
+}
+
+function makeDirectory(path: string, created: string[]): void {
+  try {
+    mkdirSync(path, { mode: 0o755 });
+    created.push(path);
+  } catch (error) {
+    // Another writer made it first: it is re-checked like any existing component.
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      throw new Error(GIT_REF_LOCK_UNAVAILABLE, { cause: error });
+  }
+}
+
+// A directory another writer filled (or removed) meanwhile is theirs and stays as it is.
+function removeEmptyDirectory(directory: string, remove: RemovePath): void {
+  try {
+    remove(directory, "directory");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOTEMPTY" && code !== "ENOENT" && code !== "EEXIST") throw error;
+  }
+}
+
+function openRefLock(path: string): number {
+  try {
+    return openSync(
+      path,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
+    // Only an existing lock file is a lock another process holds; a permission, space or
+    // read-only failure says nothing about a competing writer.
+    const held = (error as NodeJS.ErrnoException).code === "EEXIST";
+    throw new Error(held ? GIT_REF_LOCK_HELD : GIT_REF_LOCK_UNAVAILABLE, { cause: error });
+  }
+}
+
+interface RefLockRelease {
+  readonly lock: boolean;
+  readonly descriptor: boolean;
+}
+// The lock file is removed only when it is proved to be this holder's own: a lock whose ownership
+// cannot be established may be another writer's and is left alone and counted. The descriptor is
+// closed whatever the removal did, and its failure is reported on its own.
+function releaseRefLock(
+  held: { readonly path: string; readonly descriptor: number },
+  remove: RemovePath,
+  options: GitCleanupOptions<GitRefLockCleanupReport>,
+): RefLockRelease {
+  const owns = options.ownsLock ?? sameLock;
+  const owned = attempt(() => owns(held.path, held.descriptor));
+  const lock =
+    owned === undefined ||
+    (owned &&
+      stepFailed(() => {
+        remove(held.path, "file");
+      }));
+  const close = options.closeDescriptor ?? closeSync;
+  const descriptor = stepFailed(() => {
+    close(held.descriptor);
+  });
+  return { lock, descriptor };
+}
+
+interface HeldIndexTransaction {
+  readonly base: string;
+  readonly directory: NonNullable<ReturnType<typeof lstatSync>>;
+  readonly lock: string;
+  readonly descriptor: number;
+  readonly temporaryIndexPath: string;
+  readonly temporary: { readonly owned: boolean };
+}
+function cleanupIndexTransaction(
+  held: HeldIndexTransaction,
+  quarantines: readonly GitObjectQuarantine[],
+  remove: RemovePath,
+  options: GitCleanupOptions<GitIndexCleanupReport>,
+): GitIndexCleanupReport {
+  const { base, directory, lock, descriptor, temporaryIndexPath, temporary } = held;
+  const quarantineFailures = removeQuarantines(quarantines, remove);
+  // The private index and the lock are removed only while the gitdir is the directory that was
+  // locked; a directory that cannot be inspected counts as an unreleased lock, and a private index
+  // that could not be removed for that reason is a leftover too.
+  const sameBase = attempt(() => sameDirectory(base, directory));
+  const temporaryIndex =
+    temporary.owned &&
+    (sameBase !== true ||
+      stepFailed(() => {
+        remove(temporaryIndexPath, "file");
+      }));
+  const owns = options.ownsLock ?? sameLock;
+  const ownLock = sameBase === true ? attempt(() => owns(lock, descriptor)) : false;
+  const lockFailed =
+    sameBase === undefined ||
+    ownLock === undefined ||
+    (ownLock &&
+      stepFailed(() => {
+        remove(lock, "file");
+      }));
+  // The descriptor is closed whatever happened before; its failure is its own fact.
+  const close = options.closeDescriptor ?? closeSync;
+  const descriptorFailed = stepFailed(() => {
+    close(descriptor);
+  });
+  return {
+    quarantines: quarantineFailures,
+    temporaryIndex,
+    lock: lockFailed,
+    descriptor: descriptorFailed,
+  };
+}
+// `undefined` when the check itself threw.
+function attempt(check: () => boolean): boolean | undefined {
+  try {
+    return check();
+  } catch {
+    return undefined;
   }
 }
 function sameDirectory(path: string, before: NonNullable<ReturnType<typeof lstatSync>>): boolean {
@@ -112,8 +805,16 @@ async function copyIndex(
   base: string,
   target: string,
   onCreated: () => void,
-): Promise<void> {
+): Promise<boolean> {
   const source = join(base, "index");
+  // A repository whose index was never written (a fresh `git init` before its first stage) has no
+  // index file; Git reads an absent GIT_INDEX_FILE as the empty index and creates it on its first
+  // write. Under the held lock nothing else can create it, so the private copy simply starts absent
+  // and the owner of the copy is still recorded so a failed run removes whatever Git wrote.
+  if (lstatSync(source, { throwIfNoEntry: false }) === undefined) {
+    onCreated();
+    return false;
+  }
   assertIndexFile(source);
   const stat = fs.stat(source);
   const bytes = await fs.readFileBytes?.(source, MAX_INDEX_BYTES, "reject", stat);
@@ -129,6 +830,7 @@ async function copyIndex(
   } finally {
     closeSync(descriptor);
   }
+  return true;
 }
 
 export interface GitStageFile {
@@ -136,23 +838,74 @@ export interface GitStageFile {
   readonly mode: "100644" | "100755" | "120000" | "0";
   readonly bytes: Uint8Array;
 }
+/**
+ * The identity of a regular file as the one lstat saw it. A streamed or Git-side read is accepted
+ * only while the file still has exactly this identity, so a file that changes (or is swapped for a
+ * link) while it is read fails closed instead of being staged as a mix of two states.
+ */
+export interface GitStageFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+/**
+ * A regular file whose bytes are never held in memory: the status and staging paths stream it
+ * (`streamGitStageFile`) or hand its path to Git, and verify its identity afterwards. Only its size
+ * and identity are known up front.
+ */
+export interface GitStageLargeFile {
+  readonly path: string;
+  readonly mode: "100644" | "100755";
+  readonly size: number;
+  readonly identity: GitStageFileIdentity;
+}
+export type GitStageContent = GitStageFile | GitStageLargeFile;
+export function isGitStageLargeFile(content: GitStageContent): content is GitStageLargeFile {
+  return !("bytes" in content);
+}
+/** Closed failure codes a stage-file read throws (the `Error` message is the code). */
+export const GIT_STAGE_FILE_TOO_LARGE = "git-stage-file-too-large";
+export const GIT_STAGE_FILE_CHANGED = "git-stage-file-changed";
+// Permanent: the entry is not a regular file (a directory, a device, a FIFO) or has several hard
+// links, which the stage lane never reads. Retrying cannot cure either, unlike a change mid-read.
+export const GIT_STAGE_FILE_NOT_REGULAR = "git-stage-file-not-regular";
+export const GIT_STAGE_FILE_HARD_LINKED = "git-stage-file-hard-linked";
+export const GIT_STAGE_READ_CANCELLED = "git-stage-read-cancelled";
 export interface GitStageReadOptions {
   readonly maxBytes?: number | undefined;
   // The port containment resolves through; the owned-root port admits a managed worktree below the
   // always-denied `.keiko` segment, the plain default keeps refusing it (2026-09-10).
   readonly fs?: WorkspaceFs | undefined;
+  /**
+   * `contained` (the default, and the only mode the staging write path uses) refuses a symlink whose
+   * target is absolute, denied or outside the workspace. `read-only` is for status comparison: the
+   * link contributes its raw `readlink` bytes, exactly what Git stores in the blob, and the target
+   * is neither resolved nor followed, so an unchanged link to `/usr/share/x` or `../shared` reads as
+   * the unchanged entry it is instead of failing the whole status read.
+   */
+  readonly symlinks?: "contained" | "read-only" | undefined;
+  // Checked between the chunks of a streamed read: a cancelled run stops reading a multi-gigabyte
+  // file at the next chunk instead of finishing the pass.
+  readonly signal?: AbortSignal | undefined;
+}
+export interface GitStageInspectOptions extends GitStageReadOptions {
+  /**
+   * A regular file above this size is returned as a `GitStageLargeFile` instead of being read into
+   * memory. The default is the governed Git stdin contract (a file's bytes travel on stdin only up
+   * to 64 KiB); a caller that only compares content raises it to what it is willing to hold.
+   */
+  readonly inlineMaxBytes?: number | undefined;
 }
 /**
- * The most bytes one staged file may carry, and the most a whole stage candidate may sum to. Until
- * 2026-09-10 both were 64 KiB: a lockfile, a bundled asset or eight ordinary source files together
- * could not be staged by a governed run at all, and the refusal surfaced as a failed Git effect
- * (Coding Workbench run 13, owner review of PR #3452). The per-file bound equals the raw worktree
- * scan's content budget — a file the scan cannot read is never listed as a change, so nothing
- * admitted for staging can exceed it — and the candidate bound keeps a fifty-path selection's
- * resident bytes to what one local process can hold while it digests and writes them.
+ * The most bytes one in-memory stage read may carry. A file above it is never read whole by the
+ * status and staging paths (`inspectGitStageFile` streams it); the bound only protects the memory
+ * of a caller that explicitly needs every byte at once through `readGitStageFile`.
  */
 export const GIT_STAGE_FILE_MAX_BYTES = 8 * 1024 * 1024;
-export const GIT_STAGE_CANDIDATE_MAX_BYTES = 32 * 1024 * 1024;
+export const GIT_STAGE_INLINE_MAX_BYTES = 64 * 1024;
+const STREAM_CHUNK_BYTES = 1024 * 1024;
 function stageReadSettings(options: GitStageReadOptions): {
   readonly fs: WorkspaceFs;
   readonly maxBytes: number;
@@ -162,6 +915,46 @@ function stageReadSettings(options: GitStageReadOptions): {
     maxBytes: options.maxBytes ?? GIT_STAGE_FILE_MAX_BYTES,
   };
 }
+interface StageTarget {
+  readonly fs: WorkspaceFs;
+  readonly canonical: string;
+  readonly absolute: string;
+  readonly before: Stats | undefined;
+}
+function stageTarget(root: string, path: string, fs: WorkspaceFs): StageTarget {
+  const canonical = resolveExistingAllowedWorkspaceRealRoot(fs, root);
+  const absolute = resolveWithinWorkspace(canonical, path);
+  if (isDenied(path) || relative(canonical, absolute).replaceAll("\\", "/") !== path)
+    throw new Error("git-stage-path-denied");
+  assertStageParent(fs, canonical, absolute);
+  return { fs, canonical, absolute, before: lstatSync(absolute, { throwIfNoEntry: false }) };
+}
+function stageFileMode(before: Stats): "100644" | "100755" {
+  return (before.mode & 0o111) === 0 ? "100644" : "100755";
+}
+function stageIdentity(path: string): GitStageFileIdentity {
+  const stat = lstatSync(path, { bigint: true });
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+function assertSameIdentity(absolute: string, file: GitStageLargeFile): void {
+  const stat = lstatSync(absolute, { bigint: true, throwIfNoEntry: false });
+  const expected = file.identity;
+  if (
+    stat?.isFile() !== true ||
+    stat.dev !== expected.dev ||
+    stat.ino !== expected.ino ||
+    stat.size !== expected.size ||
+    stat.mtimeNs !== expected.mtimeNs ||
+    stat.ctimeNs !== expected.ctimeNs
+  )
+    throw new Error(GIT_STAGE_FILE_CHANGED);
+}
 /** Stable no-follow content read. A symlink contributes only its contained relative target bytes. */
 export async function readGitStageFile(
   root: string,
@@ -169,24 +962,174 @@ export async function readGitStageFile(
   options: GitStageReadOptions = {},
 ): Promise<GitStageFile> {
   const { fs, maxBytes } = stageReadSettings(options);
-  const canonical = resolveExistingAllowedWorkspaceRealRoot(fs, root);
-  const absolute = resolveWithinWorkspace(canonical, path);
-  if (isDenied(path) || relative(canonical, absolute).replaceAll("\\", "/") !== path)
-    throw new Error("git-stage-path-denied");
-  assertStageParent(fs, canonical, absolute);
-  const before = lstatSync(absolute, { throwIfNoEntry: false });
-  if (before === undefined) return { path, mode: "0", bytes: new Uint8Array() };
-  if (before.isSymbolicLink()) return stageSymlink(fs, canonical, path, absolute, before);
-  const expected = fs.stat(absolute);
-  const bytes = await fs.readFileBytes?.(absolute, maxBytes, "reject", expected);
-  if (bytes?.byteLength !== before.size) throw new Error("git-stage-file-incomplete");
+  const target = stageTarget(root, path, fs);
+  const early = nonRegularStageFile(target, path, options);
+  if (early !== undefined) return early;
+  const { before, absolute, canonical } = target;
+  if (before === undefined || before.size > maxBytes) throw new Error(GIT_STAGE_FILE_TOO_LARGE);
+  const bytes = await readRegularBytes(target, maxBytes);
   assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
-  return { path, mode: (before.mode & 0o111) === 0 ? "100644" : "100755", bytes };
+  return { path, mode: stageFileMode(before), bytes };
+}
+async function readRegularBytes(target: StageTarget, maxBytes: number): Promise<Uint8Array> {
+  const { fs, absolute, before } = target;
+  const expected = fs.stat(absolute);
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = await fs.readFileBytes?.(absolute, maxBytes, "reject", expected);
+  } catch (error) {
+    throw changedOrOriginal(error);
+  }
+  if (bytes === undefined || bytes.byteLength !== before?.size)
+    throw new Error(GIT_STAGE_FILE_CHANGED);
+  return bytes;
+}
+// A missing path (`mode: "0"`) or a symlink; `undefined` for a regular file.
+function nonRegularStageFile(
+  target: StageTarget,
+  path: string,
+  options: GitStageReadOptions,
+): GitStageFile | undefined {
+  const { before, fs, canonical, absolute } = target;
+  if (before === undefined) return { path, mode: "0", bytes: new Uint8Array() };
+  if (before.isSymbolicLink()) return stageLink(options, fs, canonical, path, absolute, before);
+  return undefined;
+}
+/**
+ * The same checks as `readGitStageFile`, but a regular file above `inlineMaxBytes` is returned as a
+ * `GitStageLargeFile` (size and identity only) instead of being read, so no file size ever makes
+ * the read fail and no large file is ever held whole in memory.
+ */
+export async function inspectGitStageFile(
+  root: string,
+  path: string,
+  options: GitStageInspectOptions = {},
+): Promise<GitStageContent> {
+  const { fs, maxBytes } = stageReadSettings(options);
+  const inlineMax = Math.min(options.inlineMaxBytes ?? GIT_STAGE_INLINE_MAX_BYTES, maxBytes);
+  const target = stageTarget(root, path, fs);
+  const early = nonRegularStageFile(target, path, options);
+  if (early !== undefined) return early;
+  const { before, absolute, canonical } = target;
+  if (before === undefined) throw new Error(GIT_STAGE_FILE_CHANGED);
+  if (before.size > inlineMax) {
+    assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+    if (!before.isFile()) throw new Error(GIT_STAGE_FILE_NOT_REGULAR);
+    if (before.nlink > 1) throw new Error(GIT_STAGE_FILE_HARD_LINKED);
+    const identity = stageIdentity(absolute);
+    if (identity.size !== BigInt(before.size)) throw new Error(GIT_STAGE_FILE_CHANGED);
+    return { path, mode: stageFileMode(before), size: before.size, identity };
+  }
+  const bytes = await readRegularBytes(target, inlineMax);
+  assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+  return { path, mode: stageFileMode(before), bytes };
+}
+/**
+ * Streams a large file's bytes to `visit` in bounded chunks through the workspace port's validated
+ * descriptor reader (no-follow, hard-link policy, descriptor snapshot checked around every range),
+ * so memory holds one chunk, never the file. The file must still have the identity `inspect` saw,
+ * both before the first and after the last chunk, or the read fails closed as
+ * `git-stage-file-changed`.
+ */
+export async function streamGitStageFile(
+  root: string,
+  file: GitStageLargeFile,
+  options: GitStageReadOptions,
+  visit: (chunk: Uint8Array) => void,
+): Promise<void> {
+  const { fs } = stageReadSettings(options);
+  const { canonical, absolute } = stageTarget(root, file.path, fs);
+  assertSameIdentity(absolute, file);
+  const openReader = fs.openFileReader;
+  if (openReader === undefined) throw new Error("git-stage-file-unreadable");
+  const reader = await readerOrChanged(openReader, fs, absolute);
+  try {
+    let offset = 0;
+    while (offset < file.size) {
+      if (options.signal?.aborted === true) throw new Error(GIT_STAGE_READ_CANCELLED);
+      const length = Math.min(STREAM_CHUNK_BYTES, file.size - offset);
+      const chunk = await rangeOrChanged(reader, offset, length); // NOSONAR typescript:S9382 -- chunks are read in order, one in memory at a time
+      if (chunk.byteLength === 0) break;
+      visit(chunk);
+      offset += chunk.byteLength;
+    }
+    if (offset !== file.size) throw new Error(GIT_STAGE_FILE_CHANGED);
+  } finally {
+    await reader.close();
+  }
+  assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+  assertSameIdentity(absolute, file);
+}
+async function readerOrChanged(
+  open: NonNullable<WorkspaceFs["openFileReader"]>,
+  fs: WorkspaceFs,
+  absolute: string,
+): Promise<WorkspaceFileReader> {
+  try {
+    return await open.call(fs, absolute, "reject", fs.stat(absolute));
+  } catch (error) {
+    throw changedOrOriginal(error);
+  }
+}
+async function rangeOrChanged(
+  reader: WorkspaceFileReader,
+  offset: number,
+  length: number,
+): Promise<Uint8Array> {
+  try {
+    return await reader.readRange(offset, length);
+  } catch (error) {
+    throw changedOrOriginal(error);
+  }
+}
+function changedOrOriginal(error: unknown): unknown {
+  return error instanceof WorkspaceDescriptorReadError && error.reason === "changed"
+    ? new Error(GIT_STAGE_FILE_CHANGED)
+    : error;
+}
+/**
+ * Confirms that a large file is still exactly what `inspectGitStageFile` saw, after Git itself read
+ * it by path: the identity (including ctime) is unchanged and the path still resolves inside the
+ * workspace. A swap for a link or another file fails closed as `git-stage-file-changed`.
+ */
+export function assertGitStageFileUnchanged(
+  root: string,
+  file: GitStageLargeFile,
+  options: GitStageReadOptions = {},
+): void {
+  const { fs } = stageReadSettings(options);
+  const { canonical, absolute } = stageTarget(root, file.path, fs);
+  assertSameIdentity(absolute, file);
+  assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
 }
 function assertStageParent(fs: WorkspaceFs, root: string, absolute: string): void {
   let parent = dirname(absolute);
   while (parent !== root && !fs.exists(parent)) parent = dirname(parent);
   assertContainedRealPath(fs, root, parent, "git-stage-parent");
+}
+
+function stageLink(
+  options: GitStageReadOptions,
+  fs: WorkspaceFs,
+  root: string,
+  path: string,
+  absolute: string,
+  before: NonNullable<ReturnType<typeof lstatSync>>,
+): GitStageFile {
+  return options.symlinks === "read-only"
+    ? readSymlinkBytes(path, absolute, before)
+    : stageSymlink(fs, root, path, absolute, before);
+}
+function readSymlinkBytes(
+  path: string,
+  absolute: string,
+  before: NonNullable<ReturnType<typeof lstatSync>>,
+): GitStageFile {
+  const target = readlinkSync(absolute);
+  const after = lstatSync(absolute);
+  if (after.ino !== before.ino || after.ctimeMs !== before.ctimeMs)
+    throw new Error("git-stage-link-drift");
+  return { path, mode: "120000", bytes: Buffer.from(target) };
 }
 
 function stageSymlink(

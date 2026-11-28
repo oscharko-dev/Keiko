@@ -46,6 +46,7 @@ import {
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   toggleWorkspaceSelection,
+  classifyToolToggle,
   totalSourceCap,
 } from "./workspaceActions";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
@@ -2575,7 +2576,7 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     });
   });
 
-  it("opens one Local Knowledge tool window and closes it on the next toggle", () => {
+  it("opens one Local Knowledge tool window and minimizes it (never closes it) on the next toggle", () => {
     let wins: AppWindow[] | null = [];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
@@ -2590,7 +2591,174 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(1);
 
     toggleTool("localKnowledge");
-    expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
+    expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(1);
+    expect(wins?.find((w) => w.type === "localKnowledge")?.minimized).toBe(true);
+
+    toggleTool("localKnowledge");
+    expect(wins?.find((w) => w.type === "localKnowledge")?.minimized).toBe(false);
+  });
+
+  it("raises an open window that sits behind another window instead of removing it", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("governedGit", {}, "governedGit"), z: 1 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 },
+    ];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 5 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("governedGit");
+
+    expect(wins).toHaveLength(2);
+    expect(wins?.find((w) => w.id === "governedGit")).toMatchObject({ z: 6 });
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).not.toBe(true);
+  });
+
+  it("classifies a launcher click from one list: open, restore, raise or minimize", () => {
+    const back = { ...win("governedGit", {}, "governedGit"), z: 1 };
+    const front = { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 };
+    expect(classifyToolToggle([back, front], "governedGit")).toBe("raise");
+    expect(classifyToolToggle([back, front], "chat")).toBe("minimize");
+    expect(classifyToolToggle([{ ...back, minimized: true }, front], "governedGit")).toBe(
+      "restore",
+    );
+    expect(classifyToolToggle(null, "governedGit")).toBe("open");
+    // A z tie is never frontmost, so the click raises rather than closing.
+    expect(classifyToolToggle([back, { ...front, z: 1 }], "governedGit")).toBe("raise");
+  });
+
+  it("setToolOpen sets an explicit state regardless of stacking", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("governedGit", {}, "governedGit"), z: 1 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 },
+    ];
+    const { setToolOpen } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 5 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    setToolOpen("governedGit", false);
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).toBe(true);
+    setToolOpen("governedGit", false);
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).toBe(true);
+    setToolOpen("governedGit", true);
+    expect(wins?.find((w) => w.id === "governedGit")).toMatchObject({ minimized: false, z: 6 });
+    setToolOpen("governedGit", true);
+    expect(wins?.find((w) => w.id === "governedGit")?.z).toBe(6);
+    setToolOpen("settings", false);
+    expect(wins?.some((w) => w.id === "settings")).toBe(false);
+  });
+
+  it("treats a window beneath only minimized windows as frontmost and minimizes it", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("governedGit", {}, "governedGit"), z: 1 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 9, minimized: true },
+    ];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 9 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("governedGit");
+
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).toBe(true);
+    expect(wins).toHaveLength(2);
+  });
+
+  it("reports a blocked click, not an open, when the window limit stops it or nothing is measured", () => {
+    let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const winsRef: MutableRefObject<AppWindow[]> = { current: wins };
+    const setWins = (update: SetStateAction<AppWindow[] | null>): void => {
+      wins = typeof update === "function" ? update(wins) : update;
+      winsRef.current = wins ?? [];
+    };
+    const limited = makeMutations({
+      setWins,
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+    expect(limited.toggleTool("localKnowledge")).toBe("blocked");
+    const unmeasured = makeMutations({ setWins, zc: { current: 0 }, worldVP: () => null, winsRef });
+    expect(unmeasured.toggleTool("settings")).toBe("blocked");
+    const noRef = makeMutations({ setWins, zc: { current: 0 }, worldVP: () => layoutViewport });
+    expect(noRef.toggleTool("settings")).toBe("blocked");
+  });
+
+  it("answers what it applied when the latest list is unknown, and stays silent when nothing is measured", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins = (update: SetStateAction<AppWindow[] | null>): void => {
+      wins = typeof update === "function" ? update(wins) : update;
+    };
+    const noRef = makeMutations({ setWins, zc: { current: 0 }, worldVP: () => layoutViewport });
+    expect(noRef.toggleTool("settings")).toBe("open");
+    expect(wins?.map((w) => w.type)).toEqual(["settings"]);
+
+    const full: AppWindow[] = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const onWindowLimitReached = vi.fn();
+    const unmeasured = makeMutations({
+      setWins,
+      zc: { current: 0 },
+      worldVP: () => null,
+      winsRef: { current: full },
+      onWindowLimitReached,
+    });
+    expect(unmeasured.toggleTool("localKnowledge")).toBe("blocked");
+    expect(onWindowLimitReached).not.toHaveBeenCalled();
+  });
+
+  it("open on an already frontmost window keeps the list identity so React skips a render", () => {
+    const only = [{ ...win("governedGit", {}, "governedGit"), z: 3 }];
+    let next: AppWindow[] | null = null;
+    const { setToolOpen } = makeMutations({
+      setWins: (update) => {
+        next = typeof update === "function" ? update(only) : update;
+      },
+      zc: { current: 3 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+    setToolOpen("governedGit", true);
+    expect(next).toBe(only);
+  });
+
+  it("raises the background window after a minimize and restore cycle on the other launcher", () => {
+    let wins: AppWindow[] | null = [];
+    const winsRef: MutableRefObject<AppWindow[]> = { current: [] };
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+        winsRef.current = wins ?? [];
+      },
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+      winsRef,
+    });
+    const visible = (): string[] =>
+      (wins ?? []).filter((w) => w.minimized !== true).map((w) => w.type);
+
+    toggleTool("governedGit");
+    toggleTool("coding");
+    toggleTool("coding"); // frontmost: minimized
+    expect(visible()).toEqual(["governedGit"]);
+    toggleTool("coding"); // restored in front
+    expect(toggleTool("governedGit")).toBe("raise");
+    expect(visible().toSorted()).toEqual(["coding", "governedGit"]);
+    const z = (type: string): number => wins?.find((w) => w.type === type)?.z ?? 0;
+    expect(z("governedGit")).toBeGreaterThan(z("coding"));
   });
 
   it("does not open a tool beyond the workspace-wide window limit", () => {

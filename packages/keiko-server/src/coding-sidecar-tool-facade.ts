@@ -77,6 +77,7 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
         "approval-expired",
         "approval-cancelled",
         "approval-unavailable",
+        "branch-name-refused",
       ],
     },
     // A refused governed ask names its run and its permission request, so the line joins the run's
@@ -110,6 +111,7 @@ const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   "approval-expired": "timeout",
   "approval-cancelled": "cancelled",
   "approval-unavailable": "unavailable",
+  "branch-name-refused": "invalid-request",
 };
 
 interface ToolFacadeStatusMapping {
@@ -174,6 +176,7 @@ const TOOL_FACADE_DEFAULT_MAPPING: ToolFacadeStatusMapping = {
 const PASSED_THROUGH_REJECTIONS: ReadonlySet<OpenCodeToolBridgeResponse["rejection"]> = new Set([
   "approval-denied",
   "approval-expired",
+  "branch-name-refused",
 ]);
 
 // The 408 mapping is shared between the bridge-returned deadline (a call admitted then aborted

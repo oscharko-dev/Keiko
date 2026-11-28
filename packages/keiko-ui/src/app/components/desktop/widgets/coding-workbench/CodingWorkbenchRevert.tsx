@@ -30,30 +30,83 @@ export interface CodingWorkbenchRevertBarProps {
   readonly onRevert: (action: CodingWorkbenchRuntimeRevertAction) => void;
 }
 
+// What an undo of an index-only turn did, said as it happened: the paths it put back, and the
+// outcome for the rest, so a partial or refused index undo never reads like a complete one.
+function stagedIndexSummary(
+  revert: CodingWorkbenchRuntimeRevertState,
+  t: CodingWorkbenchTranslate,
+): string {
+  const outcome = revert.index;
+  if (outcome === undefined || outcome === "restored")
+    return t("codingWorkbench.revert.staged.index");
+  const count = revert.indexPathCount ?? 0;
+  const outcomeText = t(`codingWorkbench.revert.index.${outcome}` as const);
+  if (count === 0) return `${t("codingWorkbench.revert.staged.index.none")} ${outcomeText}`;
+  const undone = t(
+    count === 1
+      ? "codingWorkbench.revert.staged.index.partial.one"
+      : "codingWorkbench.revert.staged.index.partial",
+    { count },
+  );
+  return `${undone} ${outcomeText}`;
+}
+
+// A turn that only changed the Git index has no file to count; the index paths stand for it.
+function indexOnlySummary(
+  revert: CodingWorkbenchRuntimeRevertState,
+  t: CodingWorkbenchTranslate,
+): string | undefined {
+  if (revert.fileCount !== 0) return undefined;
+  if (revert.staged) return stagedIndexSummary(revert, t);
+  const count = revert.indexPathCount ?? 0;
+  if (count === 0) return undefined;
+  return t(
+    count === 1
+      ? "codingWorkbench.revert.summary.index.one"
+      : "codingWorkbench.revert.summary.index",
+    { count },
+  );
+}
+
 function summaryText(
   revert: CodingWorkbenchRuntimeRevertState,
   t: CodingWorkbenchTranslate,
 ): string {
+  const indexOnly = indexOnlySummary(revert, t);
+  if (indexOnly !== undefined) return indexOnly;
   const values = {
     count: revert.fileCount,
     additions: revert.additions,
     deletions: revert.deletions,
   };
   if (revert.staged) {
-    return t(
+    const undone = t(
       revert.fileCount === 1
         ? "codingWorkbench.revert.staged.one"
         : "codingWorkbench.revert.staged",
       values,
     );
+    // What the undo did to the paths the turn staged is said right beside the undo itself.
+    if (revert.index === undefined) return undone;
+    const indexKey = `codingWorkbench.revert.index.${revert.index}` as const;
+    return `${undone} ${t(indexKey)}`;
   }
-  if (revert.fileCount === 0) return t("codingWorkbench.revert.none");
   return t(
     revert.fileCount === 1
       ? "codingWorkbench.revert.summary.one"
       : "codingWorkbench.revert.summary",
     values,
   );
+}
+
+// Nothing to undo or restore is noise, not a control: the row appears once there is something to
+// act on. The bar still stays while a mutation is in flight or a confirmation is open.
+function hasRevertTarget(revert: CodingWorkbenchRuntimeRevertState): boolean {
+  return revert.staged || revert.fileCount > 0 || (revert.indexPathCount ?? 0) > 0;
+}
+
+function isRevertRowShown(revert: CodingWorkbenchRuntimeRevertState, engaged: boolean): boolean {
+  return engaged || hasRevertTarget(revert);
 }
 
 interface RevertConfirmationState {
@@ -106,8 +159,8 @@ export function CodingWorkbenchRevertBar({
   const t = useCodingWorkbenchTranslate();
   const action: CodingWorkbenchRuntimeRevertAction = revert?.staged === true ? "restore" : "undo";
   const confirmation = useRevertConfirmation(action, busy);
-  if (revert === null) return null;
   const { open } = confirmation;
+  if (revert === null || !isRevertRowShown(revert, busy || open !== null)) return null;
   return (
     <section className={styles.cmpRevert} aria-label={t("codingWorkbench.revert.region")}>
       <output className={styles.cmpRevertSummary}>
@@ -118,7 +171,7 @@ export function CodingWorkbenchRevertBar({
           ref={confirmation.triggerRef}
           className={windowStyles.button}
           type="button"
-          disabled={busy || !(revert.staged || revert.fileCount > 0)}
+          disabled={busy || !hasRevertTarget(revert)}
           onClick={confirmation.ask}
         >
           {t(action === "undo" ? "codingWorkbench.revert.undo" : "codingWorkbench.revert.restore")}

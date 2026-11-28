@@ -31,6 +31,7 @@ import {
   readGitWorktreeSnapshot,
   readStagedPaths,
 } from "./git-worktree-snapshot-node.js";
+import { redactCredentialShapes } from "@oscharko-dev/keiko-security";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
 
@@ -176,6 +177,54 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
     expect(await readGitStagedDiff(content)).toContain("[REDACTED]");
     expect(await readGitBlobText(content, blob)).not.toContain("private-environment-value");
     expect(await readGitStagedDiff(content)).not.toContain("private-environment-value");
+  });
+
+  // U-25: a healthy Full-access commit was refused ("no passing verification covers the staged
+  // change") because the metadata read ran through the full redactor, whose source-language
+  // projection infers code or YAML from the text and, when that refuses (a syntax refusal, or a
+  // call-stack overflow on a ~300-file listing), masks the rest of the output. Closed machine
+  // metadata must never meet that projection. A tracked file whose NAME reads as source
+  // (`class A {`) is the deterministic trigger; the test pins that the machine lane returns the
+  // listing intact and that the credential floor alone leaves it unchanged.
+  it("keeps the commit proof readable when a tracked file name reads as source code", async () => {
+    const sourceLikeName = "class A {";
+    writeFileSync(join(root, sourceLikeName), "body\n");
+    writeFileSync(join(root, "other.txt"), "other\n");
+    git(["add", "--", sourceLikeName, "other.txt"]);
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    const statOutput = await readGitIndexStat(clean);
+    expect(statOutput).toContain(sourceLikeName);
+    expect(redactCredentialShapes(statOutput, [], false)).toBe(statOutput);
+    expect((await readGitIndexEntries(clean)).map((entry) => entry.path)).toContain(sourceLikeName);
+    expect(await readGitIndexTreeDigest(clean)).toMatch(/^[0-9a-f]+$/u);
+    const changes = (await readGitRawChanges(clean)).changes.map((file) => file.path);
+    expect(changes).toEqual(expect.arrayContaining([sourceLikeName, "other.txt"]));
+  });
+
+  it("still refuses stat, entry and tree metadata whose PATH carries a credential value", async () => {
+    git(["add", "."]);
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    const headSha = await readGitRevision(clean, "HEAD");
+    const credential = {
+      ...clean,
+      processEnv: { ...clean.processEnv, MY_DEPLOY_TOKEN: "code.txt" },
+    };
+    await expect(readGitIndexStat(credential)).rejects.toBeInstanceOf(GitWorktreeReadError);
+    await expect(readGitIndexEntries(credential)).rejects.toBeInstanceOf(GitWorktreeReadError);
+    await expect(readGitTreeEntries(credential, headSha)).rejects.toBeInstanceOf(
+      GitWorktreeReadError,
+    );
+  });
+
+  it("still masks a credential-shaped token in a path and in file CONTENT", async () => {
+    const token = `sk-${"a1".repeat(12)}`;
+    writeFileSync(join(root, `${token}.txt`), `${token}\n`);
+    git(["add", "."]);
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    await expect(readGitIndexStat(clean)).rejects.toBeInstanceOf(GitWorktreeReadError);
+    const blob = git(["rev-parse", `:${token}.txt`]);
+    expect(await readGitBlobText(clean, blob)).not.toContain(token);
+    expect(await readGitStagedDiff(clean)).not.toContain(token);
   });
 
   it("retains tracking headers when CI context values overlap the Git protocol", async () => {
@@ -329,10 +378,15 @@ describe("paths the workspace deny list protects", () => {
   });
 
   it("still fails closed, with its closed code, when the content budget leaves the snapshot incomplete", async () => {
-    // Nine untracked files of exactly 1 MiB: the eighth exhausts the 8 MiB content budget and the
-    // ninth marks the inspection incomplete.
+    // Nine tracked files of exactly 1 MiB, each changed: their bytes are compared, so the eighth
+    // exhausts the 8 MiB content budget and the ninth marks the inspection incomplete.
     for (let index = 0; index < 9; index += 1) {
       writeFileSync(join(root, `blob-${String(index)}.bin`), Buffer.alloc(1_048_576, index));
+    }
+    git(["add", "."]);
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "blobs"]);
+    for (let index = 0; index < 9; index += 1) {
+      writeFileSync(join(root, `blob-${String(index)}.bin`), Buffer.alloc(1_048_576, index + 100));
     }
     const deps = { workspace, processEnv: { PATH: process.env.PATH } };
     const raw = await readGitRawChanges(deps);
@@ -348,5 +402,17 @@ describe("paths the workspace deny list protects", () => {
       code: "git-raw-snapshot-incomplete",
       message: "git-raw-snapshot-incomplete",
     });
+  });
+
+  // 301 ordinary untracked files of 32 KiB are 9.6 MB in all, yet far below any path bound: an
+  // untracked file is judged by its existence, so its size never spends the content budget.
+  it("lists every untracked file without spending the content budget on their bytes", async () => {
+    mkdirSync(join(root, "wide"));
+    for (let index = 0; index < 301; index += 1) {
+      writeFileSync(join(root, "wide", `file-${String(index)}.txt`), Buffer.alloc(32_768, 97));
+    }
+    const raw = await readGitRawChanges({ workspace, processEnv: { PATH: process.env.PATH } });
+    expect(raw.truncated).toBe(false);
+    expect(raw.changes.filter((change) => change.untracked)).toHaveLength(301);
   });
 });

@@ -155,6 +155,15 @@ describe("verificationContinuationIntent", () => {
     expect(intent).toContain("state the exact cause once");
   });
 
+  it("scopes the repair to the task and forbids repairing a pre-existing unrelated failure", () => {
+    const unattributed = verificationContinuationIntent({ check: "test", failedCount: 1 }, true);
+    expect(unattributed).toContain("may have existed before your first change");
+    expect(unattributed).toContain(
+      "whether your own changes caused the failure or the person's task",
+    );
+    expect(unattributed).toContain("do not change any file to repair it");
+  });
+
   it("is generic about an unknown check and singular about one failed step", () => {
     const intent = verificationContinuationIntent({ check: "check", failedCount: 1 }, undefined);
     expect(intent).toContain("A check you ran after your last change failed (1 step failed)");

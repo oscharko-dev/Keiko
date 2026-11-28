@@ -13,7 +13,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { redactedEventJson } from "../sse-frame-cache.js";
-import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "../sse.js";
+import { startSseHeartbeat, readyMessage, openSseResponse } from "../sse.js";
 import { writeSseFrame, type SseBackpressureSignal } from "../sse-write.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -275,7 +275,7 @@ export function openVerificationSseStream(
   onBackpressure?: (signal: SseBackpressureSignal) => void,
   correlationId?: string,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { openFrame: false });
   startSseHeartbeat(res);
   const controller = new AbortController();
   let seq = 0;

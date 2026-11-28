@@ -49,6 +49,14 @@ still identifies the configuration JSON; these configured facts do not claim pro
 An actual request through the pinned executable separately proves native base guidance plus the
 exact additive part. Legacy V1 retains its existing prompt/configuration contract.
 
+The start request also states the repository root the Workbench shows (`expectedWorkspace.root`, a
+statement and never authority). The server launches in its own global active workspace and, before
+it mints authority, a snapshot or history, compares that root with the active workspace's
+repository root by folded identity (case, separators, trailing separator); a difference refuses
+the start with `workspace-selection-mismatch` (409), so a run starts in exactly the repository the
+person sees or not at all. The Workbench answers that refusal by reading its workspace state again
+and binding the displayed repository afresh, and reads it again on every new app session.
+
 Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
 local app session and the selected checkout's existing GitHub reader grant admit preview reads.
 The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot
@@ -68,6 +76,36 @@ human text. The pinned OpenCode 2.0.10 prompt transport prepends the labelled in
 text in the existing bounded prompt and carries `keikoContextPresentationV1` metadata naming the
 human display text and the hidden context digest. The safe-activity projection verifies that
 binding and shows only the human text.
+
+The safe-activity feed (`CodingSafeActivityFeed`) is bounded by bytes, not by step counts (#4491).
+OpenCode opens one assistant message per agent step and a run calls a tool per action, so a fixed
+16-message or 64-call turn cap evicted the earliest output of every ordinary run ("Activity
+truncated."). The per-turn message and tool counts are now 512 each (a message or call serializes to more than 64 bytes, so 512 exceed the 32 KiB turn bound), above what the 32 KiB turn
+bound admits, so the byte bounds (message 16 KiB, turn 32 KiB, feed 60 KiB, reasoning 8 KiB) are the
+memory guard and the counts only stop a runaway producer of empty shells. A turn still over its byte
+bound after retained answer text, tool detail, reasoning, segments and calls were shed gives up
+whole events in this order, oldest first, and reads as truncated: (1) an older assistant message
+whose calls are all settled, together with those calls (the user anchor and the newest message
+stay); (2) single settled calls; (3) the command, output and error text of calls that have not
+settled (their rows stay, marked `detailOmitted`); (4) only when a runaway of unsettled calls alone
+still exceeds the bound, the oldest such call. A message with a running call is never evicted, and a
+running call goes only at step 4. Every message and call removed in steps 1, 2 and 4 is counted and
+logged (below); the alternative to step 4 would be a purged feed. A call that carries no message id
+is owned by no message and leaves only at step 2 or 4. The
+correlation caps in the OpenCode backend (2,048 entries, 128 KiB) hold only calls that
+have not settled and remain a memory guard.
+
+Loss is explicit. A whole message or tool row the byte bounds remove (the oldest assistant message
+or call of an over-bound turn, or the contents of a turn the feed bound evicts) adds to the feed's
+`droppedEventCount` and is recorded by the existing `coding-runtime.safe-activity` `dropped` line
+with the closed reason `capacity-rejected` (designed truncation, no error diagnostic); the timeline
+shows "Activity truncated." and the omitted-update count. Trimming content inside a kept message or
+row (segments, reasoning, tool detail) only sets that item's `truncated` flag. The live feed is a
+bounded view, not the record: the whole conversation stays in Coding History, which the
+"Previous conversation" transcript renders for a task that is reopened or reloaded (Coding History
+itself keeps up to 65,536 characters per message and lists up to 200 messages per task, and says so
+when it cuts). While the run is still live in the same window, rows the byte bound evicted are not
+shown there.
 The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
 only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
 feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.
@@ -327,27 +365,46 @@ generic "verification is not complete" request at the end of a run. Three facts 
   shell check; a denied, cancelled or resource-exceeded step never ran to a verdict, is carried
   apart as the summary's `notRunCount`, and makes a summary with no other failure a check that
   could not start)
-  and asks to repair the cause and rerun that check, or to state exactly why it cannot. It never
+  and asks to repair the cause and rerun that check, or to state exactly why it cannot. The task is
+  scoped to the person's work (U-38): a check Keiko did not see pass at the run's baseline may have
+  been red before the run, and repairing an unrelated pre-existing failure is scope creep. The
+  continuation therefore tells the model to repair only a failure its own changes caused or the
+  person's task asks it to fix, and otherwise to leave every file alone and state once that the
+  failure is pre-existing. Keiko cannot decide this deterministically without running the check on
+  the unmodified tree (a second verification subsystem) or reading the task text, so the decision
+  stays with the model under that instruction. A run that ends with the check still red after that
+  one continuation and no code change since (the edit revision at the continuation's dispatch equals
+  the revision at settlement) keeps the `check-failed` gap and adds the closed
+  `verificationGapDetail: unchanged-after-continuation` (snapshot column `verification_gap_detail`,
+  schema version 86; `coding-runtime.run.settled` carries it too). The Workbench's run status says
+  so in one sentence: the check is still failing, this run did not change it after Keiko asked, it
+  may have failed before the run, and the requested changes stay in the workspace. It never says
+  green. It never
   runs when no check ran at all (`no-failed-check`), when a check could not start or was refused or
   blocked (`blocked`, any `CODING_VERIFICATION_BLOCKED_REASONS` member), when the run's tool-call or
   patch budget refused a delegation (`budget-exhausted`; the budget refusal tells the model to
   finish and report, so a request to verify would contradict it) or when the run already continued
   once (`already-continued`). Each of these decisions is logged as `state: skipped` with its closed
   `skipReason`, so a support analysis sees why no continuation ran.
-- A run that changed code and ends without a passing check after its last change settles as before
-  (`failed` with `verification-not-evidenced`, the change kept), and the settlement carries the
-  concrete gap as the closed `verificationGap`: `no-check-run`, `check-failed`, `check-not-started`
-  or `budget-exhausted`, decided with the most concrete fact first: `check-failed`, then
+- A run that changed code and ends without a passing check after its last change settles `failed`
+  with `verification-not-evidenced` (the change kept) unless its only gap is that no check ran at
+  all (owner decision 2026-11-28): that run, the gap `no-check-run`, keeps the outcome its turn
+  reported (`succeeded` stays `succeeded`), carries no failure code, and records the gap body-free as
+  the `not-evidenced` continuation line; its task still hands the verification debt to the next
+  follow-up. The other gaps settle `failed` as above, and the settlement carries the concrete gap as
+  the closed `verificationGap`: `check-failed`, `check-not-started` or `budget-exhausted` (a stored
+  row of an older Keiko may still carry `no-check-run`, so the value and its column constraint
+  stay), decided with the most concrete fact first: `check-failed`, then
   `check-not-started`, then `budget-exhausted`, then `no-check-run`. A failed check stays the gap when the
   budget ran out afterwards; the continuation is still skipped for the budget. The gap rides the snapshot
   (persisted by the snapshot store's `verification_gap` column, schema version 83), the `status`
   frame, `coding-runtime.run.settled` and the `not-evidenced` continuation line. Without a blocker,
   `coding-runtime.run.settled` classifies such a run `errorKind=validation-failed`, not `internal`:
-  the gap is the run's verdict, not a Keiko fault. A blocked check keeps its classification. The Workbench names
-  it in one plain sentence that ends with what the person can do, and offers "Run the check now"
-  (de: "Prüfung nachholen") in place of the error report: the button starts the existing composer
-  request with a short localized sentence in the person's own name, because it is the person's own
-  click.
+  the gap is the run's verdict, not a Keiko fault. A blocked check keeps its classification. The Workbench shows
+  such a run as the ordinary failed run ("Coding run failed") with one plain sentence that ends with
+  what the person can do, in place of the error report. The "Changes not checked" title and the
+  "Run the check now" button (de: "Prüfung nachholen") no longer exist (owner decision 2026-11-28);
+  an older stored `no-check-run` row renders the same ordinary failed run with its sentence.
 
 A turn Keiko dispatches itself (the one verification continuation above and the delivery
 continuation) is never shown as the person's own message. Its runtime message carries the closed
@@ -453,7 +510,8 @@ is not on its base branch (`not-on-base`), a workspace that is not a Local check
 (`not-local-checkout`, which includes managed worktrees and a service composed without the
 workspace port) and a checkout with executable Git filters (`executable-filters`), and it reports
 the kernel's own policy and preflight blocks (`policy-block`, `preflight-block`,
-`authority-denied`). The authority is the facade's alone: Full access creates the branch inside the
+`authority-denied`). In a repository with no commit yet the branch is created from the unborn HEAD by
+re-pointing HEAD at it (no start commit, no object written, #4491); the other refusals apply unchanged. The authority is the facade's alone: Full access creates the branch inside the
 validated envelope; Supervised workspace and Ask for approval ask the operator before the branch
 is created, on the governed ask lane of `git-fetch`/`git-pull` (action `git-branch`,
 `command-execution`, risk `medium`). The ask names the action, not the name: the approval is bound
@@ -831,18 +889,27 @@ failing shell check still gets its one fact-based repair continuation instead of
 (#4519, 2026-11-22; #4491). Every other unrun step keeps the default `blocks-repair` scope.
 
 The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
-`waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,
+`waiting-for-approval`, `prepared`, `verification-failed`, `verification-missing`, `not-staged`,
 `unsaved-changes`, `blocked`, `changed`, `not-done`; lab T37, #4271). The facade answers a refused
 stage, unstage, branch, fetch, pull or verified commit as a completed call that carries the
 refusal, so the call state alone painted a commit that never happened as "Succeeded".
 `codingToolGitPresentation` derives the word from the result the model received (never from a
 message or path): a commit's exact cause where the card can name it (a failed check, a change only
 partly staged, unsaved editor files), otherwise its status, and a status it does not know fails
-closed to `not-done`. A prepared stage or unstage proposal (`ready`) claims no outcome. The timeline
-shows every word but `completed` as not done or waiting for approval, with a one-line reason, and
+closed to `not-done`. A commit proposal answered `approvalDisposition: "ready"` (the policy
+authorized it, or the person already approved it) claims `prepared`: it needs no decision and
+waits only for its execute step, so it never claims to wait for a human (lab 2026-11-27, Full
+access). The asymmetry is deliberate: a ready stage, unstage, push or pull-request proposal claims
+nothing at all. The timeline
+shows every word but `completed` as not done, prepared or waiting for approval, with a one-line
+reason that follows the badge actually shown. A row that still reads waiting in a run that is over
+(no ask open any more) reads not done, because a finished run cannot be waiting; a proposal a later
+completed execute took up reads prepared. The timeline marks a running or pending tool call
+"waiting for approval" only when the pending ask names that exact call (`callId` on the pending
+permission, carried by native, governed and Git proposal asks alike; never a guess), and
 keeps such a card out of the collapsed group of succeeded steps; a carried-out step adds no
 sentence to its badge. The same field is recorded body-free on `coding-runtime.tool-result-rendered`,
-declared `diagnosticWhen` for every word but `completed` and `waiting-for-approval`.
+declared `diagnosticWhen` for every word but `completed`, `waiting-for-approval` and `prepared`.
 
 An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
 the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends
@@ -2319,24 +2386,56 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   checks them, together with the branch, inside the same index transaction as staging and again
   just before the reviewed index replaces the live one, with the run's authority at the swap; a
   change that lands after the review or an approval is never accepted as the effect's new snapshot
-  (PR #4064 review). Staging writes objects from the verified bytes and never runs a filter
-  driver; the effective `core.safecrlf` must be `false` and the paths may carry no `text`, `eol`,
-  `crlf`, `filter`, `ident` or `working-tree-encoding` attribute. Under the effective
-  `core.autocrlf` `false` the verified bytes are staged as they are. Under `true` or `input` the
-  staged object is the one Git's own `git add` stores, admitted only when it checks the verified
-  bytes out again byte for byte: a file Git leaves unchanged, or whose index entry already stores a
-  CR (Git then keeps the new bytes), is staged as its exact bytes; with `true`, a text file whose
-  every line break is CRLF and that holds no other CR is staged as its LF form. Everything else
-  (mixed line breaks over an index entry without CR, CRLF under `input`, a conversion over a binary
-  index entry) stays `unsupported-transformation`. Git for Windows sets `core.autocrlf=true`
+  (PR #4064 review). The two bounds of a stage or unstage are separate (U-28, owner decision
+  2026-11-24 on work-ending limits). The model-facing request carries at most 50 `paths` (the same
+  bound as `keiko_git_diff` and a status list; it protects the model's context window), but a path may
+  name a directory, and `"."` the whole workspace: the server expands each to the files Git's own
+  change list names below it (the prefix rule of the diff reader; pending changes for a stage, staged
+  ones for an unstage; conflicted files are left out; denied paths never reach the list) and the
+  proposal, its approval and its effect bind those concrete files. A directory with no matching change,
+  an expansion from a truncated scan, or one above 10,000 files (`CODING_RUNTIME_GIT_MAX_STAGE_PATHS`,
+  the raw snapshot's own scan limit, which exists to protect memory and to stop a runaway loop) is
+  refused as `selection-unreviewed`. The approval card carries the true file count and the first 50
+  paths marked as truncated; the index entries of a large stage reach Git in parts of at most 48 KiB
+  on the transaction's private index, and an unstage runs as several bounded restores, so the live
+  index changes only after every part succeeded. `keiko_git_status` marks a truncated list with
+  guidance that staging a directory stages every change below it. Staging writes objects from the verified bytes and never runs a filter
+  driver; the effective `core.safecrlf` must be `false` and the paths may carry no `filter`, `ident`
+  or `working-tree-encoding` attribute and no legacy `crlf` attribute other than `-crlf`. Where neither a `text` or `eol` attribute
+  nor the effective `core.autocrlf` asks for a conversion, the verified bytes are staged as they
+  are. Otherwise the staged object is the one Git's own `git add` stores, admitted only when it
+  checks the verified bytes out again byte for byte: a file Git leaves unchanged, or (under
+  `text=auto` or `core.autocrlf` without an attribute) whose index entry already stores a CR (Git
+  then keeps the new bytes), is staged as its exact bytes; a text file whose every line break is
+  CRLF and that holds no other CR is staged as its LF form when the path checks out as CRLF
+  (`eol=crlf`, or `core.autocrlf=true` without an `eol` attribute). Everything else (mixed line
+  breaks over an index entry without CR, CRLF that checks out as LF, a conversion over a binary
+  index entry, a conversion whose checkout depends on `core.eol`) stays
+  `unsupported-transformation`. (History: until 2026-11-27 any `text` or `eol` attribute refused
+  the staging, so a repository with `* text=auto`, GitHub's default `.gitattributes`, could never
+  commit (#4491).) Git for Windows sets `core.autocrlf=true`
   system-wide, so before this every governed commit in an ordinary Windows checkout was refused
   (#4491). The conversion hash overrides every configured `filter.<name>` driver (the read path's
   neutralization; an unreadable configuration refuses), and the check before the index is promoted
   re-reads the effective line-ending mode and refuses when it differs from the one the objects
-  were hashed under (PR #4568 review). It is an option of the stage tool rather than a tool of its own, so the
-  catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
-  a member only
-  because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely
+  were hashed under (PR #4568 review). The raw status reader judges a regular file whose bytes
+  differ from its index object and whose index stat data does not match (Keiko's index-info
+  entries carry none, and Windows stat data never matches) by hashing it under Git's own
+  conversion, the way `git status` compares such an entry: clean when the converted object is the
+  index object, without requiring that the conversion round-trips. Every configured
+  `filter.<name>` driver is overridden by the staging's own overrides, and the port's Git runs are
+  limited to an allowlist (an attribute lookup and `hash-object --stdin-paths`, never `-w`, with
+  only the filter, `core.autocrlf` and `core.safecrlf` overrides). A file with a `filter`, `ident`
+  or encoding attribute, a symlink, a file that changed between the reader's read and the hash, or
+  any answer the port cannot give stays modified. The files are settled in sequential batches of
+  1000 within the scan's own bounds, so the process count stays constant per batch and no file is
+  left undecided by a size limit. Each scan that offered files records one
+  `git.raw-status.conversion-settled` line (counts and a closed outcome), or one
+  `git.raw-status.conversion-failed` line with the classified error kind when the port failed
+  (#4491).
+  It is an option of the stage tool rather than a tool of its own, so the catalog's tool count and
+  its performance case inventory stay unchanged. `keiko_verification` is a member only because a
+  commit proposal requires the commit proof, which `VerifiedCommitService` records solely
   from that tool's verification; without it no native commit could ever be proposed. The plugin is
   the mapped profiles' own generated tool source filtered to those names, so a native call is the
   identical facade request: same capability, wire body, bounds, client deadline and approval
@@ -2426,6 +2525,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   which is equivalent only while the verified base and head agree; when they differ it fails closed
   before any ref update. A distinct base keeps its separate `verify` line in the same atomic
   transaction.
+  The first commit of an unborn branch (a fresh repository, #4491) is a root commit: the facts,
+  the reviewed precondition and the proof carry an explicit unborn state, never an empty sha, the
+  signed object is created without a parent, and its ref is written with the all-zero old value, so
+  a branch that appears after the review fails the compare-and-swap; reading HEAD again as born is
+  drift like any moved head.
   A red check is the commit gate in Ask for approval and Supervised workspace, and failing
   evidence in Full access (owner decision 2026-10-30, #3907 AC3). The same parity lane asked for a
   branch, commit and push while the repository's own `npm run check` was already red; standalone
@@ -2753,6 +2857,51 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   capability no longer authenticates, sends no further attempt and ends the turn as rejected
   (409 `SKILL_SELECTION_CHANGED` with `skill-unavailable`, or 401 with `capability-invalid`), so
   the runtime does not resend it.
+- **A tool call written as text is asked for again, never executed (live defect M-1).** A local
+  model (Gemma, Qwen, DeepSeek) sometimes ends a turn with `finish_reason: stop`, no native
+  `tool_calls` and text that is tool-call markup (`<shell command="npm test" />`,
+  `<tool_call>{"name":"bash",…}</tool_call>`, `<function=name>`, a fenced JSON call). The runtime
+  reads that as the end of the turn, so the run used to settle `succeeded` without the requested
+  work and the user saw raw markup. The coding sidecar gateway owns the recovery because it alone
+  sees the request's tool catalog and both delivery paths. A turn qualifies only when it finished
+  `stop` with no native call and its text is essentially markup (at least 85 % of its non-whitespace
+  characters, at most 32 KiB, `coding-textual-tool-call.ts`) that names a tool the request advertised
+  and has a tool call's shape: an element with attributes, or a body naming one of the tool's
+  parameters (a bare `<read>` or `<subagent>text</subagent>` is a word or a template), a wrapper
+  element around such a call, a `<function=tool>` tag, or a JSON call. Once such a call is there, the
+  well-formed attribute elements beside it (a plan written as `<todo content="…" status="…"/>`
+  elements, whatever their name) and the wrapper holding them count toward that share, so the plan a
+  model writes before its call does not hide the call; without a call to an advertised tool they
+  count for nothing. Matching is case-insensitive over ASCII only, so every offset stays an offset
+  into the original text. Markup inside a code fence never
+  qualifies, except an unlabelled or tool/XML-labelled fence that is the entire answer (a `json`
+  fence is always a sample). Prose, explanations and samples that show markup, prompt templates and
+  markup naming no advertised tool never qualify. The gateway then re-requests the model with the
+  original request and the one fixed hint to use the native tool-calling interface appended to the
+  content of its last message: every earlier byte is unchanged, so the provider's prompt prefix cache
+  still serves the retry (a hint in the leading system message would change the first bytes), and no
+  message is added or reordered, so the role sequence a chat template sees is unchanged (a late
+  system message, or a second consecutive user message, is what Gemma templates behind LiteLLM may
+  reject or reorder). Only a last message that cannot carry text (an assistant prefill, a system
+  message, content parts) gets a short user message. It is made at most twice per runtime request
+  (a loop guard, not a work limit:
+  once spent, the response passes through unchanged, exactly as before). The text is never parsed
+  into a tool call and nothing is executed from it. A buffered answer is simply discarded. A live
+  (streamed) turn holds back, from the first character that can start markup (a `<` followed by a
+  letter or `/`, or a line-leading code fence, `{` or `[`; never `a < b`), the rest of the attempt
+  until it finishes, so a discarded attempt never reaches the runtime; a held text that turns out to
+  be an ordinary answer is released in one frame, and a hold past 32 KiB is released unexamined. When
+  prose already reached the runtime before the markup began, a retry would deliver that prose and
+  then the retry's output, so the live turn is not retried and passes through as before
+  (`retry-skipped`): nothing is ever duplicated. The reasoning of a retried live attempt is not
+  forwarded (the first attempt's was shown), a discarded attempt's usage is counted beside the final
+  answer's (`discardedAttemptUsage`), and when a retry fails or is cancelled the discarded attempts'
+  prompt tokens still settle into the run's reservation beside the estimate of the attempt that never
+  finished, with `coding-sidecar.gateway.usage-settled` naming them. A model that needs exact
+  reasoning continuation keeps the pass-through (its discarded attempt would leave continuation state
+  behind). `coding-sidecar.gateway.outcome` records `textualToolCallRecovery` (`retried-native`,
+  `retry-exhausted`, `retry-skipped`, `retry-interrupted`) and `textualToolCallRetries` (counts and
+  closed words only, never the markup) on a turn that needed it.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's

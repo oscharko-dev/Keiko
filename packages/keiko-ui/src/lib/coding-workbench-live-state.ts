@@ -139,6 +139,27 @@ export interface CodingWorkbenchMutationState {
    * so nothing that reads "pending → idle" as success (clearing the composer draft) may act on it.
    */
   readonly cancelled?: true;
+  /**
+   * The person left the task while this Start was still in flight. Its late failure belongs to
+   * the task that was left, so it must not alert on the task shown now; the server-side re-read
+   * that follows a conflict still runs.
+   */
+  readonly leftTask?: true;
+  /**
+   * The run this window's own successful mutation was acknowledged with. It is the only proof that
+   * a run belongs to this window: whichever run a re-read shows afterwards may be another window's.
+   */
+  readonly acknowledgedRunId?: string;
+  /**
+   * A newer snapshot superseded this failed action: the mutation is idle again without having
+   * succeeded. Like `cancelled`, it must never read as "pending → idle" success, and it keeps the
+   * refused kind and code, so a window that never rendered the failure (the re-read came back
+   * within the same render) still knows why its Start did not run (U-14).
+   */
+  readonly supersededFailure?: {
+    readonly kind: CodingWorkbenchMutationKind | null;
+    readonly code: string;
+  };
 }
 
 export interface CodingWorkbenchRuntimeState {
@@ -177,7 +198,20 @@ export interface CodingWorkbenchRuntimeState {
   readonly workspace: CodingWorkbenchResourceState<CodingWorkbenchWorkspaceProjection>;
   readonly run: CodingWorkbenchResourceState<CodingWorkbenchRuntimeSnapshot>;
   readonly stream: CodingWorkbenchResourceState<CodingWorkbenchStreamProjection>;
+  /**
+   * The run stream is still waiting for a free browser connection another Keiko tab holds. Set by
+   * the capacity admission once the wait passes its threshold and cleared when the stream is
+   * admitted; it only explains the wait and never changes what the run may do.
+   */
+  readonly streamCapacityWaiting: boolean;
+  /** Another Keiko window holds connections while this stream waits (a hint, never required). */
+  readonly streamCapacityHeldElsewhere: boolean;
   readonly mutation: CodingWorkbenchMutationState;
+  /**
+   * Whether the last completed source read admitted the model. A read that is merely in flight or
+   * failed leaves it as it was, so a refused start is only ended by a confirmed change (U-46).
+   */
+  readonly confirmedSourceAdmitted: boolean;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly pairing: CodingWorkbenchPairingState;
   readonly canStart: boolean;
@@ -210,6 +244,11 @@ export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "stream-set"; readonly stream: CodingWorkbenchStreamProjection }
   | { readonly kind: "stream-reconnecting" }
   | {
+      readonly kind: "stream-capacity-waiting";
+      readonly waiting: boolean;
+      readonly heldElsewhere?: boolean;
+    }
+  | {
       readonly kind: "resource-failed";
       readonly resource: CodingWorkbenchResourceKey;
       readonly status: "unavailable" | "error";
@@ -220,10 +259,17 @@ export type CodingWorkbenchRuntimeStateAction =
       readonly mutation: CodingWorkbenchMutationKind;
       readonly requestId: string;
     }
-  | { readonly kind: "mutation-complete" }
+  | { readonly kind: "mutation-complete"; readonly acknowledgedRunId?: string }
   | { readonly kind: "session-renewed" }
+  | { readonly kind: "refusal-dismissed" }
+  | { readonly kind: "pending-start-left" }
   | { readonly kind: "mutation-cancelled" }
-  | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
+  | {
+      readonly kind: "mutation-failed";
+      readonly error: CodingWorkbenchClientError;
+      /** The attempt that failed; a failure of an attempt no longer shown is dropped. */
+      readonly requestId?: string;
+    }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
   | { readonly kind: "events-reset" }
   | { readonly kind: "pairing-set"; readonly pairing: CodingWorkbenchPairingState };
@@ -244,6 +290,11 @@ const IDLE_MUTATION: CodingWorkbenchMutationState = {
   requestId: null,
   error: null,
 };
+
+function supersededMutation(failed: CodingWorkbenchMutationState): CodingWorkbenchMutationState {
+  if (failed.error === null) return IDLE_MUTATION;
+  return { ...IDLE_MUTATION, supersededFailure: { kind: failed.kind, code: failed.error.code } };
+}
 
 const CANCELLED_MUTATION: CodingWorkbenchMutationState = { ...IDLE_MUTATION, cancelled: true };
 
@@ -268,7 +319,10 @@ export function createInitialCodingWorkbenchRuntimeState(
     workspace: emptyResource(),
     run: emptyResource(),
     stream: emptyResource(),
+    streamCapacityWaiting: false,
+    streamCapacityHeldElsewhere: false,
     mutation: IDLE_MUTATION,
+    confirmedSourceAdmitted: false,
     events: [],
     pairing: "unknown",
     canStart: false,
@@ -382,6 +436,73 @@ function isAcknowledgedRecoveryRequired(state: CodingWorkbenchRuntimeState): boo
   return (
     state.run.value?.state === "recovery-required" && state.run.value.recoveryAcknowledged === true
   );
+}
+
+function withoutMutationError(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  return state.mutation.status === "error"
+    ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
+    : state;
+}
+
+// The error was raised against the run that is still live (not a finished one, not no run at all).
+function failedAgainstLiveRun(state: CodingWorkbenchRuntimeState): boolean {
+  const runId = state.mutation.failedAgainst?.runId;
+  const run = state.run.value;
+  return (
+    runId !== undefined &&
+    runId !== null &&
+    run?.runId === runId &&
+    !STARTABLE_RUN_STATES.has(run.state)
+  );
+}
+
+const MODEL_UNAVAILABLE_ERROR_CODE = "CODING_RUNTIME_MODEL_UNAVAILABLE";
+
+// A start refused because the selected model was not admitted belongs to that model: choosing
+// another one ends it (U-46). Every other failure stays until its own cause is gone.
+function withoutModelRefusal(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  return state.mutation.status === "error" &&
+    state.mutation.error?.code === MODEL_UNAVAILABLE_ERROR_CODE
+    ? { ...state, mutation: IDLE_MUTATION }
+    : state;
+}
+
+function sourceAdmitsModel(source: CodingWorkbenchRuntimeState["source"]): boolean {
+  return (
+    source.status === "ready" &&
+    source.value?.available === true &&
+    source.value.verification === "verified"
+  );
+}
+
+// U-46: the refusal ends when the read that follows reports the model as admitted where the one
+// before did not, e.g. after the person activated it in Settings > Models. A read that merely
+// repeats an admitted source proves nothing about the refusal and keeps it.
+function withoutResolvedModelRefusal(
+  state: CodingWorkbenchRuntimeState,
+  admittedBefore: boolean,
+): CodingWorkbenchRuntimeState {
+  const admitted = sourceAdmitsModel(state.source);
+  const settled = admitted && !admittedBefore ? withoutModelRefusal(state) : state;
+  return { ...settled, confirmedSourceAdmitted: admitted };
+}
+
+function failedMutation(
+  state: CodingWorkbenchRuntimeState,
+  error: CodingWorkbenchClientError,
+): CodingWorkbenchRuntimeState {
+  return projectReadiness({
+    ...state,
+    mutation: {
+      ...state.mutation,
+      status: "error",
+      error,
+      failedAgainst: {
+        runId: state.run.value?.runId ?? null,
+        revision: state.run.value?.revision ?? 0,
+      },
+    },
+  });
 }
 
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
@@ -553,6 +674,7 @@ function selectPreference(
       profile: emptyResource(),
       codexSetup: emptyResource(),
       source: emptyResource(),
+      confirmedSourceAdmitted: false,
     }),
   );
 }
@@ -614,7 +736,9 @@ function acceptSnapshot(
       run: ready(snapshot),
       stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
       ...(changedRun ? { events: [] } : {}),
-      ...(snapshotSupersedesFailure(state.mutation, snapshot) ? { mutation: IDLE_MUTATION } : {}),
+      ...(snapshotSupersedesFailure(state.mutation, snapshot)
+        ? { mutation: supersededMutation(state.mutation) }
+        : {}),
     }),
   );
 }
@@ -668,11 +792,14 @@ const runtimeActionHandlers = {
   "select-runtime-preference": (state, action): CodingWorkbenchRuntimeState =>
     selectPreference(state, action.preference),
   "select-model": (state, action): CodingWorkbenchRuntimeState =>
-    projectReadiness({
-      ...state,
-      selectedModelId: action.modelId,
-      reasoningEffort: null,
-    }),
+    projectReadiness(
+      withoutModelRefusal({
+        ...state,
+        selectedModelId: action.modelId,
+        reasoningEffort: null,
+        confirmedSourceAdmitted: false,
+      }),
+    ),
   "select-reasoning-effort": (state, action): CodingWorkbenchRuntimeState => ({
     ...state,
     reasoningEffort: action.effort,
@@ -695,7 +822,12 @@ const runtimeActionHandlers = {
   "source-set": (state, action): CodingWorkbenchRuntimeState =>
     action.source.runtimePreference !== state.runtimePreference
       ? state
-      : projectReadiness({ ...state, source: ready(action.source) }),
+      : projectReadiness(
+          withoutResolvedModelRefusal(
+            { ...state, source: ready(action.source) },
+            state.confirmedSourceAdmitted,
+          ),
+        ),
   "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness(
       withLiveRunIdentity(
@@ -717,6 +849,17 @@ const runtimeActionHandlers = {
   "stream-set": (state, action): CodingWorkbenchRuntimeState =>
     acceptStreamProjection(state, action.stream),
   "stream-reconnecting": (state): CodingWorkbenchRuntimeState => markStreamReconnecting(state),
+  "stream-capacity-waiting": (state, action): CodingWorkbenchRuntimeState => {
+    const heldElsewhere = action.waiting && action.heldElsewhere === true;
+    return state.streamCapacityWaiting === action.waiting &&
+      state.streamCapacityHeldElsewhere === heldElsewhere
+      ? state
+      : {
+          ...state,
+          streamCapacityWaiting: action.waiting,
+          streamCapacityHeldElsewhere: heldElsewhere,
+        };
+  },
   "mutation-start": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
@@ -727,28 +870,37 @@ const runtimeActionHandlers = {
         error: null,
       },
     }),
-  "mutation-complete": (state): CodingWorkbenchRuntimeState =>
-    projectReadiness({ ...state, mutation: IDLE_MUTATION }),
+  "mutation-complete": (state, action): CodingWorkbenchRuntimeState =>
+    projectReadiness({
+      ...state,
+      mutation:
+        action.acknowledgedRunId === undefined
+          ? IDLE_MUTATION
+          : { ...IDLE_MUTATION, acknowledgedRunId: action.acknowledgedRunId },
+    }),
   // A refusal belongs to the session it was given under; a new session shows the present instead.
-  "session-renewed": (state): CodingWorkbenchRuntimeState =>
-    state.mutation.status === "error"
-      ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
+  "session-renewed": (state): CodingWorkbenchRuntimeState => withoutMutationError(state),
+  // Leaving a task ends the alert of its refused start, never the failure of a run that is still
+  // live (a failed stop, approval or recovery acknowledgement): that failure still applies (U-42).
+  "refusal-dismissed": (state): CodingWorkbenchRuntimeState =>
+    failedAgainstLiveRun(state) ? state : withoutMutationError(state),
+  // The person left the task whose Start is still in flight: the Start stays pending (a second one
+  // is not allowed), but its late failure no longer alerts on the task shown now.
+  "pending-start-left": (state): CodingWorkbenchRuntimeState =>
+    state.mutation.status === "pending" && state.mutation.kind === "start"
+      ? { ...state, mutation: { ...state.mutation, leftTask: true } }
       : state,
   "mutation-cancelled": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: CANCELLED_MUTATION }),
-  "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>
-    projectReadiness({
-      ...state,
-      mutation: {
-        ...state.mutation,
-        status: "error",
-        error: action.error,
-        failedAgainst: {
-          runId: state.run.value?.runId ?? null,
-          revision: state.run.value?.revision ?? 0,
-        },
-      },
-    }),
+  "mutation-failed": (state, action): CodingWorkbenchRuntimeState => {
+    if (action.requestId !== undefined && state.mutation.requestId !== action.requestId) {
+      return state;
+    }
+    if (state.mutation.leftTask === true) {
+      return projectReadiness({ ...state, mutation: CANCELLED_MUTATION });
+    }
+    return failedMutation(state, action.error);
+  },
   "events-received": (state, action): CodingWorkbenchRuntimeState =>
     acceptEvents(state, action.events),
   "events-reset": (state): CodingWorkbenchRuntimeState => ({

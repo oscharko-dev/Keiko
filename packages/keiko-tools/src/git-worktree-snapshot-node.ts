@@ -37,8 +37,12 @@ import {
   type CommandTerminationEvidence,
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
+import { eachInSequence } from "./sequential.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
+import type { GitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import type { GitHeadState } from "./git-head-state.js";
+import type { GitStagedConversionStats, GitStagedUndecidableReason } from "./git-stage-node.js";
 import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
 // The dedicated READ-ONLY allowlist. Mirrors the mutation rules' defence-in-depth flag denials but
@@ -55,6 +59,8 @@ export const GIT_WORKTREE_READ_COMMAND_RULES: readonly CommandRule[] = Object.fr
       "ls-files",
       "ls-tree",
       "cat-file",
+      "show-ref",
+      "for-each-ref",
     ]),
     valueFlags: Object.freeze([
       "-C",
@@ -118,6 +124,64 @@ export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
   }),
 });
 
+/**
+ * The object Git's own staging would store for each file's current bytes, computed without running
+ * any repository-configured filter driver and without writing an object (git-stage-node.ts
+ * `gitStagedObjectIdOf`). `undefined`, or an `undefined` entry, means "cannot tell": the raw reader
+ * then keeps the file as modified.
+ */
+export type GitStagedObjectIdPort = (
+  files: readonly (Pick<GitStageFile, "path" | "mode"> & { readonly size?: number })[],
+  stats?: GitStagedConversionStats,
+) => Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason | undefined>;
+
+/**
+ * Body-free evidence of one raw scan's conversion settlement (#4491): how many stat-dirty regular
+ * files were offered to the port, in how many sequential batches, how many settled clean, and whether the port answered, could not decide, or failed (`error` carries the
+ * failure for the owner's classification; it is never serialised here).
+ */
+export interface GitStagedConversionEvidence {
+  readonly convertible: number;
+  readonly batches: number;
+  readonly settledClean: number;
+  // Attribute reads split after a truncated answer, and paths left undecided by the hash-run budget.
+  readonly attributeSplitCount: number;
+  readonly hashBudgetExhaustedCount: number;
+  // `unavailable`: the port answered but at least one file could not be judged, so a caller that
+  // needs the staged content (a stage review's counts) reports it unavailable (#4491).
+  readonly outcome: "answered" | "undecidable" | "unavailable" | "error";
+  readonly unavailableCount?: number;
+  // Why an undecidable port could not answer (the first batch that said so), when it said.
+  readonly reason?: GitStagedUndecidableReason;
+  readonly error?: unknown;
+  // Where the scan's time went up to the settlement (#4491, W-4: a status of six files took 14 s on
+  // a host whose process creation is slow): the listing reads before the path scan, the path scan,
+  // and the settlement itself, in whole milliseconds, with the Git processes the operation had
+  // started by then (its session's count; 0 without a session).
+  readonly timing?: {
+    readonly listingMs: number;
+    readonly scanMs: number;
+    readonly settleMs: number;
+    readonly gitSpawnCount: number;
+  };
+}
+
+/**
+ * The scope of ONE logical read operation (a status action, a facts read): it counts the Git
+ * processes the operation starts and holds the repository's promisor verdict for its duration, so
+ * the probe that guards every read runs once per operation instead of once per read (#4491, W-4:
+ * half of a status's processes were that probe). A later operation has a session of its own and
+ * probes again, so an earlier verdict never authorizes a later, riskier one.
+ */
+export interface GitReadSession {
+  spawnCount: number;
+  promisorAtRisk?: Promise<boolean> | undefined;
+}
+
+export function createGitReadSession(): GitReadSession {
+  return { spawnCount: 0 };
+}
+
 export interface NodeGitWorktreeReaderDeps {
   readonly workspace: WorkspaceInfo;
   // The read-only port every containment check of this lane resolves through (exec.ts
@@ -136,6 +200,14 @@ export interface NodeGitWorktreeReaderDeps {
   // deps-level seam, exec.ts): production composition boundaries wire it once so no call on the
   // lane is silently unobservable (PR #3354 review, comment 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
+  // How a stat-dirty file Git's staging converts is judged by the raw reader (#4491). Absent: such a
+  // file stays modified.
+  readonly stagedObjectIds?: GitStagedObjectIdPort | undefined;
+  // Receives one body-free evidence record per scan that offered files to the port.
+  readonly onStagedConversion?: ((evidence: GitStagedConversionEvidence) => void) | undefined;
+  // The operation scope every read of this lane counts its processes in and shares its promisor
+  // verdict through. Absent: each read probes on its own, as before.
+  readonly readSession?: GitReadSession | undefined;
 }
 
 interface ReadContext {
@@ -143,6 +215,7 @@ interface ReadContext {
   readonly signal: AbortSignal;
   readonly timeoutMs: number | undefined;
   readonly rejectRedactedMetadata?: boolean;
+  readonly session?: GitReadSession | undefined;
 }
 
 // #4068 (W7): Git for Windows opens no path of MAX_PATH or more unless core.longpaths is set, and a
@@ -189,13 +262,20 @@ function buildReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,
+    session: deps.readSession,
   };
 }
 
 // Thrown when a read-only inspection command exits non-zero (e.g. not a git repository). The caller
 // translates this into a content-free server error rather than leaking git's stderr.
+/** Why a read-only Git inspection failed, as a closed value the activity log can carry. */
+export type GitReadFailureReason = "truncated" | "exit-nonzero" | "spawn-failed";
+
 export class GitWorktreeReadError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    message: string,
+    public readonly reason?: GitReadFailureReason,
+  ) {
     super(message);
     this.name = "GitWorktreeReadError";
   }
@@ -293,6 +373,7 @@ async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise
     commandRules: GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
+  countProcess(ctx);
   return runCommand(
     {
       command: "git",
@@ -318,7 +399,35 @@ async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise
 // strict version gate instead of silently skipping it. This is re-evaluated on EVERY call, never
 // cached: the repository's own config can change while Keiko runs, and an earlier safe verdict must
 // never authorize a later, riskier one (reviewer 3941943603).
+function countProcess(ctx: ReadContext): void {
+  if (ctx.session !== undefined) ctx.session.spawnCount += 1;
+}
+
 async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
+  const session = ctx.session;
+  if (session === undefined) return probePromisorRemote(ctx);
+  const held = session.promisorAtRisk;
+  if (held !== undefined) {
+    const atRisk = await held;
+    // A repository at risk stays at risk for the operation, and the version gate judges it at every
+    // effect. A negative verdict is only as durable as Git's own enforcement of the guard: on a Git
+    // that ignores GIT_NO_LAZY_FETCH the repository configuration is the sole guard, and it can
+    // change between two effects of one operation, so the next effect probes it again.
+    if (atRisk || (await cachedVersionGuardSupport(ctx)).supported) return atRisk;
+  }
+  // One verdict per logical operation while it stays trustworthy. A failed probe (a cancelled
+  // caller) is evicted so the next read of the session probes again instead of replaying the
+  // rejection.
+  const fresh = probePromisorRemote(ctx);
+  const stored = fresh.catch((error: unknown) => {
+    if (session.promisorAtRisk === stored) session.promisorAtRisk = undefined;
+    throw error;
+  });
+  session.promisorAtRisk = stored;
+  return stored;
+}
+
+async function probePromisorRemote(ctx: ReadContext): Promise<boolean> {
   let result: CommandResult;
   try {
     result = await runGuardProbe(ctx, [
@@ -387,6 +496,7 @@ async function runVersionProbe(ctx: ReadContext): Promise<CommandResult> {
     commandRules: GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
+  countProcess(ctx);
   return runCommand(
     {
       command: "git",
@@ -479,20 +589,30 @@ export async function ensureGitLazyFetchGuardSupported(
   if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
 }
 
-async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<string> {
-  const result = await runReadResult(ctx, argv);
+async function runRead(
+  ctx: ReadContext,
+  argv: readonly string[],
+  stdin?: Uint8Array,
+): Promise<string> {
+  const result = await runReadResult(ctx, argv, [0], stdin);
   if (ctx.rejectRedactedMetadata === true && result.stdout.includes("[REDACTED]"))
     throw new GitWorktreeReadError("git metadata was redacted");
   return result.stdout;
 }
 
-async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
+async function runReadResult(
+  ctx: ReadContext,
+  argv: readonly string[],
+  acceptedExitCodes: readonly number[] = [0],
+  stdin?: Uint8Array,
+): Promise<CommandResult> {
   if (!ctx.signal.aborted) {
     const guard = await detectGitLazyFetchGuardSupport(ctx);
     if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
   }
   const runDeps: RunCommandDeps = { ...ctx.runDeps, onTerminated: ctx.runDeps.onTerminated };
   let result: CommandResult;
+  countProcess(ctx);
   try {
     // No `--no-lazy-fetch` / `--no-replace-objects` CLI flags here: git's own docs state each is
     // "equivalent to setting the GIT_NO_(LAZY_FETCH|REPLACE_OBJECTS) environment variable", and
@@ -510,15 +630,20 @@ async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise
         cwd: undefined,
         timeoutMs: ctx.timeoutMs,
         signal: ctx.signal,
+        stdin,
       },
       runDeps,
     );
   } catch {
-    throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`);
+    throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`, "spawn-failed");
   }
-  if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
-  if (result.exitCode !== 0) {
-    throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`);
+  if (result.truncated)
+    throw new GitWorktreeReadError("git inspection output was truncated", "truncated");
+  if (result.exitCode === null || !acceptedExitCodes.includes(result.exitCode)) {
+    throw new GitWorktreeReadError(
+      `git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`,
+      "exit-nonzero",
+    );
   }
   return result;
 }
@@ -602,7 +727,12 @@ function machineReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
       ...deps,
       // Ordinary task/CI context can equal a Git identity. Credential values and patterns remain
       // scrubbed; reject their marker before parsing or hashing. Child authority is unchanged.
-      policy: { ...(deps.policy ?? DEFAULT_SANDBOX_POLICY), outputScrub: "credentials-only" },
+      // `machine-metadata` is the credential floor without the source-language projection. Most
+      // reads here are parsed and never shown; `readStagedPaths` (the commit draft's staged files,
+      // seen by the model) and the snapshot's branch and remote names (the action sheet) are shown,
+      // and keep the credential floor a person-visible read gets. Nothing on this lane is evidence
+      // or Activity Log content.
+      policy: { ...(deps.policy ?? DEFAULT_SANDBOX_POLICY), outputScrub: "machine-metadata" },
     }),
     rejectRedactedMetadata: true,
   };
@@ -681,26 +811,46 @@ const INDEX_EOL_ENTRY = /^i\/(\S*)\s+w\/\S*\s+attr\/[^\t]*\t([^\0]+)$/u;
  * `lf`, `crlf`, `mixed`, `none` or `-text`. A path without an index entry is absent from the map; a
  * path listed more than once (an unresolved merge) maps to `conflict`. Unparseable output throws.
  */
+// The pathspecs of one `ls-files --eol` run stay far below Windows' CreateProcess limit (about 32 K
+// UTF-16 units for the whole command line).
+const INDEX_EOL_ARGV_BUDGET = 8000;
+function pathspecChunks(paths: readonly string[]): readonly (readonly string[])[] {
+  const chunks: string[][] = [];
+  let used = INDEX_EOL_ARGV_BUDGET;
+  for (const path of paths) {
+    const spec = `:(literal)${path}`;
+    used += spec.length + 1;
+    if (used > INDEX_EOL_ARGV_BUDGET) {
+      chunks.push([]);
+      used = spec.length + 1;
+    }
+    chunks.at(-1)?.push(spec);
+  }
+  return chunks;
+}
 export async function readGitIndexLineBreaks(
   deps: NodeGitWorktreeReaderDeps,
   paths: readonly string[],
 ): Promise<ReadonlyMap<string, string>> {
-  const output = await runRead(metadataReadContext(deps), [
-    "ls-files",
-    "--eol",
-    "-z",
-    "--",
-    ...paths.map((path) => `:(literal)${path}`),
-  ]);
   const classes = new Map<string, string>();
-  if (output === "") return classes;
-  if (!output.endsWith("\0")) throw new GitWorktreeReadError("git eol listing is incomplete");
-  for (const line of output.slice(0, -1).split("\0")) {
-    const match = INDEX_EOL_ENTRY.exec(line);
-    if (match?.[1] === undefined || match[2] === undefined)
-      throw new GitWorktreeReadError("git eol listing is malformed");
-    classes.set(match[2], classes.has(match[2]) ? "conflict" : match[1]);
-  }
+  // Sequential chunks keep the spawn count and memory bounded.
+  await eachInSequence(pathspecChunks(paths), async (chunk) => {
+    const output = await runRead(metadataReadContext(deps), [
+      "ls-files",
+      "--eol",
+      "-z",
+      "--",
+      ...chunk,
+    ]);
+    if (output === "") return;
+    if (!output.endsWith("\0")) throw new GitWorktreeReadError("git eol listing is incomplete");
+    for (const line of output.slice(0, -1).split("\0")) {
+      const match = INDEX_EOL_ENTRY.exec(line);
+      if (match?.[1] === undefined || match[2] === undefined)
+        throw new GitWorktreeReadError("git eol listing is malformed");
+      classes.set(match[2], classes.has(match[2]) ? "conflict" : match[1]);
+    }
+  });
   return classes;
 }
 export async function readGitTreeEntries(
@@ -739,6 +889,225 @@ export async function readGitBlobText(
   );
 }
 
+/**
+ * One blob's text when it is at most `maxBytes` long, `undefined` when it is longer. The size is
+ * asked first (`cat-file -s`), so a large blob is never loaded and never fails the read: the caller
+ * decides what a side too large to count means.
+ */
+export async function readGitBlobTextWithin(
+  deps: NodeGitWorktreeReaderDeps,
+  sha: string,
+  maxBytes: number,
+): Promise<string | undefined> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sha)) throw new TypeError("git-blob-sha-invalid");
+  const size = Number((await runRead(machineReadContext(deps), ["cat-file", "-s", sha])).trim());
+  if (!Number.isSafeInteger(size) || size < 0)
+    throw new GitWorktreeReadError("git blob size is unreadable");
+  if (size > maxBytes) return undefined;
+  return readBlobOfKnownSize(deps, sha, size);
+}
+
+// One blob whose size is already known: one process, with the output bound set from that size.
+function readBlobOfKnownSize(
+  deps: NodeGitWorktreeReaderDeps,
+  sha: string,
+  size: number,
+): Promise<string> {
+  return runRead(
+    buildReadContext({
+      ...deps,
+      policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: Math.max(size, 1) + 1024 },
+    }),
+    ["cat-file", "blob", sha],
+  );
+}
+
+// The most blob bytes one `cat-file --batch` run carries; more travel in further runs.
+const BLOB_BATCH_MAX_BYTES = 16 * 1024 * 1024;
+const BLOB_BATCH_MAX_OBJECTS = 400;
+const BLOB_BATCH_HEADER = /^([a-f0-9]{40}|[a-f0-9]{64}) blob (\d+)$/u;
+
+interface BlobSize {
+  readonly sha: string;
+  readonly size: number;
+}
+
+function utf8BytesOfCodePoint(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  return codePoint < 0x10000 ? 3 : 4;
+}
+
+// The text that starts at `from` and is exactly `size` UTF-8 bytes long, and where it ends; `undefined`
+// when the decoded answer does not add up to the announced size.
+function blobTextAt(
+  stdout: string,
+  from: number,
+  size: number,
+): { readonly text: string; readonly end: number } | undefined {
+  let end = from;
+  let bytes = 0;
+  while (bytes < size && end < stdout.length) {
+    const codePoint = stdout.codePointAt(end) ?? 0;
+    bytes += utf8BytesOfCodePoint(codePoint);
+    end += codePoint > 0xffff ? 2 : 1;
+  }
+  return bytes === size && stdout[end] === "\n"
+    ? { text: stdout.slice(from, end), end }
+    : undefined;
+}
+
+// The blob texts of one `cat-file --batch` answer, or `undefined` when the answer does not read back
+// exactly as the sizes announced (a byte sequence that is not UTF-8, or a scrubbed secret, changes the
+// decoded length): the caller then reads the blobs one by one.
+function parseBlobBatch(
+  stdout: string,
+  batch: readonly BlobSize[],
+): ReadonlyMap<string, string> | undefined {
+  const texts = new Map<string, string>();
+  let at = 0;
+  for (const { sha, size } of batch) {
+    const lineEnd = stdout.indexOf("\n", at);
+    const header = lineEnd < 0 ? null : BLOB_BATCH_HEADER.exec(stdout.slice(at, lineEnd));
+    if (header?.[1] !== sha || Number(header[2]) !== size) return undefined;
+    const body = blobTextAt(stdout, lineEnd + 1, size);
+    if (body === undefined) return undefined;
+    texts.set(sha, body.text);
+    at = body.end + 1;
+  }
+  return at === stdout.length ? texts : undefined;
+}
+
+async function readBlobBatch(
+  deps: NodeGitWorktreeReaderDeps,
+  batch: readonly BlobSize[],
+): Promise<ReadonlyMap<string, string> | undefined> {
+  const total = batch.reduce((sum, blob) => sum + blob.size + 160, 1024);
+  const result = await runReadResult(
+    buildReadContext({ ...deps, policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: total } }),
+    ["cat-file", "--batch"],
+    [0],
+    new TextEncoder().encode(`${batch.map((blob) => blob.sha).join("\n")}\n`),
+  );
+  return parseBlobBatch(result.stdout, batch);
+}
+
+// The most object ids one `cat-file --batch-check` carries on stdin: 400 ids of at most 64 hex digits
+// are about 26 KiB, below the 64 KiB a byte input may be, so the bound holds for every caller.
+const BLOB_SIZE_CHECK_MAX_OBJECTS = 400;
+
+// The size of every blob, from `cat-file --batch-check` runs of at most BLOB_SIZE_CHECK_MAX_OBJECTS
+// ids; a missing or non-blob object is unreadable.
+async function readBlobSizes(
+  deps: NodeGitWorktreeReaderDeps,
+  shas: readonly string[],
+): Promise<readonly BlobSize[]> {
+  const sizes = new Map<string, number>();
+  const starts = Array.from(
+    { length: Math.ceil(shas.length / BLOB_SIZE_CHECK_MAX_OBJECTS) },
+    (_, at) => at * BLOB_SIZE_CHECK_MAX_OBJECTS,
+  );
+  // The checks run one after the other.
+  await eachInSequence(starts, async (from) => {
+    const checked = await runRead(
+      machineReadContext(deps),
+      ["cat-file", "--batch-check"],
+      new TextEncoder().encode(
+        `${shas.slice(from, from + BLOB_SIZE_CHECK_MAX_OBJECTS).join("\n")}\n`,
+      ),
+    );
+    for (const line of parseLines(checked)) {
+      const [sha, type, size] = line.split(" ");
+      if (sha !== undefined && type === "blob" && /^\d+$/u.test(size ?? ""))
+        sizes.set(sha, Number(size));
+    }
+  });
+  return shas.map((sha) => {
+    const size = sizes.get(sha);
+    if (size === undefined)
+      throw new GitWorktreeReadError("git blob size is unreadable", "exit-nonzero");
+    return { sha, size };
+  });
+}
+
+// The blobs in runs bounded in bytes and in objects.
+function blobRuns(blobs: readonly BlobSize[]): readonly (readonly BlobSize[])[] {
+  const runs: BlobSize[][] = [];
+  let bytes = 0;
+  for (const blob of blobs) {
+    const last = runs.at(-1);
+    if (
+      last === undefined ||
+      last.length >= BLOB_BATCH_MAX_OBJECTS ||
+      bytes + blob.size > BLOB_BATCH_MAX_BYTES
+    ) {
+      runs.push([blob]);
+      bytes = blob.size;
+    } else {
+      last.push(blob);
+      bytes += blob.size;
+    }
+  }
+  return runs;
+}
+
+// How many failed batch runs one call may spend isolating the blobs a decoder cannot carry through.
+interface BatchFailureBudget {
+  remaining: number;
+}
+
+// One run's texts. A run whose answer does not read back is halved until the blob that cannot be
+// carried through the decoder (a binary file) stands alone, so a few binary files among hundreds cost
+// a few more processes and not one per blob. The halving is paid from a budget of half the call's
+// blobs: when binary files are the rule, not the exception, the rest is read blob by blob at ONE
+// process each (the sizes are known), so a selection of nothing but binaries never costs more than
+// the two processes per blob the one-by-one read always took.
+async function readRunTexts(
+  deps: NodeGitWorktreeReaderDeps,
+  run: readonly BlobSize[],
+  budget: BatchFailureBudget,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  if (run.length === 1 || budget.remaining <= 0) {
+    const texts = new Map<string, string | undefined>();
+    for (const blob of run)
+      texts.set(blob.sha, await readBlobOfKnownSize(deps, blob.sha, blob.size)); // NOSONAR typescript:S9382 -- one blob at a time
+    return texts;
+  }
+  const answered = await readBlobBatch(deps, run);
+  if (answered !== undefined) return answered;
+  budget.remaining -= 1;
+  const middle = Math.ceil(run.length / 2);
+  return new Map([
+    ...(await readRunTexts(deps, run.slice(0, middle), budget)),
+    ...(await readRunTexts(deps, run.slice(middle), budget)), // NOSONAR typescript:S9382 -- the halves are read one after the other
+  ]);
+}
+
+/**
+ * The texts of many blobs for the price of a few processes: one `cat-file --batch-check` for every
+ * size, then `cat-file --batch` runs bounded in bytes and objects, where `readGitBlobTextWithin` costs
+ * two processes per blob. A blob above `maxBytes` answers `undefined`, as there; an answer that does
+ * not read back exactly as announced is read blob by blob instead, so the texts are never guessed.
+ */
+export async function readGitBlobTextsWithin(
+  deps: NodeGitWorktreeReaderDeps,
+  shas: readonly string[],
+  maxBytes: number,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  const unique = [...new Set(shas)];
+  for (const sha of unique)
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sha)) throw new TypeError("git-blob-sha-invalid");
+  const texts = new Map<string, string | undefined>();
+  if (unique.length === 0) return texts;
+  const sizes = await readBlobSizes(deps, unique);
+  for (const blob of sizes) if (blob.size > maxBytes) texts.set(blob.sha, undefined);
+  const readable = sizes.filter((blob) => blob.size <= maxBytes);
+  const budget = { remaining: Math.ceil(readable.length / 2) };
+  for (const run of blobRuns(readable))
+    for (const [sha, text] of await readRunTexts(deps, run, budget)) texts.set(sha, text); // NOSONAR typescript:S9382 -- runs are bounded, one after the other
+  return texts;
+}
+
 export async function readGitRemoteAliases(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<readonly string[]> {
@@ -763,6 +1132,201 @@ export async function readGitRevision(
     throw new GitWorktreeReadError("git revision did not resolve uniquely");
   }
   return value;
+}
+
+/**
+ * The object id the local branch `refs/heads/<branch>` names, or `undefined` when no such branch
+ * exists: one `rev-parse --verify --quiet` (exit 1 with no output is the absent branch), where a
+ * full worktree snapshot answered the same question with about six processes including `status`.
+ * The ref is spelled out in full, so a tag or remote branch of the same name can never answer.
+ */
+export async function readGitLocalBranchTip(
+  deps: NodeGitWorktreeReaderDeps,
+  branch: string,
+): Promise<string | undefined> {
+  if (!isSafeGitRefName(branch)) throw new GitWorktreeReadError("git branch name is unsafe");
+  const result = await runReadResult(
+    machineReadContext(deps),
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/heads/${branch}`],
+    [0, 1],
+  );
+  const value = result.stdout.trim();
+  if (result.exitCode === 1 && value === "") return undefined;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value))
+    throw new GitWorktreeReadError("git branch did not resolve uniquely");
+  return value;
+}
+
+/**
+ * What one `for-each-ref` of `refs/heads/<branch>` says about it: whether it exists (a dangling
+ * symref and an absent branch both read as absent), whether HEAD resolves to it, whether it is a
+ * symbolic ref, and its tip. One process answers what a tip read, a checkout read and a symbolic-ref
+ * read would each answer.
+ */
+export interface GitBranchRefFacts {
+  readonly present: boolean;
+  readonly head: boolean;
+  readonly symbolic: boolean;
+  readonly tip: string | undefined;
+}
+
+export async function readGitBranchRefFacts(
+  deps: NodeGitWorktreeReaderDeps,
+  branch: string,
+): Promise<GitBranchRefFacts> {
+  if (!isSafeGitRefName(branch)) throw new GitWorktreeReadError("git branch name is unsafe");
+  const ref = `refs/heads/${branch}`;
+  const output = await runRead(machineReadContext(deps), [
+    "for-each-ref",
+    "--format=%(refname)%09%(HEAD)%09%(symref)%09%(objectname)",
+    ref,
+  ]);
+  for (const line of output.split("\n")) {
+    const [name, head, symref, tip] = line.split("\t");
+    if (name !== ref) continue;
+    if (tip === undefined || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(tip))
+      throw new GitWorktreeReadError("git branch did not resolve uniquely");
+    return { present: true, head: head === "*", symbolic: symref !== "", tip };
+  }
+  return { present: false, head: false, symbolic: false, tip: undefined };
+}
+
+/**
+ * Resolves HEAD like `readGitRevision`, but answers `undefined` for an unborn HEAD (a fresh
+ * repository: `rev-parse --verify --quiet` exits 1 with no output) so a caller can name that state
+ * instead of reporting a generic exit code. Any other failure still throws.
+ */
+export async function readGitHeadIfBorn(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<string | undefined> {
+  const result = await runReadResult(
+    machineReadContext(deps),
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"],
+    [0, 1],
+  );
+  const value = result.stdout.trim();
+  if (result.exitCode === 1 && value === "") return undefined;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value))
+    throw new GitWorktreeReadError("git revision did not resolve uniquely");
+  return value;
+}
+
+/**
+ * The branch the checkout is on right now, or `undefined` for a detached HEAD. One process; a
+ * name that is not a safe ref name fails the read.
+ */
+export async function readGitCheckoutBranch(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<string | undefined> {
+  const branch = (await runRead(machineReadContext(deps), ["branch", "--show-current"])).trim();
+  if (branch === "") return undefined;
+  if (!isSafeGitRefName(branch)) throw new GitWorktreeReadError("git head names no branch");
+  return branch;
+}
+
+/**
+ * The state of HEAD: its commit when born, or the branch it names when that branch has no commit
+ * yet (a fresh repository, #4491). A detached or otherwise unreadable HEAD still fails closed.
+ */
+export async function readGitHeadState(deps: NodeGitWorktreeReaderDeps): Promise<GitHeadState> {
+  const sha = await readGitHeadIfBorn(deps);
+  if (sha !== undefined) return { kind: "born", sha };
+  const ctx = machineReadContext(deps);
+  const branch = (await runRead(ctx, ["branch", "--show-current"])).trim();
+  if (branch === "" || !isSafeGitRefName(branch))
+    throw new GitWorktreeReadError("git head names no branch");
+  // A HEAD that did not resolve is unborn only when its branch ref is absent. A ref that exists
+  // but could not be read as a commit is damage, never a fresh repository.
+  const ref = await runReadResult(
+    ctx,
+    ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+    [0, 1],
+  );
+  if (ref.exitCode === 0) throw new GitWorktreeReadError("git-head-ref-unreadable");
+  const format = (await runRead(ctx, ["rev-parse", "--show-object-format"])).trim();
+  if (format !== "sha1" && format !== "sha256")
+    throw new GitWorktreeReadError("git object format is unsupported");
+  return { kind: "unborn", branch, objectIdLength: format === "sha256" ? 64 : 40 };
+}
+
+/**
+ * The state of a base ref relative to the HEAD it is compared with. An unborn branch is its own
+ * base (a fresh repository has nothing older); a base that names no commit is itself unborn, and
+ * stays so once the task branch cut from it has its own commit, but only on the caller's record
+ * that it was never born (`neverBorn`, #4491). Any other base must resolve to a commit.
+ */
+export async function readGitBaseState(
+  deps: NodeGitWorktreeReaderDeps,
+  baseRef: string,
+  head: GitHeadState,
+  neverBorn = false,
+): Promise<GitHeadState> {
+  if (head.kind === "unborn" && baseRef === head.branch) return head;
+  // Under an unborn HEAD an absent base is the fresh repository's own. Under a born HEAD it is never
+  // born only when the caller holds a record that says so (`neverBorn`); otherwise a base that
+  // resolves to nothing is a deleted branch or a typo and the read fails closed.
+  if ((head.kind === "unborn" || neverBorn) && (await baseRefIsAbsent(deps, baseRef))) {
+    const objectIdLength =
+      head.kind === "unborn" ? head.objectIdLength : await readGitObjectIdLength(deps);
+    return { kind: "unborn", branch: baseRef, objectIdLength };
+  }
+  return { kind: "born", sha: await readGitRevision(deps, baseRef) };
+}
+
+/**
+ * The repository's object-id length (40 for SHA-1, 64 for SHA-256), asked of Git itself. It does not
+ * depend on HEAD, so an unreadable HEAD or an empty index never changes the answer.
+ */
+export async function readGitObjectIdLength(deps: NodeGitWorktreeReaderDeps): Promise<40 | 64> {
+  const format = (
+    await runRead(machineReadContext(deps), ["rev-parse", "--show-object-format"])
+  ).trim();
+  if (format !== "sha1" && format !== "sha256")
+    throw new GitWorktreeReadError("git object format is unsupported");
+  return format === "sha256" ? 64 : 40;
+}
+
+// A base that names no commit is itself unborn: a task branch cut from an unborn protected branch
+// has nothing older to be based on (#4491). Only a local branch ref that is
+// absent and resolves to nothing counts; a ref that exists but does not read is damage and fails.
+async function baseRefIsAbsent(deps: NodeGitWorktreeReaderDeps, baseRef: string): Promise<boolean> {
+  if (!isSafeGitRefName(baseRef)) return false;
+  const ctx = machineReadContext(deps);
+  const resolved = await runReadResult(
+    ctx,
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", `${baseRef}^{commit}`],
+    [0, 1],
+  );
+  if (resolved.exitCode === 0) return false;
+  const local = await runReadResult(
+    ctx,
+    ["show-ref", "--verify", "--quiet", `refs/heads/${baseRef}`],
+    [0, 1],
+  );
+  return local.exitCode === 1;
+}
+
+export type GitReadConfigKey = "core.filemode";
+/**
+ * The repository's effective value of one closed boolean config key, canonicalized by Git to
+ * `true` or `false` (a value Git cannot read as a boolean fails), `undefined` when unset. It runs
+ * through the same isolated lane as every other read (global and system scopes pinned off), so it
+ * reports what the Git this reader consults would see. Read-only; the key set is closed.
+ */
+export async function readGitConfigValue(
+  deps: NodeGitWorktreeReaderDeps,
+  key: GitReadConfigKey,
+): Promise<string | undefined> {
+  const ctx = metadataReadContext(deps);
+  const result = await runGuardProbe(ctx, ["config", "--type=bool", "--get", key]).catch(
+    (error: unknown) => {
+      if (isCallerBoundaryFailure(error)) throw error;
+      throw new GitWorktreeReadError("git config failed to run");
+    },
+  );
+  if (result.truncated || (result.exitCode !== 0 && result.exitCode !== 1))
+    throw new GitWorktreeReadError(`git config exited ${String(result.exitCode)}`);
+  return result.exitCode === 1 ? undefined : result.stdout.trim();
 }
 
 /** Resolves the exact named ref used by a compare-and-swap ref transaction. */
@@ -851,8 +1415,87 @@ export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promis
     "--no-textconv",
     "--no-color",
     "--unified=3",
+    STAGED_DIFF_RENAME_DETECTION,
+    STAGED_DIFF_RENAME_LIMIT,
     "--",
   ]);
+}
+
+// A pure rename is one rename record with no content, not a full delete and a full add. The limit
+// travels as the diff's own `-l` operand because the read allowlist denies `-c`; it only bounds how
+// many inexact renames Git pairs, never what is staged.
+const STAGED_DIFF_RENAME_DETECTION = "-M";
+const STAGED_DIFF_RENAME_LIMIT = "-l2000";
+
+/** One staged change as `diff --cached --numstat` counts it; a rename is one entry. */
+export interface GitStagedChangeEntry {
+  readonly path: string;
+  readonly oldPath?: string;
+  readonly addedLines: number;
+  readonly deletedLines: number;
+  readonly binary: boolean;
+}
+
+const NUMSTAT_COUNTS = /^(\d+|-)\t(\d+|-)\t(.*)$/su;
+
+/**
+ * Exact staged change counts (`--numstat -z`), independent of any display bound: every file is
+ * listed once with its true line counts, a rename shows both names, and no path is quoted. A record
+ * that does not parse throws, so a review never presents a partial list as complete.
+ */
+export async function readGitStagedChangeSummary(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<readonly GitStagedChangeEntry[]> {
+  const policy = {
+    ...(deps.policy ?? DEFAULT_SANDBOX_POLICY),
+    maxOutputBytes: Math.min(deps.policy?.maxOutputBytes ?? 4_194_304, 4_194_304),
+  };
+  const output = await runRead(buildReadContext({ ...deps, policy }), [
+    "diff",
+    "--cached",
+    "--numstat",
+    "-z",
+    "--no-ext-diff",
+    "--no-textconv",
+    STAGED_DIFF_RENAME_DETECTION,
+    STAGED_DIFF_RENAME_LIMIT,
+    "--",
+  ]);
+  return parseNumstatRecords(output.split("\0"));
+}
+
+function numstatEntry(
+  match: RegExpExecArray,
+  oldPath: string | undefined,
+  newPath: string | undefined,
+): GitStagedChangeEntry {
+  if (newPath === undefined || newPath === "")
+    throw new GitWorktreeReadError("git numstat record is incomplete");
+  const binary = match[1] === "-" || match[2] === "-";
+  return {
+    path: newPath,
+    ...(oldPath === undefined ? {} : { oldPath }),
+    addedLines: binary ? 0 : Number(match[1]),
+    deletedLines: binary ? 0 : Number(match[2]),
+    binary,
+  };
+}
+
+function parseNumstatRecords(fields: readonly string[]): readonly GitStagedChangeEntry[] {
+  const entries: GitStagedChangeEntry[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const field = fields[index] ?? "";
+    index += 1;
+    if (field === "") continue;
+    const match = NUMSTAT_COUNTS.exec(field);
+    if (match === null) throw new GitWorktreeReadError("git numstat record is malformed");
+    if (match[3] === "") {
+      entries.push(numstatEntry(match, fields[index], fields[index + 1]));
+      index += 2;
+    } else entries.push(numstatEntry(match, undefined, match[3]));
+  }
+  return entries;
 }
 
 export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> {

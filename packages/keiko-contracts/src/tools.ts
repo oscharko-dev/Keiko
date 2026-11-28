@@ -99,6 +99,9 @@ export function isValidNetworkGatewayPolicy(value: unknown): value is NetworkGat
 
 export type FilesystemPolicy = "inherit" | "execution-root";
 
+// What the spawn boundary does with output past `SandboxPolicy.maxOutputBytes`.
+export type OutputOverflowPolicy = "terminate" | "retain-head-tail";
+
 // How the spawn boundary supplies HOME/USERPROFILE to the child.
 //   "ephemeral" — the default (ADR-0006 D2 Dimension 1 / C5): an empty per-run directory, so a
 //                 home-dir credential lookup (~/.npmrc, ~/.aws, ~/.git-credentials) resolves to
@@ -110,7 +113,8 @@ export type FilesystemPolicy = "inherit" | "execution-root";
 //                 never left without a home directory.
 export type HomeIsolation = "ephemeral" | "inherit";
 
-export type OutputScrubMode = "every-non-allowlisted-value" | "credentials-only";
+export type OutputScrubMode =
+  "every-non-allowlisted-value" | "credentials-only" | "machine-metadata";
 
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
@@ -147,9 +151,29 @@ export interface SandboxPolicy {
   //     shell exports in a dozen harmless variables. Under the default mode such a read came back
   //     as `https://github.com/[REDACTED].git` and every consumer addressed a repository that does
   //     not exist. Never a way to leak a token: the shape-based redaction always applies too.
+  //   "machine-metadata": the same credential scrub as "credentials-only" (credential values and
+  //     credential shapes), but WITHOUT the source-language projection the full redactor applies to
+  //     prose. For typed readers whose stdout is closed machine data: mostly parsed and never shown
+  //     (index stat, index/tree listings, object ids); a few results (staged paths, branch and
+  //     remote names) are shown and keep the credential floor. The projection infers code or YAML from the
+  //     text itself and fails closed by masking the rest of the output, so a tracked file named
+  //     like source (`class A {`) or a YAML parse that overflowed the stack on a 300-file listing
+  //     turned a healthy read into "git metadata was redacted" and made a commit impossible (U-25).
   readonly outputScrub?: OutputScrubMode | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
+  // With `outputOverflow: "retain-head-tail"` it is instead the size of the RETAINED window: the
+  // child keeps running past it and only the middle of its output is dropped.
   readonly maxOutputBytes: number;
+  // What happens when the child writes more than `maxOutputBytes`. Absent / "terminate" keeps the
+  // flood guard above (kill the child, report `truncated`). "retain-head-tail" never ends a healthy
+  // command for output volume: it keeps a bounded head and tail of each stream, counts and discards
+  // the rest, and lets the command run to its own exit code (verification: a passing but chatty
+  // suite must verify). Only `runawayOutputBytes` ends such a command.
+  readonly outputOverflow?: OutputOverflowPolicy | undefined;
+  // The absolute ceiling, in bytes arrived across stdout+stderr, at which a "retain-head-tail"
+  // command is a runaway and is terminated (reason `output-cap`, result `truncated`). Ignored by
+  // "terminate"; absent means 1 GiB. Memory stays bounded by `maxOutputBytes` regardless of this value.
+  readonly runawayOutputBytes?: number | undefined;
   // Default per-command wall-time before SIGTERM/SIGKILL.
   readonly defaultTimeoutMs: number;
   // Grace period between SIGTERM and SIGKILL on timeout/abort.
@@ -206,6 +230,29 @@ export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
   DEFAULT_SANDBOX_POLICY.defaultTimeoutMs +
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS +
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
+
+// ─── Governed git delivery work ──────────────────────────────────────────────────────
+// The settlement budget of a redeemed delivery proposal (`keiko.git.execute`: stage, unstage, commit,
+// push, pull request). Such a call runs many git subprocesses, each already bounded by its own
+// command timeout (a staging hash of a large file by one in proportion to its size) and cancelled by
+// Stop or authority revocation, so its catalog budget is only a runaway backstop. A fixed 30 s, and
+// later ten-minute, budget ended healthy work: a supported 6 GiB file at 10 MiB/s needs 614 s for one
+// hash pass alone, inside the 674 s the hash itself is allowed (work-ending limits, owner decision
+// 2026-11-24: a fixed bound that ends healthy work is a defect). The backstop is therefore the
+// longest run the product can authorize, eight hours (`MAX_RUNTIME_MAX_DURATION_MINUTES`, pinned
+// against it in the contract tests): the call can never outlive its Authority Envelope, whose expiry
+// (`context.deadlineAt`) still ends it earlier, and a staging deadline that scales with file size is
+// never cut by a shorter outer one. It is not the global default.
+//
+// The governed Git read tools (`keiko_git_status`, `keiko_git_diff`) share this budget. A raw
+// status is a sequence of Git processes (one per index, tree, attribute and hash read), and on a
+// host whose process creation is slow (Windows with a real-time scanner, W-4: ~14 s for one status
+// of a six-file repository) the fixed 30 s sandbox default ended healthy work. The same raw scan
+// streams a whole tracked large file whose index stat no longer matches, so a supported 6 GiB file
+// at 10 MiB/s needs 614.4 s for that read alone and a ten-minute budget cut it (PR #4573 review).
+// Hang protection stays where it belongs: every Git process keeps its own `defaultTimeoutMs`, and
+// the scan is bounded in paths and bytes.
+export const GOVERNED_GIT_TOOL_MAX_DURATION_MS = 8 * 60 * 60 * 1_000;
 
 // ─── Governed git lanes: the two credential-capable env profiles ─────────────────
 //
@@ -636,6 +683,11 @@ export interface CommandResult {
   // all over-cap bytes arrived. summarizeCommand does NOT serialize this, so the model-facing JSON
   // is byte-identical; existing callers that do not read it are unaffected.
   readonly omittedByteCount?: number | undefined;
+  // "retain-head-tail" runs only: the middle of the output was dropped while the command ran to its
+  // own end. `retainedByteCount` is what stdout+stderr kept, `discardedByteCount` what was dropped.
+  // Absent when nothing was dropped, and always absent for a `truncated` (runaway) result.
+  readonly retainedByteCount?: number | undefined;
+  readonly discardedByteCount?: number | undefined;
 }
 
 // ─── Patch workflow ──────────────────────────────────────────────────────────────

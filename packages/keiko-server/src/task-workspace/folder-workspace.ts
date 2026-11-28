@@ -35,7 +35,12 @@ import { isCanonicalLocalRoot, isRegisteredLocalRoot } from "./canonical-root.js
 import { TaskWorkspaceError } from "./errors.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
+import type { WorkspaceDriftCause } from "./evidence.js";
 import type { ActiveWorkspaceView } from "./types.js";
+
+/** The active-pointer read's answer: the proven view, or which re-proof refused it. */
+export type InPlaceViewResult =
+  { readonly view: ActiveWorkspaceView } | { readonly cause: WorkspaceDriftCause };
 
 export const FOLDER_PREFIX = FOLDER_WORKSPACE_ID_PREFIX;
 
@@ -128,15 +133,16 @@ export function folderView(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointer: ActivePointer,
-): ActiveWorkspaceView | undefined {
+): InPlaceViewResult {
   const persisted = instances.getById(pointer.workspaceId);
-  if (persisted?.workspaceKind !== "folder") return undefined;
+  if (persisted?.workspaceKind !== "folder") return { cause: "instance-record-missing" };
   const root = persisted.repositoryRoot;
-  if (!isRegisteredLocalRoot(store, root)) return undefined;
-  if (!isCanonicalLocalRoot(root)) return undefined;
-  if (folderWorkspaceId(folderIdentity(root)) !== pointer.workspaceId) return undefined;
+  if (!isRegisteredLocalRoot(store, root)) return { cause: "root-unregistered" };
+  if (!isCanonicalLocalRoot(root)) return { cause: "root-not-canonical" };
+  if (folderWorkspaceId(folderIdentity(root)) !== pointer.workspaceId)
+    return { cause: "folder-identity-changed" };
   const instance: WorkspaceInstance = { ...persisted, lastVerifiedAt: new Date().toISOString() };
-  return { instance, binding: buildBinding(instance), pointer };
+  return { view: { instance, binding: buildBinding(instance), pointer } };
 }
 
 function isCanonicalFolder(root: string): boolean {

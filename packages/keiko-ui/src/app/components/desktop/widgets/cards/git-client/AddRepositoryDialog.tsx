@@ -58,6 +58,14 @@ const DIALOG_STYLE: CSSProperties = {
   boxShadow: "var(--shadow-pop)",
 };
 
+// The form is the dialog's only child, so it carries the dialog's column layout.
+const FORM_STYLE: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-5)",
+  margin: 0,
+};
+
 const FIELD_LABEL_STYLE: CSSProperties = {
   display: "flex",
   flexDirection: "column",
@@ -260,117 +268,124 @@ export function AddRepositoryDialog({
         onPointerDown={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
-          <h2 style={{ margin: 0, font: "600 17px var(--font-ui)", color: "var(--fg)" }}>
-            {t("gitClientWindow.addRepository.title")}
-          </h2>
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
-            onClick={onClose}
-            aria-label={t("gitClientWindow.addRepository.close")}
-            title={t("gitClientWindow.addRepository.close")}
-          >
-            <CloseIcon size={14} />
-          </button>
-        </div>
-
-        <fieldset
-          style={{ display: "flex", gap: "var(--space-3)", margin: 0, padding: 0, border: 0 }}
-          aria-label={t("gitClientWindow.addRepository.mode")}
+        <form
+          style={FORM_STYLE}
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
         >
-          <button
-            type="button"
-            aria-pressed={mode === "clone"}
-            style={{ ...MODE_TAB_STYLE, ...(mode === "clone" ? MODE_TAB_ACTIVE_STYLE : {}) }}
-            onClick={() => setMode("clone")}
-          >
-            {t("gitClientWindow.addRepository.clone")}
-          </button>
-          <button
-            type="button"
-            aria-pressed={mode === "open"}
-            style={{ ...MODE_TAB_STYLE, ...(mode === "open" ? MODE_TAB_ACTIVE_STYLE : {}) }}
-            onClick={() => setMode("open")}
-          >
-            {t("gitClientWindow.addRepository.openLocal")}
-          </button>
-        </fieldset>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
+            <h2 style={{ margin: 0, font: "600 17px var(--font-ui)", color: "var(--fg)" }}>
+              {t("gitClientWindow.addRepository.title")}
+            </h2>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
+              onClick={onClose}
+              aria-label={t("gitClientWindow.addRepository.close")}
+              title={t("gitClientWindow.addRepository.close")}
+            >
+              <CloseIcon size={14} />
+            </button>
+          </div>
 
-        {mode === "clone" ? (
-          <>
-            <label style={FIELD_LABEL_STYLE}>
-              {t("gitClientWindow.addRepository.repositoryUrl")}
-              {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
+          <fieldset
+            style={{ display: "flex", gap: "var(--space-3)", margin: 0, padding: 0, border: 0 }}
+            aria-label={t("gitClientWindow.addRepository.mode")}
+          >
+            <button
+              type="button"
+              aria-pressed={mode === "clone"}
+              style={{ ...MODE_TAB_STYLE, ...(mode === "clone" ? MODE_TAB_ACTIVE_STYLE : {}) }}
+              onClick={() => setMode("clone")}
+            >
+              {t("gitClientWindow.addRepository.clone")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === "open"}
+              style={{ ...MODE_TAB_STYLE, ...(mode === "open" ? MODE_TAB_ACTIVE_STYLE : {}) }}
+              onClick={() => setMode("open")}
+            >
+              {t("gitClientWindow.addRepository.openLocal")}
+            </button>
+          </fieldset>
+
+          {mode === "clone" ? (
+            <>
+              <label style={FIELD_LABEL_STYLE}>
+                {t("gitClientWindow.addRepository.repositoryUrl")}
+                {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                   CSS column layout, not inline text flow. */}
-              <input
-                ref={firstFieldRef}
-                style={INPUT_STYLE}
-                value={repositoryUrl}
-                onChange={(event) => setRepositoryUrl(event.target.value)}
-                aria-label={t("gitClientWindow.addRepository.repositoryUrl")}
-                placeholder="https://github.com/org/repo.git"
-              />
-            </label>
-            <label style={FIELD_LABEL_STYLE}>
-              {t("gitClientWindow.addRepository.cloneDestination")}
-              {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
+                <input
+                  ref={firstFieldRef}
+                  style={INPUT_STYLE}
+                  value={repositoryUrl}
+                  onChange={(event) => setRepositoryUrl(event.target.value)}
+                  aria-label={t("gitClientWindow.addRepository.repositoryUrl")}
+                  placeholder="https://github.com/org/repo.git"
+                />
+              </label>
+              <label style={FIELD_LABEL_STYLE}>
+                {t("gitClientWindow.addRepository.cloneDestination")}
+                {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                   CSS column layout, not inline text flow. */}
-              <input
-                style={INPUT_STYLE}
-                value={destinationPath}
-                onChange={(event) => setDestinationPath(event.target.value)}
-                aria-label={t("gitClientWindow.addRepository.cloneDestination")}
-                placeholder={examplePath("repo")}
-              />
+                <input
+                  style={INPUT_STYLE}
+                  value={destinationPath}
+                  onChange={(event) => setDestinationPath(event.target.value)}
+                  aria-label={t("gitClientWindow.addRepository.cloneDestination")}
+                  placeholder={examplePath("repo")}
+                />
+              </label>
+            </>
+          ) : (
+            <label style={FIELD_LABEL_STYLE}>
+              {t("gitClientWindow.addRepository.localPath")}
+              <span style={{ display: "flex", gap: "var(--space-3)" }}>
+                <input
+                  ref={firstFieldRef}
+                  style={{ ...INPUT_STYLE, flex: 1 }}
+                  value={localPath}
+                  onChange={(event) => setLocalPath(event.target.value)}
+                  aria-label={t("gitClientWindow.addRepository.localPath")}
+                  placeholder={examplePath("existing-repo")}
+                />
+                <button
+                  type="button"
+                  style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
+                  onClick={chooseLocalRepository}
+                  disabled={!nativeDialogSupported || pickingFolder}
+                  aria-label={t("gitClientWindow.addRepository.chooseLocal")}
+                  title={t("gitClientWindow.addRepository.chooseLocal")}
+                >
+                  <FolderIcon size={16} />
+                </button>
+              </span>
             </label>
-          </>
-        ) : (
-          <label style={FIELD_LABEL_STYLE}>
-            {t("gitClientWindow.addRepository.localPath")}
-            <span style={{ display: "flex", gap: "var(--space-3)" }}>
-              <input
-                ref={firstFieldRef}
-                style={{ ...INPUT_STYLE, flex: 1 }}
-                value={localPath}
-                onChange={(event) => setLocalPath(event.target.value)}
-                aria-label={t("gitClientWindow.addRepository.localPath")}
-                placeholder={examplePath("existing-repo")}
-              />
-              <button
-                type="button"
-                style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
-                onClick={chooseLocalRepository}
-                disabled={!nativeDialogSupported || pickingFolder}
-                aria-label={t("gitClientWindow.addRepository.chooseLocal")}
-                title={t("gitClientWindow.addRepository.chooseLocal")}
-              >
-                <FolderIcon size={16} />
-              </button>
-            </span>
-          </label>
-        )}
+          )}
 
-        {error !== null ? (
-          <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--fg)" }}>
-            {error}
-          </p>
-        ) : null}
+          {error !== null ? (
+            <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--fg)" }}>
+              {error}
+            </p>
+          ) : null}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-4)" }}>
-          <button type="button" style={SECONDARY_BTN} onClick={onClose}>
-            {t("gitClientWindow.addRepository.cancel")}
-          </button>
-          <button
-            type="button"
-            style={{ ...PRIMARY_BTN, ...disabledStyle(busy || !canSubmit) }}
-            disabled={busy || !canSubmit}
-            onClick={submit}
-          >
-            {submitButtonLabel(busy, mode, t)}
-          </button>
-        </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-4)" }}>
+            <button type="button" style={SECONDARY_BTN} onClick={onClose}>
+              {t("gitClientWindow.addRepository.cancel")}
+            </button>
+            <button
+              type="submit"
+              style={{ ...PRIMARY_BTN, ...disabledStyle(busy || !canSubmit) }}
+              disabled={busy || !canSubmit}
+            >
+              {submitButtonLabel(busy, mode, t)}
+            </button>
+          </div>
+        </form>
       </dialog>
     </div>
   );

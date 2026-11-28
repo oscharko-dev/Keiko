@@ -189,6 +189,7 @@ const VIOLATION_LABEL: Readonly<Record<GitCommitMessageViolationCode, string>> =
   "subject-too-long": "The subject line is too long",
   "missing-issue-key": "Missing the required issue key",
   "missing-signoff": "Missing the Signed-off-by trailer",
+  "message-too-large": "The commit message is too large (more than 64 KiB)",
 };
 
 export const STATUS_LABEL: Readonly<Record<GitDeliveryMutationResponse["status"], string>> = {

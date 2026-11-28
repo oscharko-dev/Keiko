@@ -5,7 +5,11 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 
-import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
+import {
+  changesRefreshSignal,
+  changesSignalWithUndo,
+  succeededBranchMoveKey,
+} from "./codingWorkbenchChangesSignal";
 
 const AT = "2026-10-23T12:00:00.000Z";
 
@@ -200,5 +204,34 @@ describe("changesSignalWithUndo", () => {
     expect(undone).not.toBe(before);
     expect(changesSignalWithUndo("c-1|2", false)).toBe(before);
     expect(changesSignalWithUndo(null, true)).not.toBeNull();
+  });
+});
+
+describe("succeededBranchMoveKey", () => {
+  it("is null without a feed and empty while no branch call succeeded", () => {
+    expect(succeededBranchMoveKey(null)).toBeNull();
+    expect(succeededBranchMoveKey(feed([{ tool: "edit", state: "succeeded" }]))).toBe("");
+    expect(
+      succeededBranchMoveKey(
+        feed([
+          { tool: "keiko_git_branch", state: "running" },
+          { tool: "keiko_git_branch", state: "failed" },
+          { tool: "keiko_git_branch", state: "denied" },
+        ]),
+      ),
+    ).toBe("");
+  });
+
+  it("names each succeeded branch call by its id, so replacing one call moves the key", () => {
+    const one = succeededBranchMoveKey(feed([{ tool: "keiko_git_branch", state: "succeeded" }]));
+    const other = succeededBranchMoveKey(
+      feed([
+        { tool: "keiko_git_status", state: "succeeded" },
+        { tool: "keiko_git_branch", state: "succeeded" },
+      ]),
+    );
+    expect(one).toBe("call-0");
+    // The same count of branch calls under another call id is another key.
+    expect(other).toBe("call-1");
   });
 });

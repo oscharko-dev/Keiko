@@ -1379,6 +1379,49 @@ const NATIVE_RETRY = {
   error: { type: "provider.transport", message: "PRIVATE_PROVIDER_FAILURE" },
 };
 
+function finishedHistory(finish: unknown): readonly Record<string, unknown>[] {
+  return [
+    { id: "msg_fin_user", type: "user", time: { created: 0 }, text: "Task" },
+    {
+      id: "msg_fin_assistant",
+      type: "assistant",
+      time: { created: 0 },
+      content: [{ type: "text", text: "Partial answer" }],
+      ...(finish === undefined ? {} : { finish }),
+    },
+  ];
+}
+
+describe("OpenCode V2 output limit history", () => {
+  it.each([
+    ["length", true],
+    ["stop", false],
+    [undefined, false],
+  ] as const)("projects the output limit for a finish of %s", (finish, limited) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project("ses_fin", finishedHistory(finish), undefined);
+    const signals = events.map((event) => projection.takeSignal(event)).filter(Boolean);
+    const found = signals.some(
+      (signal) => signal?.kind === "message" && signal.outputLimit === true,
+    );
+    expect(found).toBe(limited);
+  });
+
+  it("keeps the durable assistant text when the finish is projected separately", () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-finish-capture",
+      activityLog: undefined,
+      captureMessages,
+    });
+    projection.project("ses_fin", finishedHistory("length"), undefined);
+    expect(captureMessages).toHaveBeenLastCalledWith([
+      expect.objectContaining({ messageId: "msg_fin_user" }),
+      expect.objectContaining({ messageId: "msg_fin_assistant", content: "Partial answer" }),
+    ]);
+  });
+});
+
 describe("OpenCode V2 native retry history", () => {
   it("logs native schedule and clear counts once per committed page without provider bodies", () => {
     const sink = createBufferedServerLogSink();
@@ -3154,6 +3197,27 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(JSON.stringify(signals)).not.toMatch(
       /PRIVATE_|external_directory|workspace|tool\.failed/u,
     );
+  });
+
+  it("shows what a running command has printed so far and keeps it when the call errors", () => {
+    for (const status of ["running", "error"] as const) {
+      const signals = toolSignals(
+        shellHistory({
+          status,
+          input: { command: "npm run serve" },
+          metadata: { output: "ready\ntick 1" },
+          ...(status === "error" ? { error: { type: "tool.execution", message: "aborted" } } : {}),
+        }),
+      ) as readonly { presentation?: { output?: unknown } }[];
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.presentation?.output).toEqual({
+        head: "ready\ntick 1",
+        tail: "",
+        lineCount: 2,
+        hiddenLineCount: 0,
+        truncated: false,
+      });
+    }
   });
 
   it("projects a command that exited zero as succeeded with its exit status", () => {

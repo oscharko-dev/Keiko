@@ -1,6 +1,6 @@
 import { StrictMode, useReducer } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
   useCodingWorkbenchRuntimeStream,
@@ -10,6 +10,7 @@ import {
   useCodingWorkbenchRuntimeRefreshEffects,
   POST_RUN_DESCRIPTION_POLL_MAX_MS,
   POST_RUN_DESCRIPTION_POLL_MS,
+  RUNTIME_READINESS_RETRY_DELAYS_MS,
   awaitingPostRunDescription,
 } from "./coding-workbench-runtime-effects";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -30,7 +31,19 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+  STREAM_WAITING_THRESHOLD_MS,
+} from "./browser-stream-capacity";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { fetchCodingWorkbenchSidecarGatewayProfile } from "./coding-workbench-provider-api";
+
+// This suite drives the document-local admission path: the stream opens synchronously. Origin-wide
+// admission through Web Locks is pinned in browser-stream-capacity.test.ts.
+beforeEach(() => {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+});
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -217,6 +230,209 @@ describe("useCodingWorkbenchWorkspaceEffect", () => {
 });
 
 describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
+  // U-37: an answer anchored to a live run is stale once that run has ended and is read again.
+  it("re-reads an anchored readiness once the run is no longer active", () => {
+    const refreshRuntime = vi.fn(async () => undefined);
+    const stateFor = (runState: string, anchored: boolean): CodingWorkbenchRuntimeState => ({
+      ...createInitialCodingWorkbenchRuntimeState(),
+      runtime: {
+        status: "ready",
+        value: { liveRunAnchored: anchored ? true : undefined },
+        error: null,
+      } as never,
+      run: { status: "ready", value: { runId: "run-1", state: runState }, error: null } as never,
+    });
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource: vi.fn(async () => undefined),
+          refreshRuntime,
+          refreshRun: vi.fn(async () => undefined),
+          intent: { current: { pickedModelId: null } },
+        });
+      },
+      { initialProps: { state: stateFor("running", true) } },
+    );
+    refreshRuntime.mockClear();
+    rerender({ state: stateFor("running", true) });
+    expect(refreshRuntime).not.toHaveBeenCalled();
+    rerender({ state: stateFor("succeeded", true) });
+    expect(refreshRuntime).toHaveBeenCalledOnce();
+    // The fresh answer is not anchored: nothing reads again.
+    rerender({ state: stateFor("succeeded", false) });
+    expect(refreshRuntime).toHaveBeenCalledOnce();
+  });
+
+  // U-37: every retry attempt, the recovery and the exhaustion leave closed, body-free evidence, and
+  // a pending retry never fires after the window is gone.
+  it("reports each readiness retry, the recovery and the exhaustion, and stops on unmount", () => {
+    vi.useFakeTimers();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const refreshRuntime = vi.fn(async () => undefined);
+      const withStatus = (status: "error" | "loading" | "ready"): CodingWorkbenchRuntimeState => ({
+        ...createInitialCodingWorkbenchRuntimeState(),
+        runtime: { status, value: null, error: null },
+      });
+      const { rerender, unmount } = renderHook(
+        ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshSource: vi.fn(async () => undefined),
+            refreshRuntime,
+            refreshRun: vi.fn(async () => undefined),
+            intent: { current: { pickedModelId: null } },
+          });
+        },
+        { initialProps: { state: withStatus("error") } },
+      );
+      const reported = (): unknown[] =>
+        writer.mock.calls.map(
+          ([, meta]) =>
+            (meta as { codingWorkbenchInteraction?: unknown } | undefined)
+              ?.codingWorkbenchInteraction,
+        );
+      const delays = RUNTIME_READINESS_RETRY_DELAYS_MS;
+      act(() => vi.advanceTimersByTime(delays[0] ?? 0));
+      expect(reported()).toContainEqual({
+        interaction: "runtime-readiness-retry",
+        readinessRetryOutcome: "started",
+        attempt: 1,
+      });
+      rerender({ state: withStatus("ready") });
+      expect(reported()).toContainEqual({
+        interaction: "runtime-readiness-retry",
+        readinessRetryOutcome: "recovered",
+        attempt: 1,
+      });
+      // A new failure streak runs to exhaustion.
+      for (const delay of delays) {
+        rerender({ state: withStatus("error") });
+        act(() => vi.advanceTimersByTime(delay));
+        rerender({ state: withStatus("loading") });
+      }
+      rerender({ state: withStatus("error") });
+      expect(reported()).toContainEqual({
+        interaction: "runtime-readiness-retry",
+        readinessRetryOutcome: "exhausted",
+        attempt: delays.length,
+      });
+      // Unmount while a retry is pending: it never fires.
+      rerender({ state: withStatus("ready") });
+      rerender({ state: withStatus("error") });
+      const before = refreshRuntime.mock.calls.length;
+      unmount();
+      act(() => vi.advanceTimersByTime(10 * 60_000));
+      expect(refreshRuntime.mock.calls).toHaveLength(before);
+    } finally {
+      resetClientDiagnosticWriter();
+      vi.useRealTimers();
+    }
+  });
+
+  // U-37: a failed readiness read stayed on screen for good because nothing re-read it, although
+  // every later read of the same server succeeded.
+  it("re-reads a failed runtime readiness with backoff, ends at success and gives up after the last delay", () => {
+    vi.useFakeTimers();
+    try {
+      const refreshRuntime = vi.fn(async () => undefined);
+      const failed = (status: "error" | "loading" | "ready"): CodingWorkbenchRuntimeState => ({
+        ...createInitialCodingWorkbenchRuntimeState(),
+        runtime: { status, value: null, error: null },
+      });
+      const { rerender } = renderHook(
+        ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshSource: vi.fn(async () => undefined),
+            refreshRuntime,
+            refreshRun: vi.fn(async () => undefined),
+            intent: { current: { pickedModelId: null } },
+          });
+        },
+        { initialProps: { state: failed("error") } },
+      );
+      refreshRuntime.mockClear();
+      const [first = 0, second = 0] = RUNTIME_READINESS_RETRY_DELAYS_MS;
+      act(() => vi.advanceTimersByTime(first - 1));
+      expect(refreshRuntime).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(1));
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+      // The retry fails again: the next, longer delay applies.
+      rerender({ state: failed("loading") });
+      rerender({ state: failed("error") });
+      act(() => vi.advanceTimersByTime(second - 1));
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+      act(() => vi.advanceTimersByTime(1));
+      expect(refreshRuntime).toHaveBeenCalledTimes(2);
+      // A success ends it.
+      rerender({ state: failed("ready") });
+      act(() => vi.advanceTimersByTime(10 * 60_000));
+      expect(refreshRuntime).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // A later refresh the person started (a mode change) that fails again earns its own retries, and
+  // an exhausted streak is reported once, not on every effect re-run.
+  it("retries a failure that follows a person-started refresh and reports exhaustion once", () => {
+    vi.useFakeTimers();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const refreshRuntime = vi.fn(async () => undefined);
+      const withStatus = (status: "error" | "loading" | "ready"): CodingWorkbenchRuntimeState => ({
+        ...createInitialCodingWorkbenchRuntimeState(),
+        runtime: { status, value: null, error: null },
+      });
+      const { rerender } = renderHook(
+        ({
+          state,
+          refresh,
+        }: {
+          readonly state: CodingWorkbenchRuntimeState;
+          readonly refresh: () => Promise<void>;
+        }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshSource: vi.fn(async () => undefined),
+            refreshRuntime: refresh,
+            refreshRun: vi.fn(async () => undefined),
+            intent: { current: { pickedModelId: null } },
+          });
+        },
+        { initialProps: { state: withStatus("error"), refresh: refreshRuntime } },
+      );
+      const outcomes = (): unknown[] =>
+        writer.mock.calls
+          .map(
+            ([, meta]) =>
+              (meta as { codingWorkbenchInteraction?: { readinessRetryOutcome?: string } })
+                .codingWorkbenchInteraction?.readinessRetryOutcome,
+          )
+          .filter((outcome) => outcome !== undefined);
+      for (const delay of RUNTIME_READINESS_RETRY_DELAYS_MS) {
+        act(() => vi.advanceTimersByTime(delay));
+        rerender({ state: withStatus("loading"), refresh: refreshRuntime });
+        rerender({ state: withStatus("error"), refresh: refreshRuntime });
+      }
+      // The effect runs again (a new refresh callback) while exhausted: still one exhaustion line.
+      rerender({ state: withStatus("error"), refresh: vi.fn(async () => undefined) });
+      expect(outcomes().filter((outcome) => outcome === "exhausted")).toHaveLength(1);
+      // The person changes the mode: a refresh the retry did not start, and it fails.
+      rerender({ state: withStatus("loading"), refresh: refreshRuntime });
+      rerender({ state: withStatus("error"), refresh: refreshRuntime });
+      refreshRuntime.mockClear();
+      act(() => vi.advanceTimersByTime(RUNTIME_READINESS_RETRY_DELAYS_MS[0] ?? 0));
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+    } finally {
+      resetClientDiagnosticWriter();
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes an open Workbench after a background catalog change without invalidating the catalog", () => {
     const refreshSource = vi.fn(async () => undefined);
     const refreshRuntime = vi.fn(async () => undefined);
@@ -239,6 +455,82 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     act(() => window.dispatchEvent(new Event("keiko:gateway-model-catalog-updated")));
     expect(refreshSource).not.toHaveBeenCalled();
   });
+  // U-45: Start is not the first place the person may learn the model is inactive. A start the server
+  // refused as "model unavailable" re-reads the source, which also asks for the catalog, so the
+  // in-place activation notice appears right after the refusal.
+  // U-45: a page that stays open across a Keiko restart and is paired again in place (a fragment
+  // navigation, no reload) holds a source that said "admitted" for a server whose models are all
+  // inactive again (ADR-0171 D2). The new session re-reads source and runtime and asks for the
+  // catalog once; a mount reads nothing extra.
+  it("re-reads source, runtime and catalog once when a new app session is established in place", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const refreshRuntime = vi.fn(async () => undefined);
+    const catalogRequested = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRequested);
+    const intent = { current: { pickedModelId: null } };
+    try {
+      renderHook(() => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state: createInitialCodingWorkbenchRuntimeState(),
+          refreshSource,
+          refreshRuntime,
+          refreshRun: vi.fn(async () => undefined),
+          intent,
+        });
+      });
+      expect(refreshSource).toHaveBeenCalledOnce();
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+      expect(catalogRequested).not.toHaveBeenCalled();
+      act(() => notifyCodingAppSessionEstablished());
+      expect(refreshSource).toHaveBeenCalledTimes(2);
+      expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, "use");
+      expect(refreshRuntime).toHaveBeenCalledTimes(2);
+      expect(catalogRequested).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRequested);
+    }
+  });
+
+  it("re-reads the source once per start refused as model-unavailable", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    const intent = { current: { pickedModelId: null } };
+    const refused = (message: string, reason?: "model-verification-pending"): never =>
+      ({
+        ...initial,
+        mutation: {
+          status: "error",
+          kind: "start",
+          requestId: "r",
+          error: {
+            code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+            message,
+            retryable: true,
+            ...(reason === undefined ? {} : { modelRefusalReason: reason }),
+          },
+        },
+      }) as never;
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource,
+          refreshRuntime: vi.fn(async () => undefined),
+          refreshRun: vi.fn(async () => undefined),
+          intent,
+        });
+      },
+      { initialProps: { state: initial } },
+    );
+    refreshSource.mockClear();
+    rerender({ state: refused("not admitted") });
+    expect(refreshSource).toHaveBeenCalledOnce();
+    expect(refreshSource).toHaveBeenCalledWith(false, undefined, "use");
+    // A model that is still being checked is not an inactive one: nothing to re-read.
+    rerender({ state: refused("checking", "model-verification-pending") });
+    expect(refreshSource).toHaveBeenCalledOnce();
+  });
+
   // Customer 1.3.4: the source describes the model chosen in the picker, so choosing another model
   // reads its profile again (the server then checks exactly that model).
   it("re-reads the source when the picker selects another model", () => {
@@ -397,6 +689,8 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
 describe("post-run description refresh (#3390)", () => {
   const settled = (overrides: Record<string, unknown> = {}): CodingWorkbenchRuntimeState =>
     ({
+      mutation: createInitialCodingWorkbenchRuntimeState().mutation,
+      runtime: { status: "ready", value: null, error: null },
       run: {
         status: "ready",
         value: {
@@ -559,6 +853,65 @@ describe("useCodingWorkbenchRuntimeStream reconnect reporting", () => {
       );
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("useCodingWorkbenchRuntimeStream capacity wait reporting", () => {
+  class QuietEventSource {
+    public onopen: ((event: Event) => void) | null = null;
+    public onerror: ((event: Event) => void) | null = null;
+    public readyState = 0;
+    public readonly close = vi.fn();
+    public addEventListener = vi.fn();
+    public removeEventListener = vi.fn();
+  }
+
+  it("projects a long wait for a free connection as a status and clears it once admitted", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", QuietEventSource);
+    resetBrowserStreamCapacityForTests();
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    try {
+      const dispatch = vi.fn();
+      const stateRef = { current: createInitialCodingWorkbenchRuntimeState() };
+      renderHook(() => {
+        useCodingWorkbenchRuntimeStream({
+          runId: "run-1",
+          streamEpoch: 0,
+          stateRef,
+          refreshRun: () => Promise.resolve(),
+          dispatch,
+          setStreamEpoch: vi.fn(),
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS);
+      });
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "stream-capacity-waiting",
+        waiting: true,
+        heldElsewhere: false,
+      });
+      expect(dispatch).not.toHaveBeenCalledWith({
+        kind: "stream-capacity-waiting",
+        waiting: false,
+        heldElsewhere: false,
+      });
+      held[0]?.release();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "stream-capacity-waiting",
+        waiting: false,
+        heldElsewhere: false,
+      });
+    } finally {
+      held.forEach((admission) => admission.release());
+      resetBrowserStreamCapacityForTests();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
     }
   });
 });

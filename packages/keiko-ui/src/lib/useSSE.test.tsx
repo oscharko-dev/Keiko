@@ -1,11 +1,23 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "./client-diagnostics";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+  sharedStreamConnectionBudget,
+} from "./browser-stream-capacity";
 import { useSSE } from "./useSSE";
+
+// This suite drives the document-local admission path: the stream opens synchronously. Origin-wide
+// admission through Web Locks is pinned in browser-stream-capacity.test.ts.
+beforeEach(() => {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+});
 
 interface StreamRepair {
   readonly acknowledged: boolean;
@@ -183,6 +195,44 @@ describe("useSSE", () => {
     expect(source?.close).not.toHaveBeenCalled();
     second.unmount();
     expect(source?.close).toHaveBeenCalled();
+  });
+
+  // Review #4573 finding 11: the run stream is a long-lived connection outside the shared pool.
+  it("counts its open run stream against the persistent connection budget until it closes", () => {
+    resetBrowserStreamCapacityForTests();
+    admitDirectBrowserStream(() => undefined);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const before = sharedStreamConnectionBudget();
+    const view = renderHook(() => useSSE("run 1"));
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(sharedStreamConnectionBudget()).toBe(before - 1);
+    view.unmount();
+    expect(sharedStreamConnectionBudget()).toBe(before);
+    resetBrowserStreamCapacityForTests();
+  });
+
+  // #4573: a direct stream is admitted against the origin-wide ceiling before it connects.
+  it("waits for an origin-wide slot before opening the run stream", async () => {
+    resetBrowserStreamCapacityForTests();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const view = renderHook(() => useSSE("run 1"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(FakeEventSource.instances).toHaveLength(0);
+    held[0]?.release();
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    view.unmount();
+    held.forEach((admission) => admission.release());
+    resetBrowserStreamCapacityForTests();
   });
 
   it("does not open an EventSource when no run id is selected", () => {
@@ -822,5 +872,71 @@ describe("useSSE", () => {
     expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
 
     view.unmount();
+  });
+});
+
+describe("useSSE unreadable frames", () => {
+  afterEach(() => {
+    FakeEventSource.instances = [];
+    vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
+  });
+
+  it("records one closed diagnostic per stream for frames it cannot read, never their content", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: { message: string; kind: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reported.push({ message, kind: meta?.errorKind }));
+    renderHook(() => useSSE("run 1"));
+    const source = FakeEventSource.instances[0];
+    act(() => {
+      source?.emit("secret-not-json");
+      source?.emit("{broken");
+    });
+    const lines = reported.filter((entry) => entry.message.includes("frame unreadable"));
+    expect(lines).toEqual([
+      { message: "[keiko] run events stream frame unreadable", kind: "validation-failed" },
+    ]);
+    expect(JSON.stringify(reported)).not.toContain("secret-not-json");
+  });
+});
+
+describe("useSSE under origin stream capacity", () => {
+  afterEach(() => {
+    FakeEventSource.instances = [];
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("gives its connection to a non-replayable stream and reopens when a slot frees", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+    const view = renderHook(() => useSSE("run 1"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const first = FakeEventSource.instances[0];
+    expect(first).toBeDefined();
+    const holders = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
+    const waiterAdmitted = vi.fn();
+    const waiter = admitDirectBrowserStream(waiterAdmitted, { nonReplayable: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(first?.close).toHaveBeenCalled();
+    expect(waiterAdmitted).toHaveBeenCalledOnce();
+    expect(view.result.current.status).toBe("connecting");
+    waiter.release();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    holders.forEach((admission) => admission.release());
   });
 });

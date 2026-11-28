@@ -59,6 +59,7 @@ import {
   type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
   type ChatRole,
+  type Project,
   type UpdateChatMessagePatch,
   type UpdateChatPatch,
   type UpdateProjectPatch,
@@ -84,7 +85,7 @@ import {
   type CapsuleStampSource,
 } from "./local-knowledge-capsule-stamps.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
-import { pathIsDenied } from "./files-deny.js";
+import { pathDeniedAsyncRecorded, pathIsDenied } from "./files-deny.js";
 import {
   clearGroundedContextIndexesForConversation,
   clearGroundedContextIndexesForWorkspace,
@@ -421,7 +422,10 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 // Route 13 — GET /api/projects
 // ──────────────────────────────────────────────────────────────────────────
 
-export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export async function handleListProjects(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   // Managed worktrees are registered so server-owned trust, manifests, and verification resolve
   // their exact root identity. They are implementation details, not folders the human selected.
   // Filter before availability projection so an unpaired catalog read never exposes their paths.
@@ -430,7 +434,7 @@ export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): Rou
     deps.managedTaskWorkspaceRoot,
   );
   const projects = putPreferredProjectFirst(
-    projectsWithWorkspaceAvailability(deps.store, visibleProjects),
+    await projectsWithWorkspaceAvailability(deps.store, visibleProjects, ctx),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -483,6 +487,15 @@ function isExplicitProjectSelection(body: Record<string, unknown>): boolean {
 // Route 14 — POST /api/projects
 // ──────────────────────────────────────────────────────────────────────────
 
+// The project projection with its readability refusal recorded under the request's correlation id.
+function withAvailability(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  project: Project,
+): Promise<ProjectWithAvailability> {
+  return projectWithWorkspaceAvailability(deps.store, project, ctx);
+}
+
 export async function handleCreateProject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -493,7 +506,7 @@ export async function handleCreateProject(
     const name = optionalString(body, "name");
     const explicitSelection = isExplicitProjectSelection(body);
     const normalizedPath = validateProjectPath(path, { mustExist: true });
-    if (pathIsDenied(normalizedPath)) {
+    if (await pathDeniedAsyncRecorded(normalizedPath, ctx.correlationId)) {
       return forbiddenResult(
         "DENIED",
         "The project path is excluded from Keiko's safe read surface.",
@@ -521,7 +534,7 @@ export async function handleCreateProject(
         ctx.correlationId ?? randomUUID(),
         error,
       );
-      const projectWithAvailability = projectWithWorkspaceAvailability(deps.store, project);
+      const projectWithAvailability = await withAvailability(deps, ctx, project);
       // The trust write and its bounded-history prune are separate store operations. If the write
       // committed before pruning failed, re-read the governed state instead of falsely telling the
       // operator that authority stayed restricted.
@@ -542,7 +555,7 @@ export async function handleCreateProject(
     }
     return {
       status: 201,
-      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+      body: { project: await withAvailability(deps, ctx, project) },
     };
   });
 }
@@ -560,16 +573,17 @@ function buildProjectPatch(body: Record<string, unknown>): UpdateProjectPatch {
   };
 }
 
-function reconnectExistingProject(
+async function reconnectExistingProject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   targetPath: string,
-): ProjectWithAvailability {
+): Promise<ProjectWithAvailability> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   try {
-    const project = projectWithWorkspaceAvailability(
+    const project = await projectWithWorkspaceAvailability(
       deps.store,
       deps.store.reconnectProject(targetPath),
+      ctx,
     );
     processServerLogSink().write(
       activityLogEvent(
@@ -613,12 +627,15 @@ export async function handleUpdateProject(
     // existing-only paired-write owner repairs a missing single-root manifest atomically without
     // admitting an unregistered path; ordinary metadata patches stay on updateProject.
     if (Object.keys(patch).length === 0) {
-      return { status: 200, body: { project: reconnectExistingProject(ctx, deps, targetPath) } };
+      return {
+        status: 200,
+        body: { project: await reconnectExistingProject(ctx, deps, targetPath) },
+      };
     }
     const project = deps.store.updateProject(targetPath, patch);
     return {
       status: 200,
-      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+      body: { project: await withAvailability(deps, ctx, project) },
     };
   });
 }

@@ -62,6 +62,7 @@ import {
   requestRootAccessResolver,
   resolveRequestRoot,
   runFilesHandler,
+  runHumanWriteOrBusy,
 } from "../files.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
@@ -258,19 +259,10 @@ async function buildSearchResponse(
   for (const atom of result.atoms) {
     if (matches.length >= request.maxResults) break;
     if (atom.lineRange === undefined) continue;
-    matches.push({
-      path: atom.scopePath,
-      lineRange: atom.lineRange,
-      snippet: await snippetForMatch(
-        scope,
-        fs,
-        atom.scopePath,
-        atom.lineRange.startLine,
-        atom.lineRange.endLine,
-        signal,
-      ),
-      score: atom.score,
-    });
+    const { startLine, endLine } = atom.lineRange;
+    // One snippet read at a time, at most maxResults of them, keeps open files bounded.
+    const snippet = await snippetForMatch(scope, fs, atom.scopePath, startLine, endLine, signal); // NOSONAR typescript:S9382
+    matches.push({ path: atom.scopePath, lineRange: atom.lineRange, snippet, score: atom.score });
   }
   return {
     results: matches,
@@ -878,12 +870,14 @@ export async function handleEditorWorkspaceReplaceApply(
     try {
       assertAllowedApplyFiles(request);
       const scope = buildSearchScope(canonicalRoot, fs);
-      const response = buildReplaceApplyResponse(
-        scope,
-        fs,
-        request,
-        clientAbortSignal(ctx),
-        resolveAccess,
+      // A replace a person applies waits for a runtime revert write in flight and lands after it.
+      const response = await runHumanWriteOrBusy(
+        canonicalRoot,
+        () =>
+          Promise.resolve(
+            buildReplaceApplyResponse(scope, fs, request, clientAbortSignal(ctx), resolveAccess),
+          ),
+        ctx.correlationId,
       );
       return { status: 200, body: deps.redactor(response) };
     } catch (error) {

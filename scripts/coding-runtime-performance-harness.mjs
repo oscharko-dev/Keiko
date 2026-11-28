@@ -215,6 +215,7 @@ async function prepare(context, repository, modules) {
   const cookie = paired.headers.getSetCookie().at(0)?.split(";").at(0);
   if (cookie === undefined) throw new Error("fixture-pairing-cookie-missing");
   context.cookie = cookie;
+  context.repository = repository;
   await checkModel(context);
   const provisioned = await request(context, "/api/task-workspaces", {
     root: repository,
@@ -257,31 +258,61 @@ async function firstByte(context, runId) {
   }
 }
 
+// The longest run of data-less blocks (comments such as the server's `: open`) before the first
+// event; a stream that only ever comments is refused instead of read forever.
+const MAX_SKIPPED_SSE_BLOCKS = 32;
+
+/**
+ * Time to the first SSE data frame (docs/qa/perf-evidence.md `sseFirstByteMs`): the chunk that
+ * brought the first bytes of the first event, never an earlier data-less comment block, which
+ * dispatches no event under the SSE rules.
+ */
 export async function readCodingPerformanceFirstEvent(
   reader,
   started,
   now = () => performance.now(),
 ) {
-  let firstByteMs;
-  let buffer = "";
+  const stream = { buffer: "", skipped: 0, dataStartedMs: undefined };
   const decoder = new globalThis.TextDecoder();
   while (true) {
     const chunk = await reader.read();
     if (chunk.done) throw new Error("fixture-sse-empty-or-incomplete");
     if (chunk.value.byteLength === 0) continue;
-    firstByteMs ??= now() - started;
-    buffer += decoder.decode(chunk.value, { stream: true });
-    if (Buffer.byteLength(buffer) > 65_536) throw new Error("fixture-sse-too-large");
-    const boundary = buffer.indexOf("\n\n");
-    if (boundary < 0) continue;
-    const data = buffer
+    const arrivedMs = now() - started;
+    stream.buffer += decoder.decode(chunk.value, { stream: true });
+    if (Buffer.byteLength(stream.buffer) > 65_536) throw new Error("fixture-sse-too-large");
+    const data = firstDataLine(stream);
+    if (data !== undefined) return validatedFirstEvent(data, stream.dataStartedMs ?? arrivedMs);
+    noteDataStart(stream, arrivedMs);
+  }
+}
+
+// What is left is the start of a block; unless it is a comment, the first event has begun.
+function noteDataStart(stream, arrivedMs) {
+  if (stream.buffer.length > 0 && !stream.buffer.startsWith(":"))
+    stream.dataStartedMs ??= arrivedMs;
+}
+
+function firstDataLine(stream) {
+  let boundary = stream.buffer.indexOf("\n\n");
+  while (boundary >= 0) {
+    const data = stream.buffer
       .slice(0, boundary)
       .split("\n")
       .find((line) => line.startsWith("data: "));
-    if (data === undefined || !validateCodingWorkbenchRuntimeSseEvent(JSON.parse(data.slice(6))).ok)
-      throw new Error("fixture-sse-invalid");
-    return firstByteMs;
+    stream.buffer = stream.buffer.slice(boundary + 2);
+    if (data !== undefined) return data;
+    stream.skipped += 1;
+    if (stream.skipped > MAX_SKIPPED_SSE_BLOCKS) throw new Error("fixture-sse-no-event");
+    boundary = stream.buffer.indexOf("\n\n");
   }
+  return undefined;
+}
+
+function validatedFirstEvent(data, firstDataMs) {
+  if (!validateCodingWorkbenchRuntimeSseEvent(JSON.parse(data.slice(6))).ok)
+    throw new Error("fixture-sse-invalid");
+  return firstDataMs;
 }
 
 async function finished(context, runId, observed) {
@@ -302,15 +333,25 @@ async function finished(context, runId, observed) {
   throw new Error("fixture-terminal-deadline");
 }
 
-async function measure(context, observed) {
-  const readinessMs = await readiness(context);
-  const started = performance.now();
-  const snapshot = await request(context, "/api/coding-workbench/runtime/runs", {
+/** The start body: it states the repository the fixture activated, which the server must run in. */
+export function codingPerformanceStartBody(repository) {
+  return {
     requestId: randomUUID(),
     taskIntent: "Return the bounded performance fixture text.",
     requestedMode: "autonomous-delivery",
+    expectedWorkspace: { root: repository },
     modelId: "functional-model",
-  }).then((reply) => reply.json());
+  };
+}
+
+async function measure(context, observed) {
+  const readinessMs = await readiness(context);
+  const started = performance.now();
+  const snapshot = await request(
+    context,
+    "/api/coding-workbench/runtime/runs",
+    codingPerformanceStartBody(context.repository),
+  ).then((reply) => reply.json());
   const coldStartMs = performance.now() - started;
   if (snapshot.state !== "running") throw new Error(`fixture-start-state:${snapshot.state}`);
   const sseFirstByteMs = await firstByte(context, snapshot.runId);

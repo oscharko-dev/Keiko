@@ -9,6 +9,7 @@ import {
 import type { Document } from "yaml";
 import {
   REDACTION_PLACEHOLDER,
+  appendAll,
   projectSourceText,
   type SourceTextEdit,
   type SourceTextProjection,
@@ -186,11 +187,11 @@ function inferredCodeRegions(text: string, ports: ProjectionPorts): readonly Cod
   const offset = from;
   const { ranges, hints } = sourceMarkdownLayout(text, offset);
   for (const range of [...ranges, { start: text.length, end: text.length }]) {
-    result.push(...standaloneRegions(text, from, range.start, ports, withinSize));
+    appendAll(result, standaloneRegions(text, from, range.start, ports, withinSize));
     const region =
       fencedRegion(text, range.start, range.end) ??
       inlineSourceRegion(text, range.start, range.end);
-    if (region !== undefined) result.push(...inferredFenceRegions(text, region, ports));
+    if (region !== undefined) appendAll(result, inferredFenceRegions(text, region, ports));
     from = range.end;
   }
   result.sort((a, b) => a.start - b.start);
@@ -247,7 +248,7 @@ function unresolvedInlineRegions(
     while ((regions[regionIndex]?.end ?? Infinity) <= hint.start) regionIndex += 1;
     if (hint.start < covered || (regions[regionIndex]?.start ?? Infinity) <= hint.start) continue;
     if (!mayStartStandaloneSource(text.slice(hint.bodyStart, hint.end))) continue;
-    result.push(...unresolvedHintRegions(text, hint, ports, withinSize));
+    appendAll(result, unresolvedHintRegions(text, hint, ports, withinSize));
     covered = hint.end;
   }
   return result;
@@ -414,7 +415,7 @@ export function projectCodeRedaction(
           start: region.start + source.rawOffset(range.start),
           end: region.start + source.rawOffset(range.end),
         });
-      literals.push(...mappedRegionSpans(body, region, source, diff.literals));
+      appendAll(literals, mappedRegionSpans(body, region, source, diff.literals));
       report.depthRefusals += diff.report.depthRefusals;
       report.sizeRefusals += diff.report.sizeRefusals;
       report.syntaxRefusals += diff.report.syntaxRefusals;
@@ -431,7 +432,7 @@ export function projectCodeRedaction(
             region.yamlDocument,
           )
         : refusedProjection(source.text, report, region.refusal);
-    literals.push(...mappedRegionSpans(body, region, source, projection));
+    appendAll(literals, mappedRegionSpans(body, region, source, projection));
   }
   owned.sort((a, b) => a.start - b.start);
   return { regions: owned, literals, report };

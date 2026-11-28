@@ -1,5 +1,7 @@
+import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import type {
   AvailableCodingSafeActivityFeed,
+  CodingSafeActivityFeed,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
@@ -14,7 +16,8 @@ import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
  * retried (#3873 review: an outage rides on for minutes, and "Waiting for the model" read the same
  * as a slow generation).
  */
-export type CodingWorkbenchRunPhase = "decision" | "gateway" | "verifier" | "tool" | "model";
+export type CodingWorkbenchRunPhase =
+  "decision" | "gateway" | "verifier" | "tool" | "subagents" | "model";
 
 export interface CodingWorkbenchRunPhaseInput {
   readonly snapshot: CodingWorkbenchRuntimeSnapshot | null;
@@ -91,14 +94,83 @@ export function nativeRunRetry(
   return fact?.kind === "runtime-event" ? (fact.nativeRetry ?? null) : null;
 }
 
+/**
+ * How many of the run's subagents work while its own session is idle (U-52): the newest
+ * `native-subagents-changed` fact of the running run, zero without one. A background subagent keeps
+ * working after its parent went idle, so the run is not waiting for the model then.
+ */
+export function activeSubagentCount(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): number {
+  if (snapshot?.state !== "running" || snapshot.runId === undefined) return 0;
+  const fact = events.findLast(
+    (event) =>
+      event.runId === snapshot.runId &&
+      event.kind === "runtime-event" &&
+      event.eventKind === "native-subagents-changed",
+  );
+  return fact?.kind === "runtime-event" ? (fact.activeSubagentCount ?? 0) : 0;
+}
+
+/**
+ * True for a Build run that settled successfully although the model never used a tool: the feed of
+ * the run is whole and holds no tool call and no plan, so no file was edited and no command ran. A
+ * display fact over counts the run already has, never a change to its outcome. The agent is the
+ * run's own, never the picker for the next turn, and an unreported agent counts as not Build. A
+ * Plan or custom agent is excluded: answering without edits is what a planning turn does. A feed
+ * that lost turns or dropped signals proves nothing, and a plan tool becomes a plan, not a tool.
+ * The runtime status and the activity feed arrive separately, so a feed still held from before the
+ * settlement can predate a tool call: only a feed read after the run settled (`finalConfirmed`)
+ * proves the absence.
+ */
+export function answeredWithoutTools(
+  state: CodingWorkbenchRuntimeState,
+  feed: CodingSafeActivityFeed | null,
+  finalConfirmed: boolean,
+): boolean {
+  const run = state.run.value;
+  if (!finalConfirmed || run?.state !== "succeeded" || run.agent !== "build") return false;
+  if (feed?.availability !== "available" || feed.runId !== run.runId) return false;
+  return feedProvesNoTools(feed);
+}
+
+// A whole feed (no evicted turn, no dropped signal) with turns, no plan and no tool in any turn.
+function feedProvesNoTools(feed: AvailableCodingSafeActivityFeed): boolean {
+  if (feed.truncated || feed.droppedEventCount !== 0 || feed.plan !== undefined) return false;
+  return feed.turns.length > 0 && feed.turns.every((turn) => turn.tools.length === 0);
+}
+
 /** The current phase of the run, or null when the run is not live or its phase is not known. */
 export function runPhase(input: CodingWorkbenchRunPhaseInput): CodingWorkbenchRunPhase | null {
   if (awaitsDecision(input)) return "decision";
   if (input.snapshot?.state !== "running") return null;
   if (modelGatewayRetrying(input.events, input.snapshot.runId)) return "gateway";
   const tool = unsettledTool(input);
-  if (tool === undefined) return "model";
+  if (tool === undefined) {
+    return activeSubagentCount(input.snapshot, input.events) > 0 ? "subagents" : "model";
+  }
   return tool === VERIFIER_TOOL ? "verifier" : "tool";
+}
+
+// The tool whose file change the person reviews: the bridge hands the diff to the review panel
+// without naming the call, so the held call is the newest unsettled change-files call of the run.
+const CHANGESET_EDIT_TOOL = "keiko_changeset_edit";
+
+/**
+ * The call a pending changeset review holds, or undefined when no review waits or the live feed
+ * names no such open call. Only the newest turn counts, as in `unsettledTool`.
+ */
+export function heldChangesetCallId(
+  feed: AvailableCodingSafeActivityFeed | null,
+  runId: string | undefined,
+  reviewPending: boolean,
+): string | undefined {
+  if (!reviewPending || feed === null || feed.runId !== runId) return undefined;
+  const tools = feed.turns.at(-1)?.tools ?? [];
+  return tools.findLast(
+    (tool) => tool.tool === CHANGESET_EDIT_TOOL && UNSETTLED_TOOL_STATES.has(tool.state),
+  )?.callId;
 }
 
 function instant(value: string): number | null {

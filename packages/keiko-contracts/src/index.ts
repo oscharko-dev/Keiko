@@ -1008,6 +1008,7 @@ export type {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
+  CODING_WORKBENCH_TOOL_CALL_ID_PATTERN,
   codingWorkbenchPolicyEffectFor,
   compareCodingWorkbenchModeAuthority,
   decideCodingWorkbenchActionForMode,
@@ -1488,10 +1489,14 @@ export type {
   CodingWorkbenchRuntimeTakeoverRequest,
   CodingWorkbenchRuntimeUnavailableReason,
   CodingWorkbenchRuntimeVersion,
+  CodingWorkbenchStopCause,
   CodingWorkbenchVerificationGap,
+  CodingWorkbenchVerificationGapDetail,
 } from "./coding-workbench-runtime-api.js";
 export type {
   CODING_WORKBENCH_AGENTS,
+  CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAP_DETAILS,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
@@ -1569,11 +1574,13 @@ export type {
 } from "./coding-workbench-runtime-questions.js";
 export type {
   CodingWorkbenchNativeActionReview,
+  CodingWorkbenchReviewRename,
   CodingWorkbenchNativeJiraNames,
   CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchVerificationPreview,
 } from "./coding-workbench-runtime-approval-review.js";
 export type {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT,
@@ -1612,6 +1619,8 @@ export type {
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
+  CodingSafeActivityProgramKind,
+  CodingSafeActivityOutputShortened,
   CodingSafeActivityToolOutput,
   CodingSafeActivityToolRefusalCause,
   CodingSafeActivityToolState,
@@ -2173,6 +2182,7 @@ export type {
   UsageMetadata,
   NormalizedResponse,
   GatewayOutputRepairOutcome,
+  GatewayEmptyAnswerEvidence,
   FinishReason,
   StreamDelta,
   StreamEvent,
@@ -2187,6 +2197,7 @@ export type {
 export type { ProviderEndpointStyle, RealtimeAuthMode } from "./gateway.js";
 export type {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  GATEWAY_EMPTY_ANSWER_EVIDENCE,
   MODEL_REASONING_EFFORTS,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
@@ -2424,6 +2435,7 @@ export type {
   NetworkGatewayPolicy,
   FilesystemPolicy,
   HomeIsolation,
+  OutputOverflowPolicy,
   OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
@@ -4033,6 +4045,9 @@ export type {
   GitDeliveryPolicyDecision,
   GitDeliveryActionPreview,
   GitDeliveryExecutionResult,
+  GitCommitSigningDecision,
+  GitCommitSigningReadFailure,
+  GitDeliveryExecutionNote,
   GitDeliveryEvidenceRef,
   GitDeliveryActionEnvelopeFor,
   GitDeliveryActionEnvelope,
@@ -5232,6 +5247,7 @@ export type {
   CodingRuntimeGitStatus,
   CodingRuntimeGitDiff,
   CodingRuntimeGitStage,
+  CodingRuntimeGitStageCause,
   CodingRuntimeGitUnstage,
   CodingRuntimeGitSync,
   CodingRuntimeGitBranch,

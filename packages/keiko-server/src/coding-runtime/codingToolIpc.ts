@@ -1,3 +1,4 @@
+import { CODING_WORKBENCH_TOOL_CALL_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { CodingToolReplacementChangeset } from "./codingToolReplacementEdits.js";
 import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
@@ -47,7 +48,10 @@ import {
 import { CHANGESET_EDIT_ARGUMENT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
-/** The bound of a tool RESPONSE and of the runtime's `tool_output` (a different direction). */
+/**
+ * The bound of a tool RESPONSE. The runtime's model-visible `tool_output` cap is a different limit
+ * (`OPENCODE_TOOL_OUTPUT_MAX_BYTES`): the two must not be conflated.
+ */
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
 /**
  * The bound of a tool REQUEST. The largest request is a governed changeset edit, so this is that
@@ -71,6 +75,8 @@ export const CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS = 1_024;
  * proposal) the operator declined; the facade answers it as the human's decision (ADR-0124 D6).
  */
 export const GOVERNED_ASK_DECLINED_REASON_CODE = "approval-denied";
+/** The marker of a server-raised ask nobody decided in time; answered as the expired decision. */
+export const GOVERNED_ASK_EXPIRED_REASON_CODE = "approval-expired";
 
 export type CodingToolAction =
   | "read"
@@ -112,6 +118,18 @@ export interface CodingToolRequestIdentity {
   readonly idempotencyKey: string;
 }
 
+/**
+ * The model's tool call id inside a request's `actionId` (`<sessionID>:<callID>`), the id of that
+ * call's row in the safe activity feed; undefined when the action id names no well-formed call.
+ */
+// A tool without a call id carries its message id there instead, which matches no feed row: the id
+// never names a wrong row, it names none.
+export function codingToolCallIdFromActionId(actionId: string): string | undefined {
+  const separator = actionId.indexOf(":");
+  const callId = separator >= 0 ? actionId.slice(separator + 1) : "";
+  return CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(callId) ? callId : undefined;
+}
+
 export interface CodingToolApprovalProof {
   readonly approvalId: string;
   readonly approvalDigest: string;
@@ -123,6 +141,30 @@ export interface CodingToolVerificationResult {
   readonly completed: readonly VerificationKind[];
   readonly commit?: CodingToolCommitProofResult;
 }
+
+/**
+ * Why the raw worktree read behind a commit proof failed (#4491): closed, body-free, and shared by
+ * the model answer and the activity log. The permanent causes cannot be cured by reading again.
+ */
+export const COMMIT_PROOF_UNAVAILABLE_CAUSES = [
+  "unborn-head",
+  "path-denied",
+  "link-denied",
+  "entry-unreadable",
+  "snapshot-incomplete",
+  "snapshot-drift",
+  "read-cancelled",
+  "read-timeout",
+  "read-failed",
+] as const;
+export type CommitProofUnavailableCause = (typeof COMMIT_PROOF_UNAVAILABLE_CAUSES)[number];
+export const COMMIT_PROOF_PERMANENT_CAUSES: readonly CommitProofUnavailableCause[] = [
+  "unborn-head",
+  "path-denied",
+  "link-denied",
+  "entry-unreadable",
+  "snapshot-incomplete",
+];
 
 export type CodingToolCommitProofResult =
   | { readonly commitProof: "recorded" }
@@ -137,7 +179,13 @@ export type CodingToolCommitProofResult =
        * equalling the working tree; staging cannot resolve that (#3612). */
       readonly reasonCode:
         "candidate-not-staged" | "buffers-dirty" | "candidate-drift" | "proof-unavailable";
-      readonly nextAction: "stage-then-verify" | "save-then-verify" | "verify-again";
+      readonly nextAction:
+        "stage-then-verify" | "save-then-verify" | "verify-again" | "resolve-then-verify";
+      /**
+       * For `proof-unavailable` after a failed worktree read: the closed cause. A permanent cause
+       * answers `resolve-then-verify` (change the repository first), a transient one `verify-again`.
+       */
+      readonly cause?: CommitProofUnavailableCause | undefined;
       /**
        * For `candidate-not-staged`: the unstaged and untracked workspace-relative paths that keep
        * the proof from forming, bounded, with exact counts — what `stage-then-verify` has to stage
@@ -170,6 +218,18 @@ export type VerificationNotRunReason =
   | "denied"
   | "cancelled"
   | "skipped";
+
+/**
+ * The limit a verification step reached, in closed words (never a number or a path): the output
+ * runaway ceiling, the memory ceiling or the wall-time limit. Forwarded to the model with the
+ * resource-exceeded and timed-out outcomes so it never reads an opaque failure.
+ */
+export const VERIFICATION_RESOURCE_LIMIT_WORDS = [
+  "output-limit",
+  "memory-limit",
+  "time-limit",
+] as const;
+export type VerificationResourceLimitWord = (typeof VERIFICATION_RESOURCE_LIMIT_WORDS)[number];
 
 /** One step of a verification that never executed, and why (F74). Model-facing and body-free. */
 export interface VerificationNotRunStep {

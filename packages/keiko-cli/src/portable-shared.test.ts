@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { insideInstallationPayload } from "@oscharko-dev/keiko-server";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -93,5 +95,30 @@ describe("portable target layout", () => {
         extra: true,
       }),
     ).toThrow("portable setup manifest Windows generation binding is malformed");
+  });
+});
+
+// keiko-server `launch-directory.ts` recognises an installation's payload by this layout (it must
+// not depend on the CLI), so the real layout is fed into its predicate.
+describe("the payload layout the server recognises as program files (ADR-0121 D9)", () => {
+  it("names every folder `layoutFor` creates under the payload root", () => {
+    const payload = join("/Keiko", "system", "Keiko");
+    for (const target of ["windows-x64", "linux-x64", "macos-arm64"] as const) {
+      const layout = layoutFor(target, payload);
+      for (const path of [
+        layout.appRoot,
+        layout.packageJsonPath,
+        layout.runtimeNodePath,
+        layout.runtimeSupervisorPath,
+        layout.setupManifestPath,
+      ]) {
+        expect(insideInstallationPayload(path), `${target} ${path}`).toBe(true);
+      }
+    }
+  });
+
+  it("does not name a sibling that only starts like a payload entry", () => {
+    expect(insideInstallationPayload(join("/Keiko", "system", "Keiko", "runtimeX"))).toBe(false);
+    expect(insideInstallationPayload(join("/Keiko", "system", "Keiko", "application"))).toBe(false);
   });
 });

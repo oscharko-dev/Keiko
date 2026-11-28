@@ -571,6 +571,48 @@ describe("Gateway output-exhausted repair after forwarded reasoning (#3873 F17, 
     expect(gateway.circuitStatus(MODEL)).toMatchObject({ state: "closed", consecutiveFailures: 0 });
   });
 
+  // O-11: the failed-stream line carries what the provider reported for the attempt that surfaced,
+  // so "it generated output that never arrived" is told apart from "it generated nothing".
+  it("records the provider's usage evidence on the failed stream line of an empty answer", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const empty = (): ProviderEmptyAnswerError => {
+      const error = new ProviderEmptyAnswerError(MODEL, [], true);
+      error.providerUsage = { completionTokens: 1800, reasoningTokens: 1700 };
+      error.emptyAnswerEvidence = "provider-reported-output";
+      return error;
+    };
+    const scripted = scriptedStreams([
+      [{ type: "reasoning", token: "thinking" }, empty()],
+      [{ type: "reasoning", token: "again" }, empty()],
+    ]);
+    const gateway = gatewayFor(scripted, events, config(provider(), true));
+
+    const failure = await drainInto(gateway.chatStream(CODING_REQUEST), []);
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(events.find((event) => event.op === "gateway.stream.failed")?.extra).toMatchObject({
+      providerCompletionTokens: 1800,
+      providerReasoningTokens: 1700,
+      emptyAnswerEvidence: "provider-reported-output",
+    });
+  });
+
+  it("leaves the provider usage fields off a failed stream line whose error carries none", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = scriptedStreams([
+      [{ type: "reasoning", token: "thinking" }, new ProviderEmptyAnswerError(MODEL, [], true)],
+      [{ type: "reasoning", token: "again" }, new ProviderEmptyAnswerError(MODEL, [], true)],
+    ]);
+    const gateway = gatewayFor(scripted, events, config(provider(), true));
+
+    await drainInto(gateway.chatStream(CODING_REQUEST), []);
+
+    const extra = events.find((event) => event.op === "gateway.stream.failed")?.extra ?? {};
+    expect(extra).not.toHaveProperty("providerCompletionTokens");
+    expect(extra).not.toHaveProperty("providerReasoningTokens");
+    expect(extra).not.toHaveProperty("emptyAnswerEvidence");
+  });
+
   it("does not repair an exhaustion once answer text followed the reasoning", async () => {
     const events: ModelGatewayLogEvent[] = [];
     const scripted = scriptedStreams([

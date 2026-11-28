@@ -1129,6 +1129,7 @@ describe("production coding runtime turn ports", () => {
 
   it("aborts the run signal even when backend interruption rejects", async () => {
     const controller = new AbortController();
+    const diagnostics: ServerDiagnosticRecord[] = [];
     const dispatcher = createProductionRuntimeTaskDispatcher(
       new Map([
         [
@@ -1144,12 +1145,17 @@ describe("production coding runtime turn ports", () => {
           },
         ],
       ]),
+      { record: (diagnostic): void => void diagnostics.push(diagnostic) },
     );
 
     await expect(
       dispatcher.abort({ runId: "run-failed-abort", requestId: "abort-1", expectedRevision: 1 }),
     ).resolves.toBe(false);
     expect(controller.signal.aborted).toBe(true);
+    expect(diagnostics).toMatchObject([
+      { correlationId: "run-failed-abort", code: "stage=dispatch:reason=abort-exception" },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("private backend failure");
   });
 
   it("releases a rejected adapter attempt for retry at the unchanged revision", async () => {
@@ -2009,7 +2015,43 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(outcome).toEqual({ reason: "generation-unavailable" });
   });
 
-  it("treats a captured remote digest that no longer matches the scope as generation-unavailable", async () => {
+  it.each(["head-mismatch", "revision-mismatch"] as const)(
+    "keeps the proven drift %s as stale-snapshot instead of generation-unavailable",
+    async (reason) => {
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: fakeSnapshots(() =>
+            Promise.resolve({
+              snapshot: {
+                schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+                repositoryId: "repo_fixture",
+                capturedAt: "2026-01-01T00:00:00.000Z",
+                outcome: "unavailable",
+                reason,
+                headSha: "a".repeat(40),
+              },
+            }),
+          ),
+        }),
+      );
+      const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+      expect(outcome).toEqual({ reason: "stale-snapshot" });
+    },
+  );
+
+  it("maps a complete capture that carries no snapshot reference to generation-unavailable", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() => Promise.resolve({ snapshot: snapshotFixture() })),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+  });
+
+  // U-50 audit: a remote that moved since the scope was bound is a stale condition, not a missing
+  // capability, so it reports stale-snapshot and the UI can hide only the capability-absent reason.
+  it("treats a captured remote digest that no longer matches the scope as stale-snapshot", async () => {
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
         snapshots: fakeSnapshots(() =>
@@ -2021,7 +2063,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       }),
     );
     const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
-    expect(outcome).toEqual({ reason: "generation-unavailable" });
+    expect(outcome).toEqual({ reason: "stale-snapshot" });
   });
 
   it("denies model egress and never calls the Model Gateway when no description authority admits the scope", async () => {

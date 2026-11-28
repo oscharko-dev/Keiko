@@ -1,5 +1,6 @@
 "use client";
 
+import { isManagedTaskWorktreePath } from "../windows/managedTaskWorktreePath";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { canConnect, snapMap } from "../windows/connectionUtils";
@@ -25,6 +26,7 @@ import type {
   FilesWindowContext,
   FilesScopeBindReply,
   OpenEditorFileResult,
+  ToolToggleOutcome,
   ViewportWorld,
   WorkspaceApi,
   WorkspaceLinkedGitChangeComparison,
@@ -100,6 +102,7 @@ type Mutations = Pick<
   | "add"
   | "openEditorFile"
   | "toggleTool"
+  | "setToolOpen"
 >;
 
 // `/\/+$/u` looks harmless (one quantified atom anchored at `$`) but on a string that does NOT
@@ -585,7 +588,7 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
             cfg: {
               ...w.cfg,
               root: normalizedRoot,
-              ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+              ...(isManagedTaskWorktreePath(normalizedRoot)
                 ? {}
                 : { rootBinding: "coding-repository" }),
               ...layoutPatch,
@@ -620,7 +623,7 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
         z: ++zc.current,
         cfg: {
           root: normalizedRoot,
-          ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+          ...(isManagedTaskWorktreePath(normalizedRoot)
             ? {}
             : { rootBinding: "coding-repository" }),
           file: normalizedPath,
@@ -653,18 +656,74 @@ function nextWorkspaceZ(list: readonly AppWindow[], zc: MutateArgs["zc"]): numbe
   return zc.current;
 }
 
-function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
+/** A visible window is frontmost when no other visible window sits above it (a z tie is not frontmost). */
+function isFrontmostWindow(list: readonly AppWindow[], target: AppWindow): boolean {
+  if (target.minimized === true) return false;
+  return list.every((w) => w.minimized === true || w.id === target.id || w.z < target.z);
+}
+
+/**
+ * The single rule for a launcher click on a tool type, read by the mutation and by the undo
+ * recording so both see the same answer from the same list: no window opens one, a minimized one
+ * restores, one behind another raises, and only the frontmost one minimizes.
+ */
+export function classifyToolToggle(
+  list: readonly AppWindow[] | null,
+  type: WindowType,
+): ToolToggleOutcome {
+  const existing = list?.find((w) => w.type === type);
+  if (existing === undefined) return "open";
+  if (existing.minimized === true) return "restore";
+  return isFrontmostWindow(list ?? [], existing) ? "minimize" : "raise";
+}
+
+type ToolMode = "toggle" | "open" | "close";
+
+/**
+ * Applies a launcher click (`toggle`) or an explicit target state (`open` / `close`, used by undo
+ * and redo) to an existing tool window. Closing minimizes: the window and any unsent input in it
+ * survive, and `shellPanelIsOpen` already counts a minimized window as closed.
+ */
+function applyToolMode(
+  list: AppWindow[],
+  existing: AppWindow,
+  zc: MutateArgs["zc"],
+  mode: ToolMode,
+): AppWindow[] {
+  const outcome = classifyToolToggle(list, existing.type);
+  const minimize =
+    mode === "close" ? existing.minimized !== true : mode === "toggle" && outcome === "minimize";
+  if (minimize) return list.map((w) => (w.id === existing.id ? { ...w, minimized: true } : w));
+  if (mode === "close" || (mode === "open" && outcome === "minimize")) return list;
+  const nextZ = nextWorkspaceZ(list, zc);
+  return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
+}
+
+function wouldExceedWindowLimit(
+  currentWins: readonly AppWindow[] | undefined,
+  type: WindowType,
+): boolean {
+  return (
+    currentWins !== undefined &&
+    currentWins.length >= MAX_WORKSPACE_WINDOWS &&
+    !currentWins.some((window) => window.type === type)
+  );
+}
+
+function makeToolMutation(args: MutateArgs, mode: ToolMode): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
     const t = WIN_TYPES[type];
     const currentWins = args.winsRef?.current;
-    if (
-      currentWins !== undefined &&
-      currentWins.length >= MAX_WORKSPACE_WINDOWS &&
-      !currentWins.some((window) => window.type === type)
-    ) {
-      if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
-      return;
+    // A workspace that is not measured applies nothing, so the click is blocked. Without the latest
+    // list the outcome is read from what the update actually did, so the answer and the applied
+    // state always agree.
+    const unmeasured = worldVP() === null;
+    let outcome: ToolToggleOutcome =
+      unmeasured || currentWins === undefined ? "blocked" : classifyToolToggle(currentWins, type);
+    if (mode !== "close" && wouldExceedWindowLimit(currentWins, type)) {
+      if (!unmeasured) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return "blocked";
     }
     let windowLimitReached = false;
     setWins((ws) => {
@@ -672,13 +731,11 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       if (vp === null) return ws;
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
-      if (existing?.minimized === true) {
-        const nextZ = nextWorkspaceZ(list, zc);
-        return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
-      }
       if (existing !== undefined) {
-        return list.filter((w) => w.type !== type);
+        if (currentWins === undefined) outcome = classifyToolToggle(list, type);
+        return applyToolMode(list, existing, zc, mode);
       }
+      if (mode === "close") return list;
       if (list.length >= MAX_WORKSPACE_WINDOWS) {
         windowLimitReached = true;
         return list;
@@ -696,9 +753,11 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
         zoom: 1,
       };
       args.onWindowAllocated?.(window);
+      if (currentWins === undefined) outcome = "open";
       return [...list, window];
     });
     if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+    return outcome;
   };
 }
 
@@ -712,7 +771,10 @@ export function makeMutations(args: MutateArgs): Mutations {
     maximize: makeMaximize(args),
     add: makeAdd(args),
     openEditorFile: makeOpenEditorFile(args),
-    toggleTool: makeToggleTool(args),
+    toggleTool: makeToolMutation(args, "toggle"),
+    setToolOpen: (type, open): void => {
+      makeToolMutation(args, open ? "open" : "close")(type);
+    },
   };
 }
 
@@ -2288,19 +2350,13 @@ function isCodingRepositoryRootBinding(w: AppWindow): boolean {
   return w.cfg["rootBinding"] === "coding-repository";
 }
 
-function isManagedTaskWorkspaceRoot(root: unknown): root is string {
-  if (typeof root !== "string" || root.length === 0) return false;
-  const normalized = root.replaceAll("\\", "/");
-  return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
-}
-
 function hasManagedTaskWorkspaceDrift(w: AppWindow): boolean {
   const configuredRoot = w.cfg["root"];
   return (
     typeof configuredRoot === "string" &&
     configuredRoot.length > 0 &&
-    !isManagedTaskWorkspaceRoot(configuredRoot) &&
-    isManagedTaskWorkspaceRoot(w.cfg["resolvedRoot"])
+    !isManagedTaskWorktreePath(configuredRoot) &&
+    isManagedTaskWorktreePath(w.cfg["resolvedRoot"])
   );
 }
 

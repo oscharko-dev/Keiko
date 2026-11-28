@@ -198,7 +198,7 @@ function unreadyModel(id: string): ModelCapability {
 }
 
 describe("pickChatModelId tri-state readiness", () => {
-  it("offers no model nobody activated — every model starts inactive after a restart", () => {
+  it("offers no model nobody activated — a model is offered only once it was activated", () => {
     expect(pickChatModelId([unprobedModel("qwen-chat")])).toBeUndefined();
     expect(pickChatModelId([unprobedModel("qwen-chat"), chatModel("activated-chat")])).toBe(
       "activated-chat",

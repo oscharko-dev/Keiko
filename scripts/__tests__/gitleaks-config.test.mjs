@@ -202,7 +202,58 @@ function literalArrayPattern(table, key) {
   return new RegExp(pattern, "u");
 }
 
+function pr4573Exception(fragment) {
+  const table = allowlistTables(repositoryConfig).find((entry) =>
+    entry.get("description")?.includes(fragment),
+  );
+  expect(table).toBeDefined();
+  if (table === undefined) throw new TypeError(`Missing exception: ${fragment}`);
+  return table;
+}
+
 describe(".gitleaks.toml allowlists", () => {
+  it("limits the PR #4573 curl fixtures to their two commits, path, rule and exact lines", () => {
+    const table = pr4573Exception("synthetic curl basic-auth fixtures");
+    expect(table.get("condition")).toBe('"AND"');
+    expect(table.get("targetrules")).toBe('["curl-auth-user"]');
+    expect(table.get("regextarget")).toBe('"line"');
+    expect(table.get("commits")).toBe(
+      '["3c22bea73bd4244fa5dcfe767acf6ee83fa27de1", "9e0bac627a43f19aa5cffe4e04387be8c1c2d77e"]',
+    );
+    const path = "packages/keiko-server/src/coding-runtime/commandLineRedaction.test.ts";
+    const pathPattern = literalArrayPattern(table, "paths");
+    expect(pathPattern.test(path)).toBe(true);
+    expect(pathPattern.test(`${path}.bak`)).toBe(false);
+    const linePattern = literalArrayPattern(table, "regexes");
+    const secret = ["hun", "ter2"].join("");
+    for (const flag of ["-u ", "-u", "--user "]) {
+      const line = `    ["curl ${flag}admin:${secret} https://example.test", "${secret}"],`;
+      expect(linePattern.test(line)).toBe(true);
+      expect(linePattern.test(line.replace(secret, `${secret}x`))).toBe(false);
+      expect(linePattern.test(line.replace("example.test", "example.com"))).toBe(false);
+    }
+    // The current fixture carries no literal the rule could report.
+    const fixture = readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+    expect(fixture).not.toMatch(/curl (?:-u ?|--user )admin:hunter2/u);
+  });
+
+  it("limits the PR #4573 api_key path fixture to its one commit, path, rule and exact line", () => {
+    const table = pr4573Exception("synthetic api_key field inside a quoted diff path");
+    expect(table.get("condition")).toBe('"AND"');
+    expect(table.get("targetrules")).toBe('["generic-api-key"]');
+    expect(table.get("regextarget")).toBe('"line"');
+    expect(table.get("commits")).toBe('["2b55ec802e2ed2b036033869e93a17d9ea2fccf1"]');
+    const path = "packages/keiko-security/src/redaction-diff-quoted-paths.property.test.ts";
+    expect(literalArrayPattern(table, "paths").test(path)).toBe(true);
+    const value = ["abcd1234", "efgh5678"].join("");
+    const line = `      'diff --git "a/caf\\\\303\\\\251 api_key=${value}" "b/y"',`;
+    const linePattern = literalArrayPattern(table, "regexes");
+    expect(linePattern.test(line)).toBe(true);
+    expect(linePattern.test(line.replace(value, `${value}0`))).toBe(false);
+    const fixture = readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+    expect(fixture).not.toContain(`api_key=${value}`);
+  });
+
   it("are found by this reader", () => {
     expect(allowlistTables(repositoryConfig).length).toBeGreaterThan(0);
   });

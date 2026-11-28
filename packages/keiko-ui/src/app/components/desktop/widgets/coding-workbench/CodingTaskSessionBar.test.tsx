@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -40,6 +40,7 @@ function session(): CodingTaskSession {
     error: false,
     newTask: vi.fn(async () => undefined),
     finish: vi.fn(async () => undefined),
+    retry: vi.fn(),
     fork: null,
     beginFork: vi.fn(),
     cancelFork: vi.fn(),
@@ -750,5 +751,163 @@ describe("quiet coding task chrome", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "Review now" })).toBeVisible();
+  });
+});
+
+// #4491: the activated button is disabled or unmounted by the action, so the keyboard focus fell to
+// the page. After a success it moves to the composer, where the person types next; after a failure
+// it stays on a visible control, because Finish and Try again are still there.
+describe("keyboard focus after Complete task and New task", () => {
+  function Harness({ fails }: { readonly fails: boolean }): ReactNode {
+    const [state, setState] = useState({ pending: false, error: false });
+    const base = sessionWith([]);
+    const run = async (): Promise<void> => {
+      setState({ pending: true, error: false });
+      await Promise.resolve();
+      setState({ pending: false, error: fails });
+    };
+    const current = {
+      ...base,
+      pending: state.pending,
+      error: state.error,
+      newTask: run,
+      finish: run,
+      retry: vi.fn(),
+    };
+    return (
+      <>
+        <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
+        <textarea id="coding-workbench-task-intent" aria-label="Task" />
+      </>
+    );
+  }
+
+  it.each(["Complete task", "New task"])("moves focus to the composer after %s", async (name) => {
+    render(<Harness fails={false} />);
+    const button = screen.getByRole("button", { name });
+    button.focus();
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText("Task"));
+    });
+  });
+
+  it("does not steal focus for a later pending change after an action that returned early", async () => {
+    function EarlyReturn(): ReactNode {
+      const [pending, setPending] = useState(false);
+      const current = {
+        ...sessionWith([]),
+        pending,
+        newTask: (): Promise<void> => Promise.resolve(),
+        finish: (): Promise<void> => Promise.resolve(),
+      };
+      return (
+        <>
+          <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
+          <textarea id="coding-workbench-task-intent" aria-label="Task" />
+          <button
+            type="button"
+            onClick={() => {
+              setPending(true);
+              setTimeout(() => {
+                setPending(false);
+              }, 0);
+            }}
+          >
+            Unrelated load
+          </button>
+        </>
+      );
+    }
+    render(<EarlyReturn />);
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const unrelated = screen.getByRole("button", { name: "Unrelated load" });
+    unrelated.focus();
+    fireEvent.click(unrelated);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "New task" })).toBeEnabled();
+    });
+    expect(document.activeElement).not.toBe(screen.getByLabelText("Task"));
+  });
+
+  it("keeps focus on a visible control when Complete task failed", async () => {
+    render(<Harness fails />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete task" }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(retry);
+    });
+    expect(document.activeElement).not.toBe(screen.getByLabelText("Task"));
+  });
+});
+
+describe("a successful Try again", () => {
+  it("hands the keyboard focus to the composer instead of dropping it to the page", async () => {
+    function Retrying(): ReactNode {
+      const [state, setState] = useState({ pending: false, error: false });
+      const current = {
+        ...sessionWith([]),
+        pending: state.pending,
+        error: state.error,
+        finish: async (): Promise<void> => {
+          setState({ pending: true, error: false });
+          await Promise.resolve();
+          setState({ pending: false, error: true });
+        },
+        retry: (): void => {
+          setState({ pending: true, error: false });
+          void Promise.resolve().then(() => {
+            setState({ pending: false, error: false });
+          });
+        },
+      };
+      return (
+        <>
+          <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
+          <textarea id="coding-workbench-task-intent" aria-label="Task" />
+        </>
+      );
+    }
+    render(<Retrying />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete task" }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(retry);
+    });
+    fireEvent.click(retry);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText("Task"));
+    });
+  });
+});
+
+describe("a failed task read", () => {
+  it("still offers History and New task and retries the read", () => {
+    const onHistory = vi.fn();
+    const failed = { ...session(), error: true };
+    render(<CodingTaskSessionBar session={failed} active={false} onHistory={onHistory} />);
+
+    expect(screen.getByRole("alert")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Coding History" }));
+    expect(onHistory).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(failed.newTask).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(failed.retry).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Fork task" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Complete task" })).toBeNull();
+  });
+});
+
+describe("a failed task read without an operation to repeat", () => {
+  it("offers no Try again that would do nothing", () => {
+    const failed = { ...session(), error: true, retry: undefined };
+    render(<CodingTaskSessionBar session={failed} active={false} onHistory={vi.fn()} />);
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New task" })).toBeEnabled();
   });
 });

@@ -1,3 +1,4 @@
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createVerifiedCommitService } from "./verifiedCommitService.js";
@@ -333,7 +334,7 @@ describe("draft delivery hard boundaries", () => {
   it("rejects expired approval and approval from a replaced process instance", async () => {
     const proposal = await fixture.service.proposePush();
     fixture.service.issueApproval(id(proposal));
-    fixture.now += 300_001;
+    fixture.now += GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + 1;
     expect(fixture.service.consumeApproval(id(proposal))).toBeUndefined();
     const restarted = new DraftDeliveryController(fixture.options);
     expect(restarted.issueApproval(id(proposal))).toBeUndefined();

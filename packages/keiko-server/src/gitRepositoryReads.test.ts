@@ -19,7 +19,9 @@ import {
   handleGitRemotes,
   handleGitSummary,
   invalidateGitSummaryCache,
+  HISTORY_CAP_FACTOR,
   parseHistory,
+  parseShortstatHistory,
   parseRemotes,
 } from "./gitRepositoryReads.js";
 import {
@@ -31,6 +33,9 @@ import {
   type GitProcessRunner,
 } from "./gitRoutes.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
+
+// The status cap the History reads below run under (scaled by HISTORY_CAP_FACTOR for history).
+const DEFAULT_TEST_STATUS_BYTES = 4096;
 
 let root: string;
 let store: UiStore;
@@ -45,7 +50,12 @@ function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandler
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    gitRouteOptions: { runner, maxDiffBytes: 64, maxStatusBytes: 4096, maxChanges: 10 },
+    gitRouteOptions: {
+      runner,
+      maxDiffBytes: 64,
+      maxStatusBytes: DEFAULT_TEST_STATUS_BYTES,
+      maxChanges: 10,
+    },
   };
 }
 
@@ -526,6 +536,10 @@ describe("GET /api/git/summary — byte-cap cut (large untracked tree)", () => {
   });
 });
 
+function syntheticHead(subject: string): string {
+  return ["a".repeat(40), "aaaaaaa", "", "author", "date", "", subject].join("\0");
+}
+
 describe("GET /api/git/history", () => {
   function logRecord(fields: {
     sha: string;
@@ -535,7 +549,7 @@ describe("GET /api/git/history", () => {
     date: string;
     refs: string;
     subject: string;
-    shortstat?: string;
+    paths?: readonly string[];
   }): string {
     const head = [
       fields.sha,
@@ -545,8 +559,13 @@ describe("GET /api/git/history", () => {
       fields.date,
       fields.refs,
       fields.subject,
-    ].join("\x1f");
-    return `\x1e${head}\n${fields.shortstat ?? ""}`;
+    ].join("\0");
+    const paths = fields.paths ?? [];
+    // `log --name-only -z`: a commit listing paths ends with an empty token, one listing none is
+    // just its header and a NUL.
+    return paths.length === 0
+      ? `${head}\0`
+      : `${head}\n${paths.map((path) => `${path}\0`).join("")}\0`;
   }
 
   it("parses commit entries with refs, parents, and changed-file counts", async () => {
@@ -563,7 +582,7 @@ describe("GET /api/git/history", () => {
             date: "2026-06-27T10:00:00+00:00",
             refs: "HEAD -> main, origin/main",
             subject: "Add feature",
-            shortstat: " 3 files changed, 10 insertions(+), 2 deletions(-)\n",
+            paths: ["a.ts", "dir/b.ts", "we\nird é.ts"],
           }),
         ),
       );
@@ -593,7 +612,7 @@ describe("GET /api/git/history", () => {
     });
   });
 
-  it("treats a merge commit with no shortstat as parentCount 2 and zero changed files", async () => {
+  it("treats a merge commit with no listed paths as parentCount 2 and zero changed files", async () => {
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
@@ -749,7 +768,8 @@ describe("GET /api/git/history", () => {
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
-      .mockResolvedValueOnce({ ...ok(""), truncated: true });
+      .mockResolvedValueOnce({ ...ok(""), truncated: true })
+      .mockResolvedValueOnce(ok(""));
 
     const result = await handleGitHistory(
       ctx(`/api/git/history?root=${encodeURIComponent(root)}`),
@@ -1229,7 +1249,7 @@ describe("read routes — repository root outside the selected root", () => {
 // run forced an O(n^2) retry-at-every-position scan. These assert the bounded rewrites stay fast
 // on adversarial input while still producing the same results as before on realistic input (the
 // "GET /api/git/remotes" and "GET /api/git/history" suites above are unmodified and cover that).
-describe("parseRemotes / parseHistory — bounded regex safety (S8786)", () => {
+describe("parseRemotes / parseShortstatHistory — bounded regex safety (S8786)", () => {
   it("keeps the widest-valid-split behavior for a remote URL containing internal whitespace", () => {
     const stdout = "origin\thttps://example.invalid/a b.git (fetch)";
     expect(parseRemotes(stdout)).toEqual([
@@ -1252,14 +1272,14 @@ describe("parseRemotes / parseHistory — bounded regex safety (S8786)", () => {
   });
 
   it("extracts the changed-file count from a pathologically long non-matching shortstat line without catastrophic backtracking", () => {
-    const head = ["sha1", "sh1", "", "author", "date", "", "subject"].join("\x1f");
+    const head = syntheticHead("subject");
     // Shape that made the previous `(\d+)\s+files?\s+changed` regex quadratic: a long digit run
     // followed by a long whitespace run, with no "files changed" text anywhere.
     const remainder = `${"1".repeat(20000)}${" ".repeat(20000)}x`;
-    const record = `\x1e${head}\n${remainder}`;
+    const record = `${head}\n${remainder}`;
 
     const start = Date.now();
-    const entries = parseHistory(record);
+    const entries = parseShortstatHistory(record);
     expect(Date.now() - start).toBeLessThan(1500);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.changedFileCount).toBe(0);
@@ -1474,4 +1494,439 @@ describe("repository read activity log (AGENTS.md §8 Rule 1)", () => {
       expect(JSON.stringify(result.body)).not.toContain("not a git repository");
     },
   );
+});
+
+// `changedFileCount` is read from `git log --name-only -z`, not from `--shortstat`, because counting
+// inserted and deleted lines reads and diffs every blob and made the History tab take seconds on a
+// large repository. These run the real `git` binary: the oracle for the count is `--shortstat`
+// itself, so the proof is that the cheaper read agrees with the expensive one on every commit shape,
+// and the cap tests prove a cut page never returns a count that is short.
+describe("GET /api/git/history — changed-file count without diffing contents", () => {
+  async function git(args: readonly string[], maxBytes = 1_000_000): Promise<string> {
+    const result = await defaultGitProcessRunner(args, { cwd: root, maxBytes, timeoutMs: 60_000 });
+    expect(result.exitCode, result.stderr).toBe(0);
+    return result.stdout;
+  }
+
+  async function initRepository(): Promise<void> {
+    await git(["init", "--quiet", "--initial-branch=main"]);
+    await git(["config", "user.email", "fixture@example.invalid"]);
+    await git(["config", "user.name", "Keiko Fixture"]);
+    await git(["config", "gc.auto", "0"]);
+    await git(["config", "gc.autoDetach", "false"]);
+    await git(["config", "maintenance.auto", "false"]);
+  }
+
+  async function put(relativePath: string, content: string | Buffer): Promise<void> {
+    const target = join(root, relativePath);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+
+  async function commitAll(subject: string): Promise<void> {
+    await git(["add", "--all"]);
+    await git(["commit", "--quiet", "-m", subject]);
+  }
+
+  const body = Array.from({ length: 40 }, (_, index) => `line ${String(index)}`).join("\n");
+
+  // add, modify, delete, rename, binary, a path with non-ASCII characters, a subfolder and a merge.
+  async function initShapedHistory(): Promise<void> {
+    await initRepository();
+    await put("top.txt", "top\n");
+    await put("sub/keep.txt", "keep\n");
+    await put("sub/old-name.txt", body);
+    await commitAll("add three files");
+    await put("top.txt", "top changed\n");
+    await put("sub/keep.txt", "keep changed\n");
+    await commitAll("modify two files");
+    await git(["rm", "--quiet", "top.txt"]);
+    await commitAll("delete one file");
+    await git(["mv", "sub/old-name.txt", "sub/new-name.txt"]);
+    await commitAll("rename one file");
+    await put("sub/blob.bin", Buffer.from([0, 1, 2, 3, 0, 255, 0]));
+    await put("sub/ünïcode.txt", "u\n");
+    await commitAll("binary and non-ASCII");
+    await git(["checkout", "--quiet", "-b", "side"]);
+    await put("side.txt", "side\n");
+    await commitAll("side work");
+    await git(["checkout", "--quiet", "main"]);
+    await put("main-only.txt", "main\n");
+    await commitAll("main work");
+    await git(["merge", "--quiet", "--no-ff", "-m", "merge side", "side"]);
+  }
+
+  async function shortstatCounts(pathspec: readonly string[]): Promise<Map<string, number>> {
+    const out = await git([
+      "log",
+      "--no-color",
+      "--pretty=format:\x1e%H",
+      "--shortstat",
+      ...pathspec,
+    ]);
+    const counts = new Map<string, number>();
+    for (const record of out.split("\x1e").filter((entry) => entry.length > 0)) {
+      const [sha = "", ...rest] = record.split("\n");
+      const match = /(\d+) files? changed/u.exec(rest.join("\n"));
+      counts.set(sha, match?.[1] === undefined ? 0 : Number.parseInt(match[1], 10));
+    }
+    return counts;
+  }
+
+  async function readHistory(selectedRoot: string, query = ""): Promise<GitHistoryResponse> {
+    const result = await handleGitHistory(
+      ctx(`/api/git/history?root=${encodeURIComponent(selectedRoot)}${query}`),
+      deps(defaultGitProcessRunner, (value) => value),
+    );
+    expect(result.status).toBe(200);
+    return result.body as GitHistoryResponse;
+  }
+
+  it("never asks git to count lines: the read lists names and does not use --shortstat", async () => {
+    await initShapedHistory();
+    const seen: (readonly string[])[] = [];
+    const runner: GitProcessRunner = (args, options) => {
+      seen.push(args);
+      return defaultGitProcessRunner(args, options);
+    };
+
+    await handleGitHistory(
+      ctx(`/api/git/history?root=${encodeURIComponent(root)}`),
+      deps(runner, (value) => value),
+    );
+
+    const log = seen.find((args) => args.includes("log"));
+    expect(log).toContain("--name-only");
+    expect(log).toContain("-z");
+    expect(log).not.toContain("--shortstat");
+  });
+
+  it("agrees with --shortstat on every commit shape at the repository root", async () => {
+    await initShapedHistory();
+    const expected = await shortstatCounts([]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries).toHaveLength(expected.size);
+    expect(history.entries.length).toBeGreaterThanOrEqual(8);
+    const actual = new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]));
+    expect(actual).toEqual(expected);
+    const bySubject = new Map(history.entries.map((entry) => [entry.subject, entry]));
+    expect(bySubject.get("rename one file")?.changedFileCount).toBe(1);
+    expect(bySubject.get("binary and non-ASCII")?.changedFileCount).toBe(2);
+    expect(bySubject.get("add three files")?.changedFileCount).toBe(3);
+    expect(history.entries.find((entry) => entry.parentCount === 2)).toMatchObject({
+      changedFileCount: 0,
+    });
+  });
+
+  it("reports the exact subject, author and date of a merge, an empty commit and a normal commit", async () => {
+    await initShapedHistory();
+    await git(["commit", "--quiet", "--allow-empty", "-m", "empty commit"]);
+
+    const history = await readHistory(root);
+
+    const bySubject = new Map(history.entries.map((entry) => [entry.subject, entry]));
+    for (const subject of ["empty commit", "merge side", "main work"]) {
+      const entry = bySubject.get(subject);
+      expect(entry, subject).toBeDefined();
+      expect(entry?.author).toBe("Keiko Fixture");
+      // `%aI` renders a UTC instant as `Z` (git 2.56.1 and later for every UTC author) and any other
+      // offset as `+HH:MM`/`-HH:MM`.
+      expect(entry?.date).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:]+(?:Z|[+-]\d{2}:\d{2})$/u);
+      expect(entry?.subject).not.toContain("\0");
+    }
+    expect(bySubject.get("empty commit")).toMatchObject({ parentCount: 1, changedFileCount: 0 });
+    expect(bySubject.get("merge side")).toMatchObject({ parentCount: 2, changedFileCount: 0 });
+    expect(bySubject.get("main work")?.changedFileCount).toBe(1);
+  });
+
+  it("cannot be made to forge or split a record by file names holding separators or a header", async () => {
+    await initRepository();
+    await put("seed.txt", "seed\n");
+    await commitAll("seed");
+    const forgedHead = [
+      "f".repeat(40),
+      "fffffff",
+      "",
+      "Forged Author",
+      "2020-01-01T00:00:00+00:00",
+      "",
+      "forged subject",
+    ].join("\x1f");
+    const names = [
+      "record\x1esep.txt",
+      "field\x1fsep.txt",
+      forgedHead,
+      `\x1e${forgedHead}`,
+      "new\nline.txt",
+      "e".repeat(40),
+    ];
+    for (const name of names) await put(name, `${String(name.length)}\n`);
+    await commitAll("hostile names");
+    await put("after.txt", "after\n");
+    await commitAll("after hostile");
+    const expected = await shortstatCounts([]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries.map((entry) => entry.subject)).toEqual([
+      "after hostile",
+      "hostile names",
+      "seed",
+    ]);
+    expect(history.entries.some((entry) => entry.author === "Forged Author")).toBe(false);
+    expect(new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]))).toEqual(
+      expected,
+    );
+    expect(
+      history.entries.find((entry) => entry.subject === "hostile names")?.changedFileCount,
+    ).toBe(names.length);
+  });
+
+  it("keeps every commit when the repository asks git to print signature verification", async () => {
+    await initRepository();
+    const tools = await mkdtemp(join(tmpdir(), "keiko-fake-gpg-"));
+    try {
+      const gpg = writeNodeExecutableFixture(
+        tools,
+        "fake-gpg",
+        [
+          "const args = process.argv.slice(2);",
+          'if (args.includes("--verify")) {',
+          '  process.stdout.write("[GNUPG:] GOODSIG 0123456789ABCDEF fake\\n[GNUPG:] VALIDSIG 0123456789ABCDEF 2026-01-01 1 0 4 0 1 8 00 0123456789ABCDEF\\n");',
+          '  process.stderr.write("gpg: Signature made fake\\ngpg: Good signature from fake\\n");',
+          "  process.exit(0);",
+          "}",
+          "process.stdin.resume();",
+          'process.stdin.on("end", () => {',
+          '  process.stderr.write("[GNUPG:] SIG_CREATED D 1 8 00 0 fake\\n");',
+          '  process.stdout.write("-----BEGIN PGP SIGNATURE-----\\n\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n");',
+          "});",
+        ].join("\n"),
+      );
+      await git(["config", "gpg.program", gpg]);
+      await git(["config", "user.signingkey", "FAKEKEY"]);
+      await git(["config", "log.showSignature", "true"]);
+      await put("one.txt", "1\n");
+      await git(["add", "--all"]);
+      await git(["commit", "--quiet", "-S", "-m", "signed one"]);
+      await put("two.txt", "2\n");
+      await git(["add", "--all"]);
+      await git(["commit", "--quiet", "-S", "-m", "signed two"]);
+      // The fixture really makes plain `git log` print verification lines, or this proves nothing.
+      expect(await git(["log", "--max-count=1"])).toContain("gpg:");
+
+      const history = await readHistory(root);
+
+      expect(history.entries.map((entry) => entry.subject)).toEqual(["signed two", "signed one"]);
+      expect(history.entries.map((entry) => entry.changedFileCount)).toEqual([1, 1]);
+    } finally {
+      await rm(tools, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fields of a commit whose author holds the old field separator", async () => {
+    await initRepository();
+    await put("one.txt", "1\n");
+    await git(["add", "--all"]);
+    await git([
+      "commit",
+      "--quiet",
+      "--author=Odd\x1fAuthor <odd@example.invalid>",
+      "-m",
+      "odd\x1fsubject",
+    ]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({
+      author: "Odd\x1fAuthor",
+      subject: "odd\x1fsubject",
+      changedFileCount: 1,
+    });
+  });
+
+  it("ends the page at an unreadable record and reports it, never skipping it", () => {
+    const good = syntheticHead("good");
+    const bad = ["not-an-object-id", "x", "", "a", "d", "", "bad"].join("\0");
+
+    const page = parseHistory(`${good}\nf\0\0${bad}\0${good}\0`);
+
+    expect(page.map((entry) => entry.subject)).toEqual(["good"]);
+  });
+
+  it("reads complete counts when the repository asks for UTF-16 log output", async () => {
+    await initShapedHistory();
+    // The oracle is read first: UTF-16 would garble the test's own plain log read too.
+    const expected = await shortstatCounts([]);
+    await git(["config", "i18n.logOutputEncoding", "UTF-16"]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries.length).toBeGreaterThanOrEqual(8);
+    expect(new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]))).toEqual(
+      expected,
+    );
+    expect(history.entries.some((entry) => entry.subject === "rename one file")).toBe(true);
+  });
+
+  it("agrees with --shortstat inside a selected subfolder", async () => {
+    await initShapedHistory();
+    const expected = await shortstatCounts(["--", "sub"]);
+
+    const history = await readHistory(join(root, "sub"));
+
+    expect(new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]))).toEqual(
+      expected,
+    );
+    const bySubject = new Map(history.entries.map((entry) => [entry.subject, entry]));
+    expect(bySubject.get("add three files")?.changedFileCount).toBe(2);
+    expect(bySubject.get("modify two files")?.changedFileCount).toBe(1);
+  });
+
+  async function wideCommit(count: number): Promise<void> {
+    await Promise.all(
+      Array.from({ length: count }, (_, index) =>
+        put(`wide/file-number-${String(index).padStart(4, "0")}.txt`, "w\n"),
+      ),
+    );
+    await commitAll("wide commit");
+  }
+
+  it("returns the exact count of one commit whose path list outgrows the byte cap", async () => {
+    await initRepository();
+    await put("first.txt", "first\n");
+    await commitAll("small first");
+    await wideCommit(3000);
+
+    const history = await readHistory(root);
+
+    // The cap (4096 bytes times the history factor here) cuts inside the newest record: it is not returned short, the
+    // shortstat read of just that commit supplies its true count, and the page reports truncated.
+    expect(history.available).toBe(true);
+    expect(history.entries.map((entry) => entry.subject)).toEqual(["wide commit"]);
+    expect(history.entries[0]?.changedFileCount).toBe(3000);
+    expect(history.truncated).toBe(true);
+  });
+
+  it("drops a record the cap cut instead of returning a short count", async () => {
+    await initRepository();
+    await wideCommit(3000);
+    await put("after-1.txt", "1\n");
+    await commitAll("small one");
+    await put("after-2.txt", "2\n");
+    await commitAll("small two");
+
+    const history = await readHistory(root);
+
+    expect(history.entries.map((entry) => entry.subject)).toEqual(["small two", "small one"]);
+    expect(history.entries.map((entry) => entry.changedFileCount)).toEqual([1, 1]);
+    expect(history.truncated).toBe(true);
+    // Load more continues from the number of entries received, so the cut commit comes next.
+    const next = await readHistory(root, `&skip=${String(history.entries.length)}&limit=1`);
+    expect(next.entries.map((entry) => entry.changedFileCount)).toEqual([3000]);
+  });
+
+  it("drops only the last record of a cut read, and keeps every record of a whole one", () => {
+    const head = syntheticHead("subject");
+    const whole = `${head}\na\0b\0\0`;
+    const cut = `${whole}${head}\nc\0d`;
+
+    expect(parseHistory(whole).map((entry) => entry.changedFileCount)).toEqual([2]);
+    expect(parseHistory(cut, { truncated: true }).map((entry) => entry.changedFileCount)).toEqual([
+      2,
+    ]);
+    expect(parseHistory(cut).map((entry) => entry.changedFileCount)).toEqual([2, 2]);
+  });
+
+  it("counts a path holding a newline once", () => {
+    const head = syntheticHead("subject");
+
+    expect(parseHistory(`${head}\nwe\nird.txt\0plain.txt\0`)[0]?.changedFileCount).toBe(2);
+  });
+});
+
+// A page that ends early (the byte cap cut its last record, or a record could not be read) leaves a
+// body-free line on the existing bounded-read operation: counts and a closed surface, never a
+// subject, author or path.
+describe("GET /api/git/history — bounded page evidence", () => {
+  async function historyActivity(
+    historyStdout: string,
+    truncated: boolean,
+    correlationId?: string,
+  ): Promise<ReturnType<typeof captureActivityLog>> {
+    const activity = captureActivityLog();
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${root}\n`)
+          : { ...ok(historyStdout), exitCode: truncated ? null : 0, truncated },
+      );
+    const base = deps(runner, (value) => value);
+    const context = ctx(`/api/git/history?root=${encodeURIComponent(root)}`);
+    await handleGitHistory(
+      { ...context, correlationId },
+      {
+        ...base,
+        gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog: activity.sink },
+      },
+    );
+    return activity;
+  }
+
+  it("records a record the byte cap cut as dropped", async () => {
+    const stdout = `${syntheticHead("one")}\nf\0\0${syntheticHead("two")}\ng`;
+
+    const activity = await historyActivity(stdout, true);
+
+    expect(activity.withOp("git.status.bounded")).toHaveLength(1);
+    expect(activity.withOp("git.status.bounded")[0]).toMatchObject({
+      extra: {
+        surface: "history",
+        shownRecordCount: 1,
+        partialRecordDropped: true,
+        unreadableRecordCount: 0,
+        maxBytes: DEFAULT_TEST_STATUS_BYTES * HISTORY_CAP_FACTOR,
+      },
+    });
+  });
+
+  it("records the unreadable records that ended a page, without any record text", async () => {
+    const bad = ["not-an-object-id", "x", "", "SECRET-AUTHOR", "d", "", "SECRET-SUBJECT"].join(
+      "\0",
+    );
+    const stdout = `${syntheticHead("one")}\nf\0\0${bad}\0${syntheticHead("three")}\0`;
+
+    const activity = await historyActivity(stdout, false);
+
+    const lines = activity.withOp("git.status.bounded");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      extra: {
+        surface: "history",
+        shownRecordCount: 1,
+        partialRecordDropped: false,
+        unreadableRecordCount: 2,
+      },
+    });
+    expect(JSON.stringify(lines[0])).not.toContain("SECRET");
+  });
+
+  it("carries the request correlation id on the bounded history line", async () => {
+    const stdout = `${syntheticHead("one")}\nf\0\0${syntheticHead("two")}\ng`;
+
+    const activity = await historyActivity(stdout, true, "corr-history-cut-01");
+
+    expect(activity.withOp("git.status.bounded")[0]).toMatchObject({
+      correlationId: "corr-history-cut-01",
+    });
+  });
+
+  it("writes no bounded line for a whole, readable page", async () => {
+    const activity = await historyActivity(`${syntheticHead("one")}\nf\0`, false);
+
+    expect(activity.withOp("git.status.bounded")).toHaveLength(0);
+  });
 });

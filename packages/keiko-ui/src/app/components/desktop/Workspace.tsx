@@ -31,6 +31,7 @@ import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
+import { useDisplayFittedWindows } from "./hooks/workspaceWindowSizing";
 import type {
   UseWorkspaceResult,
   WorkspaceClipboardCaptureResult,
@@ -983,11 +984,12 @@ export function Workspace({
   }, [clipboardStatus]);
   const handToolRef = useRef(false);
   const settledZoom = useSettledZoom(view.zoom);
+  const displayWindows = useDisplayFittedWindows(wsRef, wins, view);
   const visibleWins = useMemo(
-    () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
-    [wins],
+    () => (displayWindows === null ? null : displayWindows.filter((w) => w.minimized !== true)),
+    [displayWindows],
   );
-  const linkRevision = useLinkRevision(wins, conns);
+  const linkRevision = useLinkRevision(displayWindows, conns);
   const top = topWindow(visibleWins);
   const selectedWindowIds = useMemo(
     () => new Set(selection.selectedWindowIds),
@@ -1258,8 +1260,8 @@ export function Workspace({
     (
       sourceWindowId: string,
     ): readonly { readonly connId: string; readonly qualityId: string }[] => {
-      if (wins === null) return [];
-      const byId = new Map(wins.map((win) => [win.id, win]));
+      if (displayWindows === null) return [];
+      const byId = new Map(displayWindows.map((win) => [win.id, win]));
       const result: { connId: string; qualityId: string }[] = [];
       for (const conn of conns) {
         const otherId = otherConnectionEndpoint(conn, sourceWindowId);
@@ -1270,7 +1272,7 @@ export function Workspace({
       }
       return result;
     },
-    [conns, wins],
+    [conns, displayWindows],
   );
 
   const addFigmaJsonNode = useCallback(
@@ -1549,7 +1551,7 @@ export function Workspace({
           layoutLocked={layoutLocked}
           style={sceneStyle}
           snapPrev={snapPrev}
-          wins={wins}
+          wins={displayWindows}
           visibleWins={visibleWins}
           conns={conns}
           connecting={connecting}

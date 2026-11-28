@@ -503,3 +503,198 @@ it.each(["en", "de"] as const)(
     expect(screen.queryByTestId("coding-runtime-native-retry")).not.toBeInTheDocument();
   },
 );
+
+// A Build run that answered without any tool says so in one neutral line; nothing else changes.
+describe("CodingWorkbenchRunStatus answered without tools", () => {
+  const SENTENCE_EN =
+    "The model answered without using any tools. No files were changed and no commands were run.";
+  const SENTENCE_DE =
+    "Das Modell hat geantwortet, ohne Werkzeuge zu nutzen. Es wurden keine Dateien geändert und keine Befehle ausgeführt.";
+  const SETTLED = runState(snapshot("succeeded"), [status(0, "starting", STARTED)]);
+
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it("shows the line when the run answered without tools and passes the audit", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus
+        state={SETTLED}
+        researchGrant={null}
+        phase={null}
+        answeredWithoutTools
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-answered-without-tools")).toHaveTextContent(
+      SENTENCE_EN,
+    );
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("shows no line otherwise", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus state={SETTLED} researchGrant={null} phase={null} />,
+    );
+    expect(screen.queryByTestId("coding-runtime-answered-without-tools")).not.toBeInTheDocument();
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("says it in German when the interface is German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const { container } = render(
+      <I18nProvider>
+        <CodingWorkbenchRunStatus
+          state={SETTLED}
+          researchGrant={null}
+          phase={null}
+          answeredWithoutTools
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId("coding-runtime-answered-without-tools")).toHaveTextContent(
+      SENTENCE_DE,
+    );
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+});
+
+// U-31: a run Keiko's shutdown cancelled says why it stopped; the person's own Stop says nothing more.
+describe("CodingWorkbenchRunStatus stop cause", () => {
+  const WAITING_EN =
+    "Keiko was closed while this run was waiting for your approval. Check the workspace before you start the task again.";
+  const WORKING_EN =
+    "Keiko was closed while this run was working. Changes it had already started may be incomplete. Start the task again to continue.";
+  const WAITING_DE =
+    "Keiko wurde geschlossen, während dieser Lauf auf deine Freigabe wartete. Prüfe den Arbeitsbereich, bevor du die Aufgabe erneut startest.";
+  const events = [status(0, "starting", STARTED)];
+
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it("says Keiko was closed while the run waited and asks for a workspace check", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("cancelled", { stopCause: "server-shutdown-waiting" }), events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-stop-cause")).toHaveTextContent(WAITING_EN);
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("never claims nothing was changed", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("cancelled", { stopCause: "server-shutdown-working" }), events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    const note = screen.getByTestId("coding-runtime-stop-cause");
+    expect(note).toHaveTextContent(WORKING_EN);
+    expect(note).not.toHaveTextContent("Nothing was changed");
+    expect(screen.queryByText(/Nothing was changed/u)).not.toBeInTheDocument();
+  });
+
+  it("shows no note for the person's own Stop", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("cancelled"), events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-stop-cause")).not.toBeInTheDocument();
+  });
+
+  it("says it in German when the interface is German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <CodingWorkbenchRunStatus
+          state={runState(snapshot("cancelled", { stopCause: "server-shutdown-waiting" }), events)}
+          researchGrant={null}
+          phase={null}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId("coding-runtime-stop-cause")).toHaveTextContent(WAITING_DE);
+  });
+});
+
+// U-38: a run whose check stayed red after Keiko asked says exactly that, never a repair claim.
+describe("CodingWorkbenchRunStatus unchanged failing check", () => {
+  it("says the check is still failing and the run did not change it", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(
+          snapshot("failed", {
+            failureCode: "verification-not-evidenced",
+            verificationGap: "check-failed",
+            verificationGapDetail: "unchanged-after-continuation",
+          }),
+          [status(0, "starting", STARTED)],
+        )}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-verification-gap-detail")).toHaveTextContent(
+      "The check is still failing, and this run did not change it after Keiko asked.",
+    );
+  });
+
+  it("shows nothing for an ordinary failed check", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(
+          snapshot("failed", {
+            failureCode: "verification-not-evidenced",
+            verificationGap: "check-failed",
+          }),
+          [status(0, "starting", STARTED)],
+        )}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-verification-gap-detail")).not.toBeInTheDocument();
+  });
+});
+
+it.each([
+  ["en", 1, "Waiting for 1 subagent"],
+  ["en", 3, "Waiting for 3 subagents"],
+  ["de", 1, "Wartet auf 1 Unteragenten"],
+  ["de", 3, "Wartet auf 3 Unteragenten"],
+] as const)("says it waits for subagents in %s (%i, U-52)", async (locale, count, text) => {
+  await loadLocaleMessages(locale);
+  window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+  const fact: CodingWorkbenchRuntimeSseEvent = {
+    schemaVersion: "1",
+    cursor: "run-1:2",
+    sequence: 2,
+    occurredAt: NOW,
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-subagents-changed",
+    activeSubagentCount: count,
+  };
+  render(
+    <I18nProvider>
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("running"), [...RUNNING.events, fact])}
+        researchGrant={null}
+        phase="subagents"
+      />
+    </I18nProvider>,
+  );
+  expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(text);
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});

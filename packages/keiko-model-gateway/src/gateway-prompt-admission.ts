@@ -7,7 +7,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { CancelledError, TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GatewayCallRequest } from "./gateway.js";
-import type { ModelCapability, ModelProviderConfig } from "./types.js";
+import type { ModelCapability, ModelProviderConfig, UsageMetadata } from "./types.js";
 import {
   withCorrelationId,
   activityLogErrorKind,
@@ -20,7 +20,15 @@ import {
   countGatewayPromptTokens,
   type GatewayPromptTokenInput,
 } from "./prompt-token-accounting.js";
-import { admitGatewayPrompt } from "./prompt-admission.js";
+import { admitGatewayPrompt, contentPartCount } from "./prompt-admission.js";
+import {
+  calibrationLayout,
+  calibrationPromptTokens,
+  promptCalibrationKey,
+  promptCalibrationMark,
+  type PromptCalibrationLedger,
+  type PromptCalibrationMark,
+} from "./prompt-calibration.js";
 import { countProviderPromptTokens, type ProviderTokenCount } from "./provider-token-counter.js";
 
 const COUNTER_COOLDOWN_MS = 60_000;
@@ -49,6 +57,38 @@ const COUNTER_COOLDOWN = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-context-admission"],
   proofIds: ["gateway.prompt.counter-cooldown.lifecycle"],
+  releaseImpact: "patch",
+});
+
+const USAGE_REJECTED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.prompt.usage-rejected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway-prompt-admission.GatewayPromptAdmission.recordUsage",
+  fields: {
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["implausibly-low", "implausibly-high", "ambiguous-cache-layout"],
+    },
+    reportedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    localPromptTokens: { type: "integer", dataClass: "count", required: true },
+    modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-context-admission"],
+  proofIds: [
+    "gateway.prompt.usage-rejected.implausibly-low",
+    "gateway.prompt.usage-rejected.implausibly-high",
+    "gateway.prompt.usage-rejected.ambiguous-cache-layout",
+  ],
   releaseImpact: "patch",
 });
 
@@ -145,12 +185,15 @@ interface AdmissionOptions {
   readonly correlationId: string;
   readonly now: () => number;
   readonly counter: ProviderPromptCounter;
+  /** Provider-reported usage of earlier prompts of this gateway; absent keeps the local estimate. */
+  readonly calibration?: PromptCalibrationLedger | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
 }
 
 /** One logical call, including corrective retries. Retains the measured floor if counting degrades. */
 export class GatewayPromptAdmission {
   private previous: { estimated: number; measured: number } | undefined;
+  private pending: PromptCalibrationMark | undefined;
   private readonly log: ModelGatewayLogSink;
   constructor(private readonly options: AdmissionOptions) {
     this.log = withCorrelationId(options.log, options.correlationId);
@@ -175,15 +218,13 @@ export class GatewayPromptAdmission {
       this.options.fetchImpl,
     );
     this.remainingBudget(request, budgetMs, start, "counter");
-    admitGatewayPrompt(
-      projected,
-      this.options.capability,
-      this.log,
-      this.options.correlationId,
+    const estimated = this.remotePayloadEstimate(projected);
+    admitGatewayPrompt(projected, this.options.capability, this.log, this.options.correlationId, {
       measured,
-      this.retainedTokenFloor(projected, measured),
-      this.options.provider.reasoningHistoryField,
-    );
+      retainedTokens: this.retainedTokenFloor(estimated, measured),
+      reasoningField: this.options.provider.reasoningHistoryField,
+      calibratedTokens: this.calibratedTokens(projected, estimated),
+    });
     return this.remainingBudget(request, budgetMs, start, "validation");
   }
 
@@ -238,13 +279,49 @@ export class GatewayPromptAdmission {
     throw error;
   }
 
-  private retainedTokenFloor(
-    request: GatewayCallRequest & GatewayPromptTokenInput,
-    count: ProviderTokenCount,
-  ): number | undefined {
+  /** Records a completed call's usage, with the cache layout decided from the usage shape. */
+  recordUsageOf(usage: UsageMetadata): void {
+    this.recordUsage(calibrationPromptTokens(usage), calibrationLayout(usage));
+  }
+
+  /** Records the provider's real prompt usage of the last admitted prompt for later calibration. */
+  recordUsage(providerPromptTokens: number, layout: "known" | "ambiguous" = "known"): void {
+    const mark = this.pending;
+    this.pending = undefined;
+    if (mark === undefined) return;
+    // An ambiguous cache layout cannot say whether the figure is the prompt's size or only its
+    // uncached part, so it is never offered to the ledger: later prompts keep the local estimate.
+    const outcome =
+      layout === "ambiguous"
+        ? "ambiguous-cache-layout"
+        : this.options.calibration?.record(mark, providerPromptTokens);
+    if (
+      outcome !== "implausibly-low" &&
+      outcome !== "implausibly-high" &&
+      outcome !== "ambiguous-cache-layout"
+    )
+      return;
+    // Counts and a digest only: the provider's figure is unusable for calibration (#4491).
+    this.log.write(
+      activityLogEvent(
+        USAGE_REJECTED,
+        { correlationId: this.options.correlationId },
+        {
+          reason: outcome,
+          reportedPromptTokens: providerPromptTokens,
+          localPromptTokens: mark.localTokens,
+          modelIdDigest: sha256Hex(this.options.provider.modelId).slice(0, 16),
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  }
+
+  private remotePayloadEstimate(request: GatewayCallRequest & GatewayPromptTokenInput): number {
     const profile = deriveContextProfileFromCapability(this.options.capability);
     // The remote payload omits responseFormat, so the retained floor must omit it too.
-    const estimated = countGatewayPromptTokens(
+    return countGatewayPromptTokens(
       { messages: request.messages, tools: request.tools },
       profile.tokenAccounting,
       {
@@ -252,6 +329,23 @@ export class GatewayPromptAdmission {
         reasoningHistoryField: this.options.provider.reasoningHistoryField,
       },
     );
+  }
+
+  private calibratedTokens(
+    request: GatewayCallRequest & GatewayPromptTokenInput,
+    estimated: number,
+  ): number | undefined {
+    const ledger = this.options.calibration;
+    if (ledger === undefined) return undefined;
+    const key = promptCalibrationKey(this.options.provider);
+    // The raw text estimate leaves out what an image or document costs, so a provider figure that
+    // includes them cannot be compared with it: such a prompt is never learned from.
+    const hasMedia = contentPartCount(request, "image_url") + contentPartCount(request, "file") > 0;
+    this.pending = hasMedia ? undefined : promptCalibrationMark(key, request, estimated);
+    return ledger.calibrate(key, request, estimated);
+  }
+
+  private retainedTokenFloor(estimated: number, count: ProviderTokenCount): number | undefined {
     const retained =
       this.previous === undefined
         ? 0

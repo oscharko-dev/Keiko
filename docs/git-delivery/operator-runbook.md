@@ -20,10 +20,14 @@ It assumes the implementation from Epic #470 is present and verified by the
 
 4. Confirm `user.name` / `user.email` are configured for the account Keiko runs as, and that any
    signing configuration the repository requires (`commit.gpgsign`, `user.signingkey`, `gpg.format`)
-   is present and usable. Governed commit resolves identity and signing exactly as the user's own
-   `git commit` does: a repository configured for signed commits produces a signed commit, and a
-   commit that cannot be signed FAILS rather than landing unsigned. Keiko does not itself detect a
-   remote branch-protection signature requirement.
+   is present and usable. Governed commit resolves identity and signing as the user's own
+   `git commit` does: a machine with no `commit.gpgsign` commits unsigned, a configuration that
+   enables signing produces a signed commit, and a commit that cannot be signed FAILS rather than
+   landing unsigned. Keiko also signs when the trusted branch-protection read for the target branch
+   requires signatures, even without `commit.gpgsign`; then a missing or broken signer fails the
+   commit with `signing-failed`, so set up signing (`user.signingkey`, `gpg.format`) before
+   committing to such a branch. An unknown or unavailable branch-protection read does not require
+   signing.
 
 5. Confirm policy packs are loaded from trusted server-side configuration. Clients may request action
    intent, but clients do not assert policy decisions or approval state as authority.

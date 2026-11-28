@@ -34,9 +34,17 @@ export const CODING_SAFE_ACTIVITY_PLAN_STEP_STATES = [
   "cancelled",
 ] as const;
 export const CODING_SAFE_ACTIVITY_MAX_TURNS = 32;
-export const CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN = 16;
+// #4491 A-1: OpenCode opens one assistant message per agent step and a coding run calls a tool per
+// action, so a count that ends ordinary work is a defect (owner decision "Work-ending limits"). The
+// per-turn message and tool counts therefore sit above what the byte bounds below can ever admit:
+// even a message or call with a one-character id serializes to more than 64 bytes, so 512 of them
+// exceed the 32 KiB turn bound and the byte bound decides first. A test pins this dependency
+// (codingSafeActivityProjection.longRun.test.ts). The byte bounds are the memory guard; these
+// counts only stop a runaway producer of empty shells. A turn the byte bound trims reads as
+// truncated and its lost messages and calls are counted.
+export const CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN = 512;
 export const CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE = 32;
-export const CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN = 64;
+export const CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN = 512;
 export const CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS = 4_096;
 export const CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES = 16 * 1_024;
 // #3878: an assistant message's model reasoning keeps to half of the message budget, so the answer
@@ -123,24 +131,55 @@ export type CodingSafeActivityVerificationOutcome =
  * commit) really ended, in closed words. The governed facade answers a refused step as a completed
  * tool call that carries the refusal, so the call state alone reads "Succeeded" although nothing was
  * committed or staged. `completed` is a step Keiko carried out; every other word names why it did
- * not: `waiting-for-approval` the human decision still open, `verification-failed` and
+ * not: `waiting-for-approval` the human decision still open, `prepared` a proposal that needs no
+ * further decision (policy authorized it, or the person already approved it) and waits only for its
+ * execute step, `verification-failed` and
  * `verification-missing` a commit that no passing verification of the staged change covers,
  * `not-staged` a commit whose change is only partly staged, `unsaved-changes` a commit that open
- * editor files with unsaved changes hold back, `blocked` a policy or authority refusal, `changed` a candidate or repository that moved since the
+ * editor files with unsaved changes hold back, `blocked` a policy or authority refusal,
+ * `commit-protected-branch` a commit refused because the run works directly on a protected branch
+ * such as main or dev, `branch-*` a task branch Keiko refused for the one reason the word names (a
+ * name it will not create, a name already taken, a run that is not on its base branch, a checkout
+ * that is not local or holds executable Git filters, a repository condition that blocks the
+ * switch), `changed` a candidate or repository that moved since the
  * proposal, and `not-done` a step that failed or whose result is uncertain.
  */
 export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
   "completed",
   "waiting-for-approval",
+  "prepared",
   "verification-failed",
   "verification-missing",
   "not-staged",
   "unsaved-changes",
   "blocked",
+  "commit-protected-branch",
+  "branch-invalid-name",
+  "branch-protected-name",
+  "branch-exists",
+  "branch-not-on-base",
+  "branch-not-local-checkout",
+  "branch-executable-filters",
+  "branch-preflight",
   "changed",
   "not-done",
 ] as const;
 export type CodingSafeActivityGitOutcome = (typeof CODING_SAFE_ACTIVITY_GIT_OUTCOMES)[number];
+
+/**
+ * Which index change a `keiko_git_stage` call asked for. Both directions travel through the one tool
+ * name, so a row cannot tell a stage from an unstage by the name alone (U-49). Closed vocabulary,
+ * derived from the governed result's own kind, never from prose.
+ */
+export const CODING_SAFE_ACTIVITY_GIT_ACTIONS = ["stage", "unstage"] as const;
+export type CodingSafeActivityGitAction = (typeof CODING_SAFE_ACTIVITY_GIT_ACTIONS)[number];
+
+/**
+ * An opaque reference to one Git proposal, shared by the proposing call and the `keiko_git_execute`
+ * that redeemed it, so a row names the proposal it carried out. It is a one-way digest of the
+ * proposal id, unique among one run's proposals, and carries no id, path or content.
+ */
+export const CODING_SAFE_ACTIVITY_GIT_PROPOSAL_REF_PATTERN = /^[0-9a-f]{16}$/u;
 
 /**
  * Where a tool call that did not succeed failed, so a person sees at a glance whether Keiko caused
@@ -160,6 +199,16 @@ export const CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS = [
 ] as const;
 export type CodingSafeActivityToolFailureOrigin =
   (typeof CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS)[number];
+
+/**
+ * What a Code Mode `execute` program did, in closed words: `command` ran a shell command,
+ * `schedule` changed a scheduled task, `tool` called a connected server's tool. A producer may set
+ * it only from a nested call it observed running, never from the program's source text; the
+ * OpenCode `execute` part carries no such fact, so today every program row keeps the neutral label.
+ * Body-free (#4491).
+ */
+export const CODING_SAFE_ACTIVITY_PROGRAM_KINDS = ["command", "schedule", "tool"] as const;
+export type CodingSafeActivityProgramKind = (typeof CODING_SAFE_ACTIVITY_PROGRAM_KINDS)[number];
 
 /**
  * A failed call's origin when its producer named none: the closed state decides it. The server's
@@ -187,6 +236,12 @@ export type CodingSafeActivityToolRefusalCause =
 export const CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS = 1_000;
 /** The error message a failed tool returned to the model, up to this many characters. */
 export const CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS = 1_000;
+/** A subagent call's agent name, up to this many characters. */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS = 80;
+/** A subagent call's short task description, up to this many characters. */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS = 240;
+/** A subagent call's prompt, up to this many characters (the opened row shows all of it). */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS = 1_000;
 /** Output lines a tool row shows from the start and from the end; the lines between are counted. */
 export const CODING_SAFE_ACTIVITY_TOOL_OUTPUT_HEAD_LINES = 5;
 export const CODING_SAFE_ACTIVITY_TOOL_OUTPUT_TAIL_LINES = 20;
@@ -214,12 +269,18 @@ export interface CodingSafeActivityToolPresentation {
   readonly verificationOutcome?: CodingSafeActivityVerificationOutcome;
   /** How a governed Git step really ended; present on `keiko_git` and commit calls only. */
   readonly gitOutcome?: CodingSafeActivityGitOutcome;
+  /** Whether a governed index step staged or unstaged; present on `keiko_git_stage` calls only. */
+  readonly gitAction?: CodingSafeActivityGitAction;
+  /** The Git proposal this call proposed or redeemed; pairs them within one run. */
+  readonly gitProposalRef?: string;
   /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
   readonly bridgeDurationMs?: number;
   /** A finished native shell call's own exit status, as the runtime reported it. */
   readonly exitCode?: number;
   /** Where a call that did not succeed failed; absent while running and on success. */
   readonly failureOrigin?: CodingSafeActivityToolFailureOrigin;
+  /** What a Code Mode `execute` program does; present on `execute` calls that call a tool only. */
+  readonly programKind?: CodingSafeActivityProgramKind;
   /** Why Keiko refused the call, where the governed facade knows it. */
   readonly refusalCause?: CodingSafeActivityToolRefusalCause;
   /** Wall time the runtime ran the call, from its start to its end. */
@@ -235,8 +296,26 @@ export interface CodingSafeActivityToolPresentation {
   readonly output?: CodingSafeActivityToolOutput;
   /** The error message the tool returned to the model when it failed. Same rules. */
   readonly errorText?: CodingSafeActivityToolText;
+  /** A subagent call's agent name (the model's argument). Same rules as `command`. */
+  readonly agentName?: CodingSafeActivityToolText;
+  /** A subagent call's short task description. Same rules. */
+  readonly taskDescription?: CodingSafeActivityToolText;
+  /** A subagent call's prompt; detail the live feed may shed with the command. Same rules. */
+  readonly taskPrompt?: CodingSafeActivityToolText;
   /** The live feed shed this call's command, output and error text to stay inside its budget. */
   readonly detailOmitted?: true;
+  /** The runtime kept only the start of this call's result for the model; the whole result was saved. */
+  readonly outputShortened?: CodingSafeActivityOutputShortened;
+}
+
+/**
+ * What the runtime kept of a result it shortened for the model's context window. Counts only: the
+ * line counts are present when the runtime stated them.
+ */
+export interface CodingSafeActivityOutputShortened {
+  readonly keptBytes: number;
+  readonly keptLines?: number;
+  readonly totalLines?: number;
 }
 
 /** Untrusted tool text with the credential floor applied; `truncated` when cut to its bound. */
@@ -319,6 +398,12 @@ export interface CodingSafeActivityMessage {
   readonly fullAnswer?: CodingSafeActivityFullAnswer;
   /** Assistant messages only; present when `reasoning` does not carry the whole reasoning. */
   readonly fullReasoning?: CodingSafeActivityFullAnswer;
+  /**
+   * Assistant messages only: the model's turn ended because it reached its output limit, as the
+   * runtime reported the turn's finish reason. A fact the answer was cut off, never inferred from
+   * its text. Absent otherwise.
+   */
+  readonly outputLimitReached?: true;
 }
 
 /**
@@ -608,11 +693,13 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
         "origin",
         "fullAnswer",
         "fullReasoning",
+        "outputLimitReached",
       ],
       path,
     ),
   );
   validateMessageOrigin(value, path, errors);
+  validateOutputLimit(value, path, errors);
   validateUniqueId(value.messageId, `${path}.messageId`, ids, errors);
   if (!isOneOf(value.role, CODING_SAFE_ACTIVITY_MESSAGE_ROLES)) {
     errors.push(`${path}.role is invalid`);
@@ -641,6 +728,14 @@ function validateMessageTexts(
   if ("reasoning" in value) validateReasoning(value, path, errors);
   if ("fullAnswer" in value) validateFullAnswer(value, path, errors);
   if ("fullReasoning" in value) validateFullText(value, "fullReasoning", path, errors);
+}
+
+function validateOutputLimit(value: Record<string, unknown>, path: string, errors: string[]): void {
+  if (!("outputLimitReached" in value)) return;
+  if (value.outputLimitReached !== true) errors.push(`${path}.outputLimitReached must be true`);
+  else if (value.role !== "assistant") {
+    errors.push(`${path}.outputLimitReached is only allowed on assistant`);
+  }
 }
 
 function validateMessageOrigin(
@@ -917,16 +1012,23 @@ export function isCodingSafeActivityToolPresentation(
     "refusalReason",
     "verificationOutcome",
     "gitOutcome",
+    "gitAction",
+    "gitProposalRef",
     "bridgeDurationMs",
     "exitCode",
     "failureOrigin",
+    "programKind",
     "refusalCause",
     "durationMs",
     "failureCount",
     "command",
     "output",
     "errorText",
+    "agentName",
+    "taskDescription",
+    "taskPrompt",
     "detailOmitted",
+    "outputShortened",
   ];
   if (exactKeys(value, allowed, "presentation").length > 0) return false;
   return (
@@ -941,11 +1043,36 @@ export function isCodingSafeActivityToolPresentation(
 function validPresentationScalars(value: Record<string, unknown>): boolean {
   return (
     (value.exitCode === undefined || Number.isSafeInteger(value.exitCode)) &&
-    (value.detailOmitted === undefined || value.detailOmitted === true)
+    (value.detailOmitted === undefined || value.detailOmitted === true) &&
+    (value.outputShortened === undefined || isOutputShortened(value.outputShortened))
   );
 }
 
+function isOutputShortened(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    exactKeys(value, ["keptBytes", "keptLines", "totalLines"], "x").length > 0
+  )
+    return false;
+  const { keptBytes, keptLines, totalLines } = value;
+  if (!isCount(keptBytes)) return false;
+  if (keptLines === undefined && totalLines === undefined) return true;
+  return isCount(keptLines) && isCount(totalLines) && keptLines < totalLines;
+}
+
 function validPresentationVocabulary(value: Record<string, unknown>): boolean {
+  return (
+    (value.gitAction === undefined || isOneOf(value.gitAction, CODING_SAFE_ACTIVITY_GIT_ACTIONS)) &&
+    (value.programKind === undefined ||
+      isOneOf(value.programKind, CODING_SAFE_ACTIVITY_PROGRAM_KINDS)) &&
+    (value.gitProposalRef === undefined ||
+      (typeof value.gitProposalRef === "string" &&
+        CODING_SAFE_ACTIVITY_GIT_PROPOSAL_REF_PATTERN.test(value.gitProposalRef))) &&
+    validPresentationOutcomeVocabulary(value)
+  );
+}
+
+function validPresentationOutcomeVocabulary(value: Record<string, unknown>): boolean {
   return (
     (value.refusalReason === undefined ||
       isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)) &&
@@ -962,14 +1089,29 @@ function validPresentationVocabulary(value: Record<string, unknown>): boolean {
 
 // A tool's text is bounded, free of unsafe format characters, and never carried beside a shed one.
 function validPresentationText(value: Record<string, unknown>): boolean {
-  if (value.detailOmitted === true && [value.command, value.output, value.errorText].some(Boolean))
+  if (
+    value.detailOmitted === true &&
+    [value.command, value.output, value.errorText, value.taskPrompt].some(Boolean)
+  )
     return false;
   return (
+    validSubagentText(value) &&
     (value.command === undefined ||
       isToolText(value.command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS)) &&
     (value.errorText === undefined ||
       isToolText(value.errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS)) &&
     (value.output === undefined || isToolOutput(value.output))
+  );
+}
+
+function validSubagentText(value: Record<string, unknown>): boolean {
+  return (
+    (value.agentName === undefined ||
+      isToolText(value.agentName, CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS)) &&
+    (value.taskDescription === undefined ||
+      isToolText(value.taskDescription, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS)) &&
+    (value.taskPrompt === undefined ||
+      isToolText(value.taskPrompt, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS))
   );
 }
 

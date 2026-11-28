@@ -2409,6 +2409,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The Git window handed a repository the person just added or cloned back to the window that
   // asked for the folder (its return window); no other window changes (#4371). Once per return.
   "repository-returned",
+  // A repository whose folder changed since it was added was reconnected by choosing it in the
+  // repository chooser (U-44); the closed outcome says whether that choice then selected it. Once
+  // per successful reconnect; no path.
+  "repository-reconnected",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2429,6 +2433,12 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The mounted window settled where its repository came from: its own saved selection, the
   // folder the shell held, or none. The closed source only, never the path (#4068).
   "repository-resolved",
+  // The Workbench asked the server to activate a workspace on its own, after a selection or a
+  // refresh and not on a click: the closed trigger names where the repository it binds came from
+  // (U-3). Once per request.
+  "workspace-activation-requested",
+  // A failed runtime readiness read was read again (U-37): which attempt, and how it ended.
+  "runtime-readiness-retry",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2467,6 +2477,16 @@ export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGE
 export const CLIENT_CODING_WORKBENCH_TOOL_PROFILES = ["native", "mapped", "unreported"] as const;
 export type ClientCodingWorkbenchToolProfile =
   (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
+
+// What became of the choice once a reconnect of a changed folder succeeded (U-44): the folder was
+// selected, a later choice superseded it, or the selector was gone (the window closed or rebuilt it).
+export const CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES = [
+  "selected",
+  "superseded",
+  "selector-gone",
+] as const;
+export type ClientCodingWorkbenchReconnectOutcome =
+  (typeof CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES)[number];
 
 /** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
@@ -2598,6 +2618,35 @@ export const CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES = ["window", "shell", "n
 export type ClientCodingWorkbenchRepositorySource =
   (typeof CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES)[number];
 
+/**
+ * Where the repository of an automatic workspace activation came from: the window's own saved
+ * selection (the composer picker or the Git window's return), the repository a run pinned into the
+ * window (`window-pinned`), the folder the shell held when the window was seeded, or the active
+ * workspace the window follows.
+ */
+export const CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS = [
+  "window-selection",
+  "window-pinned",
+  "shell-seed",
+  "active-follow",
+] as const;
+export type ClientCodingWorkbenchActivationTrigger =
+  (typeof CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS)[number];
+
+/**
+ * How a bounded re-read of a failed runtime readiness stands: `started` when attempt n is sent,
+ * `recovered` when it succeeded, `exhausted` when the last attempt failed and none is left.
+ */
+export const CLIENT_CODING_WORKBENCH_READINESS_RETRY_OUTCOMES = [
+  "started",
+  "recovered",
+  "exhausted",
+] as const;
+export type ClientCodingWorkbenchReadinessRetryOutcome =
+  (typeof CLIENT_CODING_WORKBENCH_READINESS_RETRY_OUTCOMES)[number];
+/** Bounds the attempt number of a readiness retry. */
+export const CLIENT_CODING_WORKBENCH_READINESS_RETRY_ATTEMPT_MAX = 16;
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2633,6 +2682,10 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | { readonly interaction: "repository-seed-skipped" }
   | { readonly interaction: "repository-returned" }
   | {
+      readonly interaction: "repository-reconnected";
+      readonly outcome: ClientCodingWorkbenchReconnectOutcome;
+    }
+  | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
     }
@@ -2658,6 +2711,15 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | {
       readonly interaction: "repository-resolved";
       readonly repositorySource: ClientCodingWorkbenchRepositorySource;
+    }
+  | {
+      readonly interaction: "workspace-activation-requested";
+      readonly activationTrigger: ClientCodingWorkbenchActivationTrigger;
+    }
+  | {
+      readonly interaction: "runtime-readiness-retry";
+      readonly readinessRetryOutcome: ClientCodingWorkbenchReadinessRetryOutcome;
+      readonly attempt: number;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2675,6 +2737,9 @@ const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
 const CODING_WORKBENCH_TOOL_PROFILE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
 );
+const CODING_WORKBENCH_RECONNECT_OUTCOME_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES,
+);
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
 );
@@ -2683,6 +2748,12 @@ const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+);
+const CODING_WORKBENCH_ACTIVATION_TRIGGER_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS,
+);
+const CODING_WORKBENCH_READINESS_RETRY_OUTCOME_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_READINESS_RETRY_OUTCOMES,
 );
 const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
@@ -2720,6 +2791,9 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "repository-seeded": {},
   "repository-seed-skipped": {},
   "repository-returned": {},
+  "repository-reconnected": {
+    outcome: (value) => isSetMember(value, CODING_WORKBENCH_RECONNECT_OUTCOME_SET),
+  },
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },
@@ -2753,6 +2827,15 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "repository-resolved": {
     repositorySource: (value) => isSetMember(value, CODING_WORKBENCH_REPOSITORY_SOURCE_SET),
+  },
+  "workspace-activation-requested": {
+    activationTrigger: (value) => isSetMember(value, CODING_WORKBENCH_ACTIVATION_TRIGGER_SET),
+  },
+  "runtime-readiness-retry": {
+    readinessRetryOutcome: (value) =>
+      isSetMember(value, CODING_WORKBENCH_READINESS_RETRY_OUTCOME_SET),
+    attempt: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_READINESS_RETRY_ATTEMPT_MAX),
   },
 };
 
@@ -2799,6 +2882,7 @@ function isClientDiagnosticCodingWorkbenchInteraction(
  */
 export const CLIENT_CODING_RUNTIME_CALLS = [
   "status",
+  "readiness",
   "snapshot",
   "start",
   "approval",

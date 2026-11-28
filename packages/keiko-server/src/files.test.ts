@@ -26,6 +26,11 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  HUMAN_WRITE_WAIT_MS,
+  nativeWriteGateWaiters,
+  runNativeWorkspaceWrite,
+} from "./coding-runtime/nativeWriteGate.js";
 import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
@@ -58,6 +63,7 @@ import {
   writeFilesContent,
 } from "./index.js";
 import {
+  FilesError,
   handleFilesPreviewImage,
   normalizeRelativePath,
   resolveRoot,
@@ -197,13 +203,17 @@ describe("desktop files browser", () => {
   it("resolves a registered project root and keeps deny-listed roots out", async () => {
     await mkdir(join(root, ".git"), { recursive: true });
 
-    await expect(resolveRoot(store, root, buildRedactor({}))).resolves.toMatchObject({
+    await expect(
+      resolveRoot(store, root, buildRedactor({}), "test-correlation"),
+    ).resolves.toMatchObject({
       root,
       realRoot: root,
     });
 
     store.createProject(join(root, ".git"), "git-dir");
-    await expect(resolveRoot(store, join(root, ".git"), buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, join(root, ".git"), buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -215,7 +225,9 @@ describe("desktop files browser", () => {
     await mkdir(join(arbitrary, "reports"));
     await writeFile(join(arbitrary, "notes.txt"), "hello world", "utf8");
 
-    await expect(resolveRoot(store, arbitrary, buildRedactor({}))).resolves.toMatchObject({
+    await expect(
+      resolveRoot(store, arbitrary, buildRedactor({}), "test-correlation"),
+    ).resolves.toMatchObject({
       root: arbitrary,
       realRoot: arbitrary,
     });
@@ -231,7 +243,9 @@ describe("desktop files browser", () => {
   });
 
   it("rejects a relative (non-absolute) arbitrary root", async () => {
-    await expect(resolveRoot(store, "relative/dir", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, "relative/dir", buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 400,
       code: "BAD_ROOT",
     });
@@ -264,12 +278,14 @@ describe("desktop files browser", () => {
     await mkdir(join(base, ".aws"));
     await mkdir(join(base, ".aws", "sub"));
 
-    await expect(resolveRoot(store, join(base, ".aws"), buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, join(base, ".aws"), buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
     await expect(
-      resolveRoot(store, join(base, ".aws", "sub"), buildRedactor({})),
+      resolveRoot(store, join(base, ".aws", "sub"), buildRedactor({}), "test-correlation"),
     ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
@@ -285,7 +301,9 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "safe-dir", `${tokenSegment}.txt`), "hidden\n", "utf8");
     await writeFile(join(root, "safe-dir", "visible.txt"), "hello\n", "utf8");
 
-    await expect(resolveRoot(store, sensitiveRoot, buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, sensitiveRoot, buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -326,7 +344,9 @@ describe("desktop files browser", () => {
     await mkdir(sensitiveProject, { recursive: true });
     store.createProject(sensitiveProject, "sensitive-project");
 
-    await expect(resolveRoot(store, sensitiveProject, buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, sensitiveProject, buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -341,7 +361,9 @@ describe("desktop files browser", () => {
     await mkdir(nestedProject, { recursive: true });
     store.createProject(nestedProject, "nested-project");
 
-    await expect(resolveRoot(store, nestedProject, buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, nestedProject, buildRedactor({}), "test-correlation"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -775,6 +797,216 @@ describe("desktop files browser", () => {
     const roundTrip = await readFilesContent(store, root, "src/app.ts");
     expect(roundTrip.content).toBe('export const value = "changed";\n');
   });
+
+  it("lands a save made during a runtime revert write after that write, so the person's edit wins", async () => {
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+      writeFileSync(join(root, "src", "app.ts"), "export const fromRuntime = 1;\n");
+    });
+    await entered;
+
+    const saving = writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "the person";\n',
+    });
+    for (let turn = 0; turn < 5; turn += 1) await new Promise<void>((done) => setImmediate(done));
+    expect((await readFilesContent(store, root, "src/app.ts")).content).toContain('"ok"');
+    release();
+    await native;
+    await saving;
+
+    expect((await readFilesContent(store, root, "src/app.ts")).content).toBe(
+      'export const value = "the person";\n',
+    );
+  });
+
+  it("refuses a save with a retryable 409 when a runtime revert write never ends, and writes nothing", async () => {
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+    });
+    await entered;
+    const before = (await readFilesContent(store, root, "src/app.ts")).content;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const saving = writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "never written";\n',
+      });
+      const refused = expect(saving).rejects.toMatchObject({
+        status: 409,
+        code: "BUSY",
+        message: "A Coding run is still writing these files. Try again in a moment.",
+      });
+      // The save reaches the gate after its own file reads; advance the clock only once it waits.
+      while (nativeWriteGateWaiters() === 0) await new Promise<void>((done) => setImmediate(done));
+      await vi.advanceTimersByTimeAsync(HUMAN_WRITE_WAIT_MS);
+      await refused;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect((await readFilesContent(store, root, "src/app.ts")).content).toBe(before);
+    release();
+    await native;
+  });
+
+  it("proves the creation parent again after the gate wait: a parent swapped for a link is refused", async () => {
+    await mkdir(join(root, "src", "sub"));
+    const outside = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-create-outside-")));
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+    });
+    await entered;
+    try {
+      const creating = createFilesEntry({
+        store,
+        rootInput: root,
+        pathInput: "src/sub/new.ts",
+        kind: "file",
+      });
+      const refused = expect(creating).rejects.toBeInstanceOf(FilesError);
+      while (nativeWriteGateWaiters() === 0) await new Promise<void>((done) => setImmediate(done));
+      // While the create waits behind the runtime write, its parent is swapped for a link.
+      rmSync(join(root, "src", "sub"), { recursive: true });
+      symlinkSync(outside, join(root, "src", "sub"), DIRECTORY_LINK_TYPE);
+      release();
+      await native;
+      await refused;
+
+      await expect(stat(join(outside, "new.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      release();
+      await native;
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [
+      "save",
+      (correlationId: string): Promise<unknown> =>
+        writeFilesContent({
+          store,
+          rootInput: root,
+          pathInput: "src/app.ts",
+          content: "export const never = 1;\n",
+          correlationId,
+        }),
+    ],
+    [
+      "create",
+      (correlationId: string): Promise<unknown> =>
+        createFilesEntry({
+          store,
+          rootInput: root,
+          pathInput: "src/created.ts",
+          kind: "file",
+          correlationId,
+        }),
+    ],
+    [
+      "rename",
+      (correlationId: string): Promise<unknown> =>
+        renameFilesEntry({
+          store,
+          rootInput: root,
+          pathInput: "src/app.ts",
+          newPathInput: "src/renamed.ts",
+          correlationId,
+        }),
+    ],
+    [
+      "delete",
+      (correlationId: string): Promise<unknown> =>
+        deleteFilesEntry({ store, rootInput: root, pathInput: "src/app.ts", correlationId }),
+    ],
+    [
+      "copy",
+      (correlationId: string): Promise<unknown> =>
+        copyFilesEntry({
+          store,
+          rootInput: root,
+          sourcePathInput: "src/app.ts",
+          destPathInput: "src/copied.ts",
+          correlationId,
+        }),
+    ],
+  ])(
+    "refuses a %s with a retryable 409 and a correlated log line while a runtime write never ends",
+    async (_name, attempt) => {
+      let enter: () => void = () => undefined;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const native = runNativeWorkspaceWrite(root, async () => {
+        enter();
+        await released;
+      });
+      await entered;
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const attempting = attempt("corr-files-busy-0001");
+        const refused = expect(attempting).rejects.toMatchObject({ status: 409, code: "BUSY" });
+        while (nativeWriteGateWaiters() === 0)
+          await new Promise<void>((done) => setImmediate(done));
+        await vi.advanceTimersByTimeAsync(HUMAN_WRITE_WAIT_MS);
+        await refused;
+      } finally {
+        vi.useRealTimers();
+        resetServerLogger();
+      }
+
+      expect(sink.events).toMatchObject([
+        {
+          op: "coding-runtime.revert.refused",
+          correlationId: "corr-files-busy-0001",
+          errorKind: "timeout",
+          extra: { operation: "write", reason: "write-gate-timeout" },
+        },
+      ]);
+      expect((await readFilesContent(store, root, "src/app.ts")).content).toContain('"ok"');
+      release();
+      await native;
+    },
+  );
 
   it("rejects a symlink swap between save validation and the write effect", async () => {
     extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-outside-")));

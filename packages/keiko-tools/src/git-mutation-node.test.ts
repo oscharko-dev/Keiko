@@ -5,7 +5,11 @@
 
 import { describe, expect, it } from "vitest";
 import { makeWorkspace, recordingSpawn, type SpawnRecorder } from "./_support.js";
-import { createNodeGitMutationAdapter } from "./git-mutation-node.js";
+import {
+  createNodeGitMutationAdapter,
+  type GitCommitSigningReadFailureReport,
+  type NodeGitMutationAdapterDeps,
+} from "./git-mutation-node.js";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
 import type { HomeProvider } from "./exec.js";
 
@@ -34,6 +38,21 @@ function makeAdapter(rec: SpawnRecorder, signal?: AbortSignal): GitLocalMutation
 async function continuePastLazyFetchGuardProbe(rec: SpawnRecorder): Promise<void> {
   const before = rec.calls().length;
   rec.child.emit("close", 1, null);
+  await expect.poll(() => rec.calls().length).toBe(before + 1);
+}
+
+// A commit first reads Git's effective `commit.gpgsign` (a bare `git config` run, no guard probe) and
+// only then takes the lazy-fetch guard probe and its own spawn. `stdout` is the boolean Git answers.
+async function answerSigningRead(rec: SpawnRecorder, stdout: string, code = 0): Promise<void> {
+  const before = rec.calls().length;
+  expect(rec.calls()[before - 1]?.args).toEqual([
+    "config",
+    "--type=bool",
+    "--get",
+    "commit.gpgsign",
+  ]);
+  rec.child.stdout.emit("data", Buffer.from(stdout, "utf8"));
+  rec.child.emit("close", code, null);
   await expect.poll(() => rec.calls().length).toBe(before + 1);
 }
 
@@ -87,6 +106,8 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.commit({ message: "m", allowEmpty: false });
+    await expect.poll(() => rec.calls().length).toBe(1);
+    await answerSigningRead(rec, "true\n");
     await continuePastLazyFetchGuardProbe(rec);
     rec.child.stderr.emit("data", Buffer.from("error: gpg failed to sign the data\n", "utf8"));
     rec.child.emit("close", 1, null);
@@ -209,16 +230,26 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const rec = recordingSpawn();
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  await expect.poll(() => rec.calls().length).toBe(1);
+  await answerSigningRead(rec, "true\n");
   await continuePastLazyFetchGuardProbe(rec);
-  // calls: [0] lazy-fetch guard probe, [1] the real `commit` — the one
+  // calls: [0] the commit.gpgsign read, [1] lazy-fetch guard probe, [2] the real `commit` — the one
   // whose env this helper exists to inspect.
-  const commitEnv = rec.calls()[1]?.options.env ?? {};
+  const commitEnv = rec.calls()[2]?.options.env ?? {};
   rec.child.emit("close", 0, null);
-  // The commit's success triggers a follow-up readGitRevision("HEAD"), which re-probes the guard
-  // for itself (promisor status is deliberately never cached — see git-worktree-snapshot-node.ts)
-  // before the real rev-parse: wait for that probe's OWN spawn to register before answering it.
-  await expect.poll(() => rec.calls()).toHaveLength(3);
-  await continuePastLazyFetchGuardProbe(rec);
+  // The commit's success triggers a follow-up readGitRevision("HEAD"). It runs in the commit's own
+  // read session, so the probe the commit already took covers it (the verdict is held for ONE
+  // operation and never across operations — see git-worktree-snapshot-node.ts), PROVIDED the
+  // installed git itself enforces GIT_NO_LAZY_FETCH: reusing a verdict is the one place the version
+  // matters, so it is read here, once per spawn function. The rev-parse follows it.
+  const probesBefore = rec.calls().length;
+  await expect.poll(() => rec.calls()).toHaveLength(probesBefore + 1);
+  expect(rec.calls()[3]?.args).toEqual(["version"]);
+  rec.child.stdout.emit("data", Buffer.from("git version 2.50.0\n"));
+  rec.child.emit("close", 0, null);
+  await expect.poll(() => rec.calls()).toHaveLength(5);
+  expect(rec.calls()[4]?.args).toContain("rev-parse");
+  expect(rec.calls().filter((call) => call.args.includes("--get-regexp"))).toHaveLength(1);
   rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);
   await pending;
@@ -251,5 +282,183 @@ describe("node git mutation adapter — the user's git identity reaches the comm
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.GH_TOKEN).toBeUndefined();
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  });
+});
+
+describe("node git mutation adapter — the signing flag follows commit.gpgsign at the argv", () => {
+  async function commitArgv(answer: string, code = 0): Promise<readonly string[]> {
+    const rec = recordingSpawn();
+    const pending = makeAdapter(rec).commit({ message: "m", allowEmpty: false });
+    await expect.poll(() => rec.calls().length).toBe(1);
+    await answerSigningRead(rec, answer, code);
+    await continuePastLazyFetchGuardProbe(rec);
+    const argv = rec.calls()[2]?.args ?? [];
+    rec.child.emit("close", 1, null);
+    await pending;
+    return argv;
+  }
+
+  it.each([
+    ["true\n", 0, true],
+    ["false\n", 0, false],
+    ["", 1, false],
+    ["", 128, true],
+    ["maybe\n", 0, true],
+  ])(
+    "answer %j / exit %i signs: %s, and never passes --no-gpg-sign",
+    async (answer, code, signs) => {
+      const argv = await commitArgv(answer, code);
+      expect(argv.includes("--gpg-sign")).toBe(signs);
+      expect(argv).not.toContain("--no-gpg-sign");
+    },
+  );
+});
+
+describe("node git mutation adapter — signing read failures and branch protection", () => {
+  function adapterWith(
+    rec: SpawnRecorder,
+    extra: Partial<NodeGitMutationAdapterDeps>,
+  ): GitLocalMutationAdapter {
+    const { info } = makeWorkspace();
+    return createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: "/usr/bin" },
+      now: () => 0,
+      spawn: rec.fn,
+      home: FAKE_HOME,
+      resolveExecutable: () => "git",
+      ...extra,
+    });
+  }
+
+  interface Observed {
+    readonly argv: readonly string[];
+    readonly result: Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>;
+    readonly failures: readonly GitCommitSigningReadFailureReport[];
+  }
+
+  // Runs one commit whose `commit.gpgsign` read is answered by `respond`, then fails the commit
+  // itself so no follow-up revision read is needed.
+  async function observe(
+    respond: (rec: SpawnRecorder) => void,
+    extra: Partial<NodeGitMutationAdapterDeps> = {},
+  ): Promise<Observed> {
+    const rec = recordingSpawn();
+    const failures: GitCommitSigningReadFailureReport[] = [];
+    const ad = adapterWith(rec, { onSigningReadFailure: (r) => failures.push(r), ...extra });
+    const pending = ad.commit({ message: "m", allowEmpty: false });
+    await expect.poll(() => rec.calls().length).toBe(1);
+    respond(rec);
+    await expect.poll(() => rec.calls().length).toBe(2);
+    await continuePastLazyFetchGuardProbe(rec);
+    const argv = rec.calls()[2]?.args ?? [];
+    rec.child.emit("close", 1, null);
+    return { argv, result: await pending, failures };
+  }
+
+  const answer =
+    (stdout: string, code: number, stderr = "") =>
+    (rec: SpawnRecorder): void => {
+      rec.child.stdout.emit("data", Buffer.from(stdout, "utf8"));
+      if (stderr !== "") rec.child.stderr.emit("data", Buffer.from(stderr, "utf8"));
+      rec.child.emit("close", code, null);
+    };
+
+  it("carries a thrown read as the closed `spawn` class with its cause, and still signs", async () => {
+    const cause = new Error("spawn failed");
+    const seen = await observe((rec) => rec.child.emit("error", cause));
+
+    expect(seen.argv).toContain("--gpg-sign");
+    expect(seen.result.signing).toBe("unknown-fail-closed");
+    expect(seen.result.signingReadFailure).toBe("spawn");
+    expect(seen.failures).toHaveLength(1);
+    expect(seen.failures[0]?.readFailure).toBe("spawn");
+    expect(seen.failures[0]?.error).toBeInstanceOf(Error);
+  });
+
+  it("classifies a read cut short as `truncated`", async () => {
+    const seen = await observe((rec) => {
+      rec.child.stdout.emit("data", Buffer.alloc(8_000_000, "a"));
+      rec.child.emit("close", 0, null);
+    });
+
+    expect(seen.argv).toContain("--gpg-sign");
+    expect(seen.result.signingReadFailure).toBe("truncated");
+    expect(seen.failures[0]?.readFailure).toBe("truncated");
+  });
+
+  it.each([
+    ["maybe\n", 0, "", "malformed"],
+    ["", 128, "fatal: bad boolean config value 'maybe' for 'commit.gpgsign'\n", "malformed"],
+    ["", 2, "fatal: could not lock config file\n", "exit"],
+  ] as const)("classifies %j / exit %i as `%s` and signs", async (out, code, err, expected) => {
+    const seen = await observe(answer(out, code, err));
+
+    expect(seen.argv).toContain("--gpg-sign");
+    expect(seen.result.signing).toBe("unknown-fail-closed");
+    expect(seen.result.signingReadFailure).toBe(expected);
+  });
+
+  it("reports no read failure for an answered read", async () => {
+    const seen = await observe(answer("true\n", 0));
+
+    expect(seen.result.signing).toBe("configured");
+    expect(seen.result.signingReadFailure).toBeUndefined();
+    expect(seen.failures).toHaveLength(0);
+  });
+
+  it("signs an unset commit.gpgsign when branch protection requires signatures", async () => {
+    const seen = await observe(answer("", 1), {
+      signingRequiredByBranchProtection: () => Promise.resolve(true),
+    });
+
+    expect(seen.argv).toContain("--gpg-sign");
+    expect(seen.argv).not.toContain("--no-gpg-sign");
+    expect(seen.result.signing).toBe("required-by-branch-protection");
+  });
+
+  it("commits unsigned when commit.gpgsign is unset and branch protection does not require it", async () => {
+    const seen = await observe(answer("", 1), {
+      signingRequiredByBranchProtection: () => Promise.resolve(false),
+    });
+
+    expect(seen.argv).not.toContain("--gpg-sign");
+    expect(seen.result.signing).toBe("not-configured");
+  });
+
+  it("commits unsigned and records that the branch-protection read was unavailable", async () => {
+    const seen = await observe(answer("", 1), {
+      signingRequiredByBranchProtection: () => Promise.resolve("unavailable"),
+    });
+
+    expect(seen.argv).not.toContain("--gpg-sign");
+    expect(seen.argv).not.toContain("--no-gpg-sign");
+    expect(seen.result.signing).toBe("not-configured-protection-unavailable");
+  });
+
+  it("does not consult branch protection when commit.gpgsign already signs", async () => {
+    let consulted = false;
+    const seen = await observe(answer("true\n", 0), {
+      signingRequiredByBranchProtection: () => {
+        consulted = true;
+        return Promise.resolve(true);
+      },
+    });
+
+    expect(consulted).toBe(false);
+    expect(seen.result.signing).toBe("configured");
+  });
+
+  it("does not commit when the branch-protection verdict cannot be produced", async () => {
+    const rec = recordingSpawn();
+    const ad = adapterWith(rec, {
+      signingRequiredByBranchProtection: () => Promise.reject(new Error("verdict unavailable")),
+    });
+    const pending = ad.commit({ message: "m", allowEmpty: false });
+    await expect.poll(() => rec.calls().length).toBe(1);
+    answer("", 1)(rec);
+
+    await expect(pending).rejects.toThrow("verdict unavailable");
+    expect(rec.calls()).toHaveLength(1);
   });
 });

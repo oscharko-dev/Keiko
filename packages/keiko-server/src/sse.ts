@@ -32,6 +32,38 @@ export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "X-Accel-Buffering": "no",
 };
 
+/**
+ * The SSE comment frame every stream opens with. EventSource ignores `:` lines, so it carries no
+ * payload and never trips an event allowlist; its job is to put bytes on the wire at once.
+ */
+export const SSE_OPEN_FRAME = ": open\n\n";
+
+export interface OpenSseStreamOptions {
+  /** Binds the request correlation id to the stream's terminal `sse.stream.closed` line. */
+  readonly correlationId?: string | undefined;
+  /**
+   * `false` when the caller writes its own first frame (a ready/snapshot frame) right after
+   * opening; headers are still flushed, only the extra comment frame is skipped.
+   */
+  readonly openFrame?: boolean;
+}
+
+/**
+ * The one way every SSE endpoint opens a stream (U-23). `res.writeHead` alone does not put anything
+ * on the wire in Node: headers leave only with the first body write, so a stream with nothing to
+ * replay sat silent until the 15 s heartbeat and a client with a shorter connect timeout never saw
+ * the response. This writes the headers, flushes them and sends the open frame through the shared
+ * flow control (`writeSseFrame`), so the client's `onopen` fires at once. Returns false when the
+ * stream is already gone.
+ */
+export function openSseResponse(res: ServerResponse, options: OpenSseStreamOptions = {}): boolean {
+  res.writeHead(200, SSE_HEADERS);
+  // Response doubles in unit tests carry no socket-level flush.
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  if (options.openFrame === false) return true;
+  return writeSseFrame(res, SSE_OPEN_FRAME, null, undefined, options.correlationId);
+}
+
 /** The default keep-alive interval of an SSE stream. */
 export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 

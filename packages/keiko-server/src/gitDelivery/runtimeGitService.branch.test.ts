@@ -12,6 +12,10 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
+import {
+  governedIndexRecord,
+  resetGovernedIndexPaths,
+} from "../coding-runtime/governedIndexPaths.js";
 import { runMigrations } from "../store/schema.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import {
@@ -32,6 +36,7 @@ const DIGEST = "a".repeat(64);
 let base: string;
 let root: string;
 let live: boolean;
+let contextFault: Error | undefined;
 let db: DatabaseSync;
 let events: ServerLogEvent[];
 let evidence: Map<string, string>;
@@ -62,6 +67,7 @@ function git(cwd: string, args: readonly string[]): string {
 }
 
 function context(): VerifiedCommitRunContext {
+  if (contextFault !== undefined) throw contextFault;
   return {
     runId: "run-branch",
     envelopeDigest: "b".repeat(64),
@@ -177,6 +183,7 @@ beforeEach(() => {
   git(root, ["add", "code.js"]);
   git(root, ["commit", "-qm", "base"]);
   live = true;
+  contextFault = undefined;
   runHead = "main";
   runBase = "main";
   admission = "admitted";
@@ -191,6 +198,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetGovernedIndexPaths("run-branch");
   db.close();
   rmSync(base, { recursive: true, force: true });
 });
@@ -208,6 +216,8 @@ describe("the name checks of a governed task branch", () => {
     ["", "invalid-name"],
     ["main", "protected-name"],
     ["dev", "protected-name"],
+    ["Main", "protected-name"],
+    ["DEV", "protected-name"],
   ] as const)("judges %j as %s", (name, refusal) => {
     expect(taskBranchNameRefusal(name)).toBe(refusal);
   });
@@ -274,6 +284,8 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     ["a b", "invalid-name"],
     ["main", "protected-name"],
     ["dev", "protected-name"],
+    ["Main", "protected-name"],
+    ["DEV", "protected-name"],
   ] as const)("refuses %j as %s and creates nothing", async (name, reason) => {
     await expect(branch(service(), name)).resolves.toMatchObject({
       kind: "branch",
@@ -350,6 +362,70 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
       expect(adoptions).toEqual([]);
     },
   );
+
+  // #4491: from an unborn HEAD the branch is `git switch -c`: HEAD is re-pointed, no object is written.
+  it("creates a task branch from an unborn HEAD by re-pointing HEAD at it", async () => {
+    git(root, ["checkout", "-q", "--orphan", "fresh"]);
+    runHead = "fresh";
+    runBase = "fresh";
+    await expect(branch(service(), "feature/x")).resolves.toMatchObject({
+      status: "succeeded",
+      reason: "none",
+      branch: "feature/x",
+    });
+    expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/feature/x");
+    expect(localBranches()).toBe("main");
+    expect(adoptions).toEqual([
+      expect.objectContaining({
+        branch: "feature/x",
+        baseBranch: "fresh",
+        headSha: "0".repeat(40),
+      }),
+    ]);
+    const lines = branchLines();
+    expect(lines.at(-1)).toMatchObject({ extra: { state: "succeeded" } });
+  });
+
+  it.each(["main", "Main", "DEV"])(
+    "refuses the protected name %s from an unborn HEAD",
+    async (name) => {
+      git(root, ["checkout", "-q", "--orphan", "main2"]);
+      runHead = "main2";
+      runBase = "main2";
+      await expect(branch(service(), name)).resolves.toMatchObject({
+        status: "blocked",
+        reason: "protected-name",
+      });
+      expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main2");
+      expect(adoptions).toEqual([]);
+    },
+  );
+
+  // The rollback re-points HEAD at the unborn base through branch-create; a protected rule on
+  // branch-create must never make that rollback fail.
+  it("puts an unborn base back when the run cannot adopt the branch", async () => {
+    git(root, ["checkout", "-q", "--orphan", "fresh"]);
+    runHead = "fresh";
+    runBase = "fresh";
+    adoptResult = false;
+    await expect(branch(service(), "feature/x")).resolves.toMatchObject({
+      status: "failed",
+      reason: "rebind-failed",
+    });
+    expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+  });
+
+  it("still refuses a name that already exists from an unborn HEAD", async () => {
+    git(root, ["checkout", "-q", "--orphan", "fresh"]);
+    runHead = "fresh";
+    runBase = "fresh";
+    git(root, ["branch", "feature/taken", "main"]);
+    await expect(branch(service(), "feature/taken")).resolves.toMatchObject({
+      status: "blocked",
+      reason: "branch-exists",
+    });
+    expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+  });
 
   it("refuses every task branch when the run has no workspace port at all", async () => {
     await expect(branch(service("none"), "feature/x")).resolves.toMatchObject({
@@ -528,6 +604,85 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
   });
 });
 
+// U-32: a task branch Keiko is certain to refuse is refused while it is still an ask, with the
+// reason the step itself gives after a decision; the step stays the authoritative backstop.
+describe("a task-branch ask Keiko is certain to refuse (U-32)", () => {
+  it("is admitted for a run on its base branch in a Local checkout", () => {
+    expect(service().branchAskRefusal("feature/x")).toBeUndefined();
+    expect(branchLines()).toEqual([]);
+  });
+
+  it("refuses a run already on a task branch with the reason the step gives, and logs it", async () => {
+    runHead = "feature/already";
+    git(root, ["checkout", "-qb", "feature/already"]);
+    const asked = service().branchAskRefusal("feature/x");
+    expect(asked).toBe("not-on-base");
+    const [line] = branchLines();
+    expect(line).toMatchObject({
+      correlationId: "runtime-git-branch-test",
+      level: "warn",
+      extra: { phase: "branch", state: "refused", reason: "not-on-base", refusedBeforeAsk: true },
+    });
+    expect(JSON.stringify(line)).not.toContain("feature/x");
+    // The step after an approval says exactly the same, so the two never drift apart.
+    await expect(branch(service(), "feature/x")).resolves.toMatchObject({
+      status: "blocked",
+      reason: asked,
+    });
+  });
+
+  it.each(["not-local-checkout", "not-on-base", "executable-filters"] as const)(
+    "refuses when the workspace says %s",
+    (reason) => {
+      admission = reason;
+      expect(service().branchAskRefusal("feature/x")).toBe(reason);
+    },
+  );
+
+  it.each([
+    ["main", "protected-name"],
+    ["a b", "invalid-name"],
+  ] as const)("refuses the name %j as %s", (name, reason) => {
+    expect(service().branchAskRefusal(name)).toBe(reason);
+  });
+
+  it("refuses every ask when the run has no workspace port, as the step does", () => {
+    expect(service("none").branchAskRefusal("feature/x")).toBe("not-local-checkout");
+  });
+
+  it("never refuses, and says why, when the workspace cannot be read", () => {
+    const unreadable: RuntimeGitTaskBranchPort = {
+      admit: (): never => {
+        throw new TypeError("workspace record unreadable");
+      },
+      adopt: (): boolean => false,
+    };
+    expect(service(unreadable).branchAskRefusal("feature/x")).toBeUndefined();
+    const [line] = branchLines();
+    expect(line).toMatchObject({
+      level: "warn",
+      extra: { phase: "branch", state: "failed", errorClass: "TypeError", refusedBeforeAsk: false },
+    });
+    expect(JSON.stringify(line)).not.toContain("unreadable");
+  });
+
+  it("never refuses, and says why, when the run context itself cannot be read", () => {
+    contextFault = new TypeError("context unreadable");
+    expect(service().branchAskRefusal("feature/x")).toBeUndefined();
+    const [line] = branchLines();
+    expect(line).toMatchObject({
+      level: "warn",
+      extra: { phase: "branch", state: "failed", errorClass: "TypeError", refusedBeforeAsk: false },
+    });
+  });
+
+  it("asks nothing of a run that is not live, leaving the decision to the step", () => {
+    live = false;
+    expect(service().branchAskRefusal("feature/x")).toBeUndefined();
+    expect(branchLines()).toEqual([]);
+  });
+});
+
 // Every way the kernel can stop a branch step, in the tool's closed words (#3907).
 describe("the closed result of a stopped kernel outcome", () => {
   const executionResult = { schemaVersion: "1", outcome: "failed", durationMs: 0 } as never;
@@ -561,5 +716,188 @@ describe("the closed result of a stopped kernel outcome", () => {
     const result = stoppedResult(outcome, "feature/x");
     if (expected === undefined) expect(result).toBeUndefined();
     else expect(result).toEqual({ kind: "branch", ...expected, branch: "feature/x" });
+  });
+});
+
+// The first read of a stage or unstage redemption is its own (`indexCurrent` re-reads the verified
+// facts and refuses drift), so the dispatcher reads no facts ahead of it. A second full read of every
+// Git fact doubled the cost of the redemption inside the tool's fixed 30 s budget: on a loaded host
+// it settled `timeout` / `deadline-exceeded` while the staging itself was healthy.
+describe("redeeming a stage proposal reads the repository once, in the redemption", () => {
+  it.each(["stage", "unstage"] as const)(
+    "refuses an unknown %s proposal as such, before any repository fact is read",
+    async (operation) => {
+      // A repository the run no longer matches: any facts read ahead of the redemption throws drift.
+      runHead = "not-the-checked-out-branch";
+      const result = await service("none").execute(
+        {
+          action: "git",
+          actionId: `${operation}-exec-1`,
+          idempotencyKey: `${operation}-exec-1`,
+          operation,
+          phase: "execute",
+          proposalId: `${operation}-1`,
+        },
+        { check: (): boolean => true },
+      );
+      expect(result).toEqual({ kind: "refused", reason: "proposal-unknown" });
+    },
+  );
+});
+
+// Positive control for the single read above: a KNOWN proposal redeemed after the worktree moved is
+// still refused through `redeem` (`indexCurrent` reads the verified facts and the candidate itself).
+describe("redeeming a known stage proposal after the worktree drifted", () => {
+  it("is refused as candidate-drift and stages nothing", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    const gitService = service("none");
+    const proposed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "stage-prop-1",
+        idempotencyKey: "stage-prop-1",
+        operation: "stage",
+        phase: "propose",
+        paths: ["code.js"],
+      },
+      { check: (): boolean => true },
+    );
+    if (proposed.kind !== "stage" || !("proposalId" in proposed))
+      throw new Error(`unexpected proposal ${JSON.stringify(proposed)}`);
+    // The bytes the proposal bound are not the bytes in the worktree any more.
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    const redeemed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "stage-exec-1",
+        idempotencyKey: "stage-exec-1",
+        operation: "stage",
+        phase: "execute",
+        proposalId: proposed.proposalId,
+      },
+      { check: (): boolean => true },
+    );
+    expect(redeemed).toMatchObject({ kind: "stage", status: "drift", reason: "candidate-drift" });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
+  });
+});
+
+// U-34b: the undo restores only what governed staging changed, so the one place that records it is
+// the successful index mutation, through the real service, repository and mutation adapter.
+describe("the paths governed staging records for the turn's undo", () => {
+  const request = (
+    operation: "stage" | "unstage",
+    phase: "propose" | "execute",
+    extra: Record<string, unknown>,
+  ): Parameters<RuntimeGitService["execute"]>[0] =>
+    ({
+      action: "git",
+      actionId: `${operation}-${phase}-1`,
+      idempotencyKey: `${operation}-${phase}-1`,
+      operation,
+      phase,
+      ...extra,
+    }) as Parameters<RuntimeGitService["execute"]>[0];
+
+  async function proposeAndRedeem(
+    gitService: RuntimeGitService,
+    operation: "stage" | "unstage",
+    between: () => void = (): void => undefined,
+  ): Promise<Awaited<ReturnType<RuntimeGitService["execute"]>>> {
+    const proposed = await gitService.execute(
+      request(operation, "propose", { paths: ["code.js"] }),
+      {
+        check: (): boolean => true,
+      },
+    );
+    if (proposed.kind !== operation || !("proposalId" in proposed))
+      throw new Error(`unexpected proposal ${JSON.stringify(proposed)}`);
+    between();
+    return gitService.execute(request(operation, "execute", { proposalId: proposed.proposalId }), {
+      check: (): boolean => true,
+    });
+  }
+
+  it("records the staged paths of a successful stage and of a successful unstage", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    const gitService = service("none");
+
+    await expect(proposeAndRedeem(gitService, "stage")).resolves.toMatchObject({
+      kind: "stage",
+      status: "succeeded",
+    });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("code.js");
+    expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
+
+    resetGovernedIndexPaths("run-branch");
+    await expect(proposeAndRedeem(gitService, "unstage")).resolves.toMatchObject({
+      kind: "unstage",
+      status: "succeeded",
+    });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
+    expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
+  });
+
+  it("withdraws a path from Undo when a later governed stage of it could not be observed", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    writeFileSync(join(root, "other.js"), "export const other = 1;\n");
+    const gitService = service("none");
+    await expect(proposeAndRedeem(gitService, "stage")).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
+
+    // The person stages another state of the file, then an intent-to-add entry makes the next
+    // governed stage's index unreadable: the first recorded pair no longer proves anything.
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    git(root, ["add", "code.js"]);
+    git(root, ["add", "-N", "other.js"]);
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    await expect(proposeAndRedeem(gitService, "stage")).resolves.toMatchObject({
+      status: "succeeded",
+    });
+
+    const record = governedIndexRecord("run-branch");
+    expect(record.paths).toEqual([]);
+    expect(record.truncated).toBe(true);
+    // The one line of the unproven second stage carries the closed reason, on the mutation's
+    // correlation; no second completion line is written for it.
+    const executes = events.filter(
+      (event) => event.op === "git.runtime-action" && event.extra?.phase === "stage-execute",
+    );
+    expect(executes.map((event) => event.extra?.state)).toEqual(["succeeded", "succeeded"]);
+    const unproven = events.filter((event) => event.extra?.indexUnproven !== undefined);
+    expect(unproven).toHaveLength(1);
+    expect(unproven[0]).toMatchObject({
+      op: "git.runtime-action",
+      correlationId: "runtime-git-branch-test",
+      extra: { phase: "stage-execute", state: "succeeded", indexUnproven: "index-unreadable" },
+    });
+    expect(JSON.stringify(unproven)).not.toContain(root);
+  });
+
+  it("records nothing for a stage that drifted, was refused or never ran", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    const gitService = service("none");
+
+    await expect(
+      proposeAndRedeem(gitService, "stage", () => {
+        writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+      }),
+    ).resolves.toMatchObject({ status: "drift" });
+    expect(governedIndexRecord("run-branch").paths).toEqual([]);
+
+    // A run whose authority ended after the proposal is refused before any index change.
+    const proposed = await gitService.execute(request("stage", "propose", { paths: ["code.js"] }), {
+      check: (): boolean => true,
+    });
+    if (proposed.kind !== "stage" || !("proposalId" in proposed))
+      throw new Error(`unexpected proposal ${JSON.stringify(proposed)}`);
+    live = false;
+    await gitService.execute(request("stage", "execute", { proposalId: proposed.proposalId }), {
+      check: (): boolean => true,
+    });
+    expect(governedIndexRecord("run-branch").paths).toEqual([]);
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
   });
 });

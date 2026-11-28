@@ -52,6 +52,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
+import { PromptCalibrationLedger } from "@oscharko-dev/keiko-model-gateway/internal/prompt-calibration";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   AtlassianHttpBodyPort,
@@ -419,6 +420,7 @@ function runtime(
     rmSync(state, { recursive: true, force: true });
   });
   configure(deps);
+  fixtureDeps = deps;
   if (!demandDiscovery) preselectKnownFixtureTools(deps.jiraChatCatalog, selectedTool);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Mixed Chat", MODEL);
@@ -959,6 +961,57 @@ interface ProviderOptions {
   readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
   readonly onRequest?: (body: string, index: number) => void;
 }
+/**
+ * What a provider that counts its prompt as the gateway does reports for the request it received:
+ * the production estimator over the wire messages and tools. The gateway admits an extended prompt
+ * from the usage the provider reported for its prefix (#4491), so a fixture that reports one token
+ * for a prompt of thousands would make every later prompt look free; this keeps calibration live
+ * and realistic.
+ */
+function estimatedPromptTokens(body: string): number {
+  const wire = JSON.parse(body) as {
+    readonly messages?: Parameters<typeof countGatewayPromptTokens>[0]["messages"];
+    readonly tools?: readonly {
+      readonly function: {
+        readonly name: string;
+        readonly description?: string;
+        readonly parameters: Record<string, unknown>;
+      };
+    }[];
+  };
+  const tools = wire.tools?.map(({ function: tool }) => ({
+    name: tool.name,
+    description: tool.description ?? "",
+    parameters: tool.parameters,
+  }));
+  // Counted as the gateway counts its own admission: with the model's token accounting.
+  const profile =
+    fixtureDeps === undefined ? undefined : currentContextProfileForModel(fixtureDeps, MODEL);
+  return countGatewayPromptTokens(
+    { messages: wire.messages ?? [], tools },
+    profile?.tokenAccounting,
+    {
+      contextWindow: profile?.maxInputTokens,
+    },
+  );
+}
+/** The deps of the runtime under test, so the fixture provider counts with its model's profile. */
+let fixtureDeps: UiHandlerDeps | undefined;
+/**
+ * Only for the accounting pin that equates the server's charge with the gateway's admitted cost.
+ * Synthetic usage far from the prompt's size (one token, or a whole window for a prompt of a few
+ * thousand tokens) needs no stub: the ledger refuses a report outside its plausibility band and the
+ * gateway then estimates locally, which is what these cases measure.
+ */
+function probeWindowArithmeticIndependentOfPriorUsage(): void {
+  vi.spyOn(PromptCalibrationLedger.prototype, "calibrate").mockReturnValue(undefined);
+}
+function productiveUsage(
+  body: string,
+  options: ProviderOptions,
+): { readonly prompt_tokens: number; readonly completion_tokens: number } {
+  return options.usage ?? { prompt_tokens: estimatedPromptTokens(body), completion_tokens: 1 };
+}
 function reportedProviderUsage(
   usage = { prompt_tokens: 1, completion_tokens: 1 },
 ): Readonly<Record<string, number>> {
@@ -1060,7 +1113,7 @@ function provider(
               finish_reason: tools ? "tool_calls" : "stop",
             },
           ],
-          usage: reportedProviderUsage(productive ? options.usage : undefined),
+          usage: reportedProviderUsage(productive ? productiveUsage(body, options) : undefined),
         }),
       );
     }),
@@ -1211,6 +1264,25 @@ it.each(["input", "output"] as const)(
     ]);
   },
 );
+
+it("admits the answer after a tool round from the provider's realistic usage with calibration live", async () => {
+  const f = runtime();
+  const requests = provider(["tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  expect(result.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  const reported = estimatedPromptTokens(requests[0] ?? "{}");
+  // The tool round's reported usage became the answer prompt's floor, and nothing was refused.
+  const calibrated = gatewayPromptAdmissions(f.deps).filter(
+    (entry) => entry.counterSource === "usage-calibrated",
+  );
+  expect(calibrated).toHaveLength(1);
+  expect(calibrated[0]?.calibratedPromptTokens).toBeGreaterThanOrEqual(reported);
+  expect(calibrated[0]).toMatchObject({ state: "admitted" });
+  const raw = readPersistedActivityLog(dirname(f.deps.uiDbPath ?? ""));
+  expect(persistedActivityLogLines(raw, "gateway.prompt.usage-rejected")).toHaveLength(0);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
 
 it("retains the thirty-call envelope Jira allowance across mixed model rounds and rejects the next batch", async () => {
   const f = runtime();
@@ -2053,6 +2125,10 @@ function observeToolRoundAndTwoSynthesisAttempts(
   completionTokens: readonly number[] = [1, 0, 1],
   reportedPromptTokens = 0,
 ): (costs: readonly number[]) => void {
+  // Its pin equates the server's charge for each attempt with the gateway's admitted cost, which is
+  // the local estimate the server also charges. A calibrated admission is that estimate plus a
+  // margin on the growth, so the equality is only defined while the gateway estimates locally.
+  probeWindowArithmeticIndependentOfPriorUsage();
   const budgets: groundedSynthesis.GroundedSynthesisCallBudget[] = [];
   const create = groundedSynthesis.createGroundedSynthesisCallBudget;
   vi.spyOn(groundedSynthesis, "createGroundedSynthesisCallBudget").mockImplementation(() => {

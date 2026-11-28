@@ -229,7 +229,7 @@ export async function seedGovernedPrDescriptionWindow(page: Page): Promise<void>
             x: 24,
             y: 24,
             w: 760,
-            h: 900,
+            h: 820,
             z: 20,
             cfg: { projectPath: "issue-3389-governed-project", headBranchName: "feature/x" },
             max: false,

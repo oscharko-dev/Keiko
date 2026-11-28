@@ -38,12 +38,18 @@ export interface SidecarPermissionEvent {
   readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  /** The tool call this ask holds back (opaque id), set by the server, never parsed from a line. */
+  readonly callId?: string | undefined;
   readonly actionId?: string | undefined;
   readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
   readonly targetPathHash?: string | undefined;
   readonly targetPath?: string | undefined;
+  /** The package folder a governed verification ask named; absent means the workspace root. */
+  readonly packageDir?: string | undefined;
+  /** The task branch a governed `git-branch` ask names, for the approval card only; never logged. */
+  readonly branchName?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
   readonly fileCount?: number | undefined;
   readonly addedLines?: number | undefined;
@@ -202,6 +208,8 @@ function optionalVerificationMetadata(
   record: Record<string, unknown>,
 ): Partial<SidecarPermissionEvent> {
   return {
+    ...optionalStringField(record, "packageDir"),
+    ...optionalStringField(record, "branchName"),
     ...optionalStringField(record, "executable"),
     ...optionalStringArrayField(record, "args"),
     ...optionalIntegerField(record, "passedCount"),

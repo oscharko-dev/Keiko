@@ -120,10 +120,12 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../routes.js";
-import { readyMessage, SSE_HEADERS, startSseHeartbeat } from "../sse.js";
+import { readyMessage, startSseHeartbeat, openSseResponse } from "../sse.js";
 import { writeSseFrame } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import { readJsonObject } from "../files.js";
+import { CODING_RUN_WRITING_MESSAGE, readJsonObject } from "../files.js";
+import { isNativeWorkspaceWriteRunning } from "../coding-runtime/nativeWriteGate.js";
+import { recordWriteGateBusy } from "../coding-runtime/opencodeRevert.js";
 import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { handleEditorLanguage } from "./languageRoutes.js";
@@ -2025,6 +2027,19 @@ function applyChangeset(
   deps?: EditorAgentRouteDeps,
   signal?: AbortSignal,
 ): EditorAgentActionResult {
+  // The commit writes synchronously, so it cannot wait in the native-write gate: while a runtime
+  // revert write of this workspace is queued or running it refuses instead (retryable), and being
+  // synchronous it cannot start beside one that begins afterwards.
+  if (isNativeWorkspaceWriteRunning(snapshot.workspaceRoot)) {
+    recordWriteGateBusy(undefined, actionCorrelationId(action));
+    return {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: action.actionId,
+      sessionId: action.sessionId,
+      status: "failed",
+      message: CODING_RUN_WRITING_MESSAGE,
+    };
+  }
   if (signal?.aborted === true || !claimRuntimeMutation(runtimeMutation, deps)) {
     return runtimeMutationLeaseDeniedResult(action);
   }
@@ -4240,7 +4255,7 @@ function openAgentSseStream(
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
   if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { openFrame: false });
   startSseHeartbeat(res);
   // Refused, the ready frame aborts the controller and destroys the stream like any event frame.
   writeSseFrame(res, readyMessage(), controller, undefined, correlationId);

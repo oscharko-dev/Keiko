@@ -5,6 +5,7 @@
 // single dimension that actually fired for the step. Pure — no IO; the caller passes the run's
 // network-enforcement attestation (false means this particular run had no enforcing attestation).
 
+import { VERIFICATION_RUNAWAY_OUTPUT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { ResourceLimitDecision, VerificationResourceLimits } from "./types.js";
 
 // Which dimension (if any) tripped for this step, so exactly one row is marked breached:true.
@@ -41,7 +42,9 @@ export function buildAppliedLimits(
     },
     {
       dimension: "output-size",
-      limit: limits.maxOutputBytes,
+      // The runaway ceiling: output volume below it never ends a step (it only trims the retained
+      // head and tail), so the ceiling is the limit a step can breach.
+      limit: limits.runawayOutputBytes ?? VERIFICATION_RUNAWAY_OUTPUT_BYTES,
       enforced: true,
       breached: breached === "output-size" ? true : undefined,
     },

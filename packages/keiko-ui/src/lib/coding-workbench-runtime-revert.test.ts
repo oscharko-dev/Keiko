@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_STATE_NAMES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+  CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -155,24 +160,22 @@ describe("createRevertMutation", () => {
 
   // #3904 AC3 (owner decision 2026-10-24): a succeeded run is admitted too; the server holds its
   // runtime for the post-completion undo window and refuses the request once that window closed.
-  it.each(["running", "paused", "succeeded"] as const)(
-    "is admitted against a %s run",
-    (runState) => {
-      expect(() =>
-        createRevertMutation("undo", stateWithRun(snapshot({ state: runState }))),
-      ).not.toThrow();
-    },
-  );
-
   it.each([
-    "starting",
-    "ready",
-    "awaiting-approval",
-    "stopping",
-    "failed",
-    "cancelled",
-    "recovery-required",
-  ] as const)("refuses to build a request for a run that is %s", (runState) => {
+    ...CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
+    ...CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+  ])("is admitted against a %s run", (runState) => {
+    expect(() =>
+      createRevertMutation("undo", stateWithRun(snapshot({ state: runState }))),
+    ).not.toThrow();
+  });
+
+  it.each(
+    CODING_WORKBENCH_RUNTIME_STATE_NAMES.filter(
+      (name) =>
+        !CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES.includes(name) &&
+        !CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES.includes(name),
+    ),
+  )("refuses to build a request for a run that is %s", (runState) => {
     expect(() =>
       createRevertMutation("undo", stateWithRun(snapshot({ state: runState }))),
     ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));

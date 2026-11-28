@@ -20,6 +20,7 @@ import {
   runStatusAnnouncement,
 } from "./codingWorkbenchLabels";
 import {
+  activeSubagentCount,
   formatRunDuration,
   nativeRunRetry,
   runSettledAt,
@@ -91,17 +92,28 @@ function ElapsedTime({
 // time beside it: the sentence is the visible text as well as the announcement.
 function RunPhase({
   phase,
+  state,
   t,
 }: {
   readonly phase: CodingWorkbenchRunPhase | null;
+  readonly state: CodingWorkbenchRuntimeState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (phase === null || runPhaseIsAnnounced(phase)) return null;
   return (
     <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-phase">
-      {t(`codingWorkbench.runStatus.phase.${phase}`)}
+      {phase === "subagents"
+        ? subagentsLabel(activeSubagentCount(state.run.value, state.events), t)
+        : t(`codingWorkbench.runStatus.phase.${phase}`)}
     </span>
   );
+}
+
+// "Waiting for 1 subagent" / "Waiting for N subagents": plural-aware like the failed-command count.
+function subagentsLabel(count: number, t: CodingWorkbenchTranslate): string {
+  return count === 1
+    ? t("codingWorkbench.runStatus.phase.subagents.one")
+    : t("codingWorkbench.runStatus.phase.subagents", { count });
 }
 
 function FailedCommands({
@@ -181,12 +193,54 @@ function ReadinessDetails({
   );
 }
 
+// U-31: a run Keiko's own shutdown cancelled says why it stopped and what to do, so a restart is
+// never mistaken for the person's own Stop. It makes no claim about changes in either case: an
+// approval can be released while the state still reads waiting, and parallel tool calls can run
+// beside a waiting one, so the waiting text asks the person to check the workspace.
+function StopCauseNote({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const cause = state.run.value?.stopCause;
+  if (cause === undefined) return null;
+  return (
+    <p className={styles.cmpRunStatusNote} data-testid="coding-runtime-stop-cause">
+      {t(`codingWorkbench.runStatus.stopCause.${cause}`)}
+    </p>
+  );
+}
+
+// The one honest sentence of a run whose check stayed red because the model, asked once, changed no
+// code (U-38): the check is named as still failing and the run as not having changed it.
+function VerificationGapDetailNote({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const detail = state.run.value?.verificationGapDetail;
+  if (detail === undefined) return null;
+  return (
+    <p className={styles.cmpRunStatusNote} data-testid="coding-runtime-verification-gap-detail">
+      {t(`codingWorkbench.runStatus.verificationGapDetail.${detail}`)}
+    </p>
+  );
+}
+
 export interface CodingWorkbenchRunStatusProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly researchGrant: CodingWorkbenchRuntimeResearchGrant | null;
   readonly phase: CodingWorkbenchRunPhase | null;
   /** The run's commands that did not finish successfully, from its live feed. */
   readonly failedCommandCount?: number;
+  /** A Build run settled successfully without one tool call (`answeredWithoutTools`). */
+  readonly answeredWithoutTools?: boolean;
+  /** A file change waits for the person's review while the run itself still reads running. */
+  readonly awaitingApproval?: boolean;
 }
 
 /**
@@ -208,6 +262,8 @@ export function CodingWorkbenchRunStatus({
   researchGrant,
   phase,
   failedCommandCount = 0,
+  answeredWithoutTools = false,
+  awaitingApproval = false,
 }: CodingWorkbenchRunStatusProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const elapsed = useRunElapsed(state);
@@ -221,14 +277,21 @@ export function CodingWorkbenchRunStatus({
           aria-live="polite"
           aria-atomic="true"
         >
-          {runStatusAnnouncement(state, t, researchGrant, phase)}
+          {runStatusAnnouncement(state, t, researchGrant, phase, awaitingApproval)}
         </span>
         <ElapsedTime elapsed={elapsed} t={t} />
         <ActiveAgent state={state} t={t} />
-        <RunPhase phase={phase} t={t} />
+        <RunPhase phase={phase} state={state} t={t} />
         <FailedCommands count={failedCommandCount} t={t} />
         <NativeRetry state={state} t={t} />
       </p>
+      {answeredWithoutTools ? (
+        <p className={styles.cmpRunStatusNote} data-testid="coding-runtime-answered-without-tools">
+          {t("codingWorkbench.runStatus.answeredWithoutTools")}
+        </p>
+      ) : null}
+      <StopCauseNote state={state} t={t} />
+      <VerificationGapDetailNote state={state} t={t} />
       <ReadinessDetails state={state} t={t} />
     </div>
   );

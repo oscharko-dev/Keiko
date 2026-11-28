@@ -128,20 +128,45 @@ describe("a failed command's row", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it("names Keiko as the origin of a refusal and says who declined it", () => {
+  it("names the person's decision, not Keiko's policy, on a step the person declined (U-36)", () => {
     const container = renderTools([
       shell("call-push", "denied", {
         failureOrigin: "keiko-refused",
         refusalCause: "approval-declined",
         command: { text: "git push origin HEAD", truncated: false },
       }),
+      shell("call-late", "denied", {
+        failureOrigin: "keiko-refused",
+        refusalCause: "approval-expired",
+        command: { text: "git push origin HEAD", truncated: false },
+      }),
+    ]);
+    const declined = row(container, 0);
+    expect(declined.dataset.failureOrigin).toBe("keiko-refused");
+    expect(declined).toHaveTextContent("Declined by you");
+    expect(declined).toHaveTextContent("Keiko did not run this step. You declined it.");
+    // Never the contradiction of blaming Keiko's policy for the person's own decision.
+    expect(declined).not.toHaveTextContent("Blocked by Keiko");
+    expect(declined).not.toHaveTextContent("Keiko did not allow this step");
+    const expired = row(container, 1);
+    expect(expired).toHaveTextContent("Not decided in time");
+    expect(expired).toHaveTextContent("Keiko did not run this step. Nobody decided in time.");
+    // A refusal is not something the agent retries around.
+    expect(declined).not.toHaveTextContent("can continue from it");
+    expect(expired).not.toHaveTextContent("can continue from it");
+  });
+
+  it("keeps naming Keiko when its policy refused a step without asking anyone", () => {
+    const container = renderTools([
+      shell("call-push", "denied", {
+        failureOrigin: "keiko-refused",
+        command: { text: "git push --force", truncated: false },
+      }),
     ]);
     const refused = row(container, 0);
-    expect(refused.dataset.failureOrigin).toBe("keiko-refused");
     expect(refused).toHaveTextContent("Blocked by Keiko");
-    expect(refused).toHaveTextContent("Keiko did not allow this step. You declined it.");
-    // A refusal is not something the agent retries around.
-    expect(refused).not.toHaveTextContent("can continue from it");
+    expect(refused).toHaveTextContent("Keiko did not allow this step.");
+    expect(refused).not.toHaveTextContent("Declined by you");
   });
 
   it("shows the message a tool handed the agent and a timeout as its own origin", () => {
@@ -214,6 +239,40 @@ describe("a failed command's row", () => {
     );
   });
 
+  // PERF-2: a result the runtime shortened for the model says so on the row, and the opened row
+  // says how much of it the model saw.
+  it("marks a result the runtime shortened for the model, with the lines the model saw", () => {
+    const container = renderTools([
+      shell("call-long", "succeeded", {
+        exitCode: 0,
+        command: { text: "npm test", truncated: false },
+        outputShortened: { keptBytes: 51_200, keptLines: 380, totalLines: 200_000 },
+      }),
+    ]);
+    expect(row(container, 0)).toHaveTextContent("Output shortened for the model");
+    expect(row(container, 0)).toHaveTextContent(
+      "The model saw the first 380 of 200000 lines of this result",
+    );
+    const unshortened = renderTools([
+      shell("call-short", "succeeded", {
+        exitCode: 0,
+        command: { text: "npm run build", truncated: false },
+      }),
+    ]);
+    expect(row(unshortened, 0)).not.toHaveTextContent("shortened for the model");
+  });
+
+  it("marks a shortened result whose line counts are unknown", () => {
+    const container = renderTools([
+      shell("call-long", "succeeded", {
+        exitCode: 0,
+        command: { text: "npm test", truncated: false },
+        outputShortened: { keptBytes: 51_200 },
+      }),
+    ]);
+    expect(row(container, 0)).toHaveTextContent("The model saw only the start of this result");
+  });
+
   it("speaks German", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
@@ -260,6 +319,42 @@ describe("a successful command's row", () => {
       }),
     ]);
     expect(row(container, 0)).not.toHaveTextContent("Took");
+  });
+});
+
+describe("a subagent's row (U-52)", () => {
+  const SUBAGENT: CodingSafeActivityTool = {
+    callId: "call-sub",
+    tool: "subagent",
+    state: "succeeded",
+    occurredAt: AT,
+    presentation: {
+      agentName: { text: "explore", truncated: false },
+      taskDescription: { text: "Count test files", truncated: false },
+      taskPrompt: {
+        text: "Count every *.test.ts file under src and report the total.",
+        truncated: false,
+      },
+    },
+  };
+
+  it("names the agent and the task in the row and shows the prompt when opened", () => {
+    const container = renderTools([SUBAGENT]);
+    const found = row(container, 0);
+    expect(found.querySelector("summary")).toHaveTextContent("Subagent");
+    expect(found.querySelector("summary")).toHaveTextContent("explore — Count test files");
+    expect(within(found).getByRole("figure", { name: "Prompt" })).toHaveTextContent(
+      "Count every *.test.ts file under src",
+    );
+  });
+
+  it("says the prompt left the live view when the feed shed it", () => {
+    const { taskPrompt: _prompt, ...facts } = SUBAGENT.presentation ?? {};
+    const container = renderTools([
+      { ...SUBAGENT, presentation: { ...facts, detailOmitted: true } },
+    ]);
+    expect(row(container, 0)).toHaveTextContent("explore — Count test files");
+    expect(within(row(container, 0)).queryByRole("figure", { name: "Prompt" })).toBeNull();
   });
 });
 

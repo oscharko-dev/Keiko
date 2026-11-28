@@ -408,25 +408,26 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
   // tester runs them; the outcome must still follow what the run itself verified.
   {
     id: "skip-check",
-    title: "never reports success when the run skips its check after the edit",
-    acceptanceCase: unverified("supervised-coding", "fixed", "skip-check"),
+    title: "settles the reported outcome, naming the gap in the log, when the run skips its check",
+    acceptanceCase: {
+      ...unverified("supervised-coding", "fixed", "skip-check"),
+      expected: "succeeded",
+    },
     check: (observed): void => {
-      expectNotVerified(observed, "supervised-coding", {
-        testsPassOutsideKeiko: true,
-        continuation: "no-failed-check",
-      });
+      expectNoCheckAfterEdit(observed, "supervised-coding");
       expect(observed.verificationSummaries).toEqual(["test:failed"]);
     },
   },
   {
     id: "stale-check",
-    title: "never counts a check that passed before the final edit",
-    acceptanceCase: unverified("autonomous-delivery", "fixed", "stale-check"),
+    title:
+      "never counts a check that passed before the final edit, and settles the reported outcome",
+    acceptanceCase: {
+      ...unverified("autonomous-delivery", "fixed", "stale-check"),
+      expected: "succeeded",
+    },
     check: (observed): void => {
-      expectNotVerified(observed, "autonomous-delivery", {
-        testsPassOutsideKeiko: true,
-        continuation: "no-failed-check",
-      });
+      expectNoCheckAfterEdit(observed, "autonomous-delivery");
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:passed"]);
     },
   },
@@ -540,8 +541,9 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       governed: "after-check",
     },
     check: (observed): void => {
-      // The refusal leaves the failing shell check the run's last word: Keiko still sends the
-      // model back to repair it and never settles the run as blocked by the refused verifier.
+      // The refusal leaves the failing shell check the run's last word: the check was red before
+      // the edit, so no repair phase starts (target-unproven), and the refused verifier never
+      // settles the run as blocked.
       expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
       expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
       expect(observed.verificationBlockedReason).toBeUndefined();
@@ -720,7 +722,12 @@ function expectNotVerified(
   mode: AcceptanceMode,
   expected: {
     readonly testsPassOutsideKeiko: boolean;
-    /** `repair` (the default) when a check ran and failed after the edit; else why none was sent. */
+    /**
+     * Why the run's one continuation did or did not start. `target-unproven` (the default): the
+     * check was red before the edit and never passed in the run, so nothing proves the run broke it
+     * and no automatic write phase starts (c0fccaad1). `repair`: the check passed earlier in the run
+     * and failed after a later edit, so the model is sent back to repair it.
+     */
     readonly continuation?: "repair" | VerificationContinuationSkipReason;
     readonly projectCheckCount?: number;
   },
@@ -732,12 +739,13 @@ function expectNotVerified(
   expect(observed.editLanded, context).toBe(true);
   if (expected.testsPassOutsideKeiko) expect(observed.testerCheckExitCode, context).toBe(0);
   else expect(observed.testerCheckExitCode, context).toBeGreaterThan(0);
-  // #4491: a check that ran after the edit and failed sends the model back to repair it, up to the
-  // bound, and the next end of the run is skipped as already continued. Without a failed check to
-  // repair (none ran after the edit, or one was blocked) no continuation runs, and the line names
-  // why. Either way the run ends not evidenced.
+  // #4491: a check the run itself broke (it passed earlier in the run) sends the model back to
+  // repair it, up to the bound, and the next end of the run is skipped as already continued. A red
+  // check that never passed in the run is named to the person instead (`target-unproven`), and so
+  // is every other gap (none ran, one was blocked). Either way the run ends not evidenced and never
+  // succeeds.
   expect(VERIFICATION_CONTINUATION_MAX).toBeGreaterThan(0);
-  const continuation = expected.continuation ?? "repair";
+  const continuation = expected.continuation ?? "target-unproven";
   expect(observed.continuations, context).toEqual(
     continuation === "repair"
       ? [
@@ -748,6 +756,20 @@ function expectNotVerified(
       : [`skipped:${continuation}`, "not-evidenced"],
   );
   expectEveryCase(observed, mode, expected.projectCheckCount);
+}
+
+// Follows the 2026-11-28 owner decision: a run whose only gap is that no check ran after its last
+// change keeps the outcome its turn reported. It fails no more and carries no failure code; the
+// Activity Log names the gap (a skipped continuation, then the not-evidenced line).
+function expectNoCheckAfterEdit(observed: AcceptanceObservation, mode: AcceptanceMode): void {
+  const context = JSON.stringify(observed);
+  expect(observed.state, context).toBe("succeeded");
+  expect(observed.settledState, context).toBe("succeeded");
+  expect(observed.failureCode, context).toBeUndefined();
+  expect(observed.editLanded, context).toBe(true);
+  expect(observed.testerCheckExitCode, context).toBe(0);
+  expect(observed.continuations, context).toEqual(["skipped:no-failed-check", "not-evidenced"]);
+  expectEveryCase(observed, mode);
 }
 
 function continuationWord(state: unknown, skipReason: unknown): string {
@@ -806,6 +828,8 @@ interface RepositorySurroundings {
 
 interface PreparedAcceptanceCase {
   readonly root: string;
+  /** The repository the workspace was selected from: a start states it as the expected workspace. */
+  readonly repository: string;
   readonly surroundings?: RepositorySurroundings;
   readonly owners: FunctionalTaskWorkspaceOwners;
   /** The folder the run works in, which the tester checks afterwards. */
@@ -855,7 +879,7 @@ async function observeAcceptanceCase(
   // case holds the person's home around the run alone and puts the real one back afterwards.
   const run = await aroundRun(prepared, acceptanceCase, async () => {
     const served = await serveAcceptance(prepared, script);
-    const runId = await startAcceptanceRun(served, acceptanceCase);
+    const runId = await startAcceptanceRun(served, acceptanceCase, prepared.repository);
     const editDone = (): boolean => readFileSync(target, "utf8") !== prepared.original;
     const asks = await settleAnsweringEveryAsk(
       served.orchestrator,
@@ -1091,6 +1115,7 @@ async function prepareAcceptanceCase(
   const surroundings = await prepareRepositorySurroundings(root, acceptanceCase);
   return {
     root,
+    repository,
     ...(surroundings === undefined ? {} : { surroundings }),
     owners,
     runRoot,
@@ -1273,11 +1298,13 @@ async function serveAcceptance(
 async function startAcceptanceRun(
   served: FunctionalDiscoveryServer,
   acceptanceCase: AcceptanceCase,
+  repository: string,
 ): Promise<string> {
   const started = await functionalPost(served.baseUrl, "/api/coding-workbench/runtime/runs", {
     requestId: `acceptance-${acceptanceCase.project}-${acceptanceCase.mode}-${String(acceptanceCase.login)}`,
     taskIntent: taskOf(acceptanceCase.project),
     requestedMode: acceptanceCase.mode,
+    expectedWorkspace: { root: repository },
   });
   const text = await started.clone().text();
   expect(started.status, text).toBe(200);

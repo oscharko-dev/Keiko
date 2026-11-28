@@ -78,6 +78,8 @@ export type {
   CodingWorkbenchRuntimeStartRefusalCode,
 } from "./coding-workbench-runtime-constants.js";
 export const CODING_WORKBENCH_TASK_INTENT_MAX_CHARS = 65_536;
+/** The longest a native Coding run may last, in minutes (owner decision 2026-11-24). */
+export const MAX_RUNTIME_MAX_DURATION_MINUTES = 480;
 
 export type CodingWorkbenchLifecycleCommand = "start" | "stop" | "takeover" | "recover";
 export const CODING_WORKBENCH_LIFECYCLE_COMMANDS: readonly CodingWorkbenchLifecycleCommand[] =

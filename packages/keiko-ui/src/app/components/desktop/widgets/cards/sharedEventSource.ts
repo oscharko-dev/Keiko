@@ -7,6 +7,7 @@ import {
 import {
   acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
+  sharedStreamConnectionBudget,
   subscribeBrowserStreamCapacity,
 } from "../../../../../lib/browser-stream-capacity";
 import { secureRandomInt } from "../../../../../lib/secure-random";
@@ -60,9 +61,12 @@ const RECONNECT_JITTER_MS = 500;
 let visibilityListenerInstalled = false;
 let capacityUnsubscribe: (() => void) | undefined;
 let nextSourceGeneration = 0;
-// Leave connections for finite reads, diagnostics, the run stream and development HMR.
-const MAX_SHARED_CONNECTIONS = 3;
 const STREAM_LEASE_MS = 5_000;
+// Background metadata (editor settings) only needs change notices and re-reads its whole snapshot
+// each time its stream reopens, so a rotation costs a request. It therefore changes hands far less
+// often than the essential streams do (U-37: a 5 s rotation was a steady request every 2 s).
+const BACKGROUND_LEASE_TICKS = 6;
+let budgetTicks = 0;
 let budgetTimer: number | undefined;
 const budgetCursors = { essential: 0, background: 0 };
 
@@ -326,40 +330,51 @@ function retainLeasedEntries(entries: readonly SharedEventSourceEntry[]): Shared
 function selectBudgetEntries(
   entries: readonly SharedEventSourceEntry[],
   order: typeof rotateEntries,
+  backgroundOrder: typeof rotateEntries = order,
 ): Set<SharedEventSourceEntry> {
   const pinned = entries.filter((entry) => !replayableEntry(entry) && hasLease(entry));
   const essential = entries.filter(
     (entry) => entry.essentialRefCount > 0 && !pinned.includes(entry),
   );
   const background = entries.filter((entry) => entry.essentialRefCount === 0);
-  const essentialSlots = Math.min(MAX_SHARED_CONNECTIONS - pinned.length, essential.length);
-  const backgroundSlots = MAX_SHARED_CONNECTIONS - pinned.length - essentialSlots;
+  const essentialSlots = Math.min(sharedStreamConnectionBudget() - pinned.length, essential.length);
+  const backgroundSlots = sharedStreamConnectionBudget() - pinned.length - essentialSlots;
   return new Set(
     [
       ...pinned,
       ...order(essential, essentialSlots, "essential"),
-      ...order(background, backgroundSlots, "background"),
-    ].slice(0, MAX_SHARED_CONNECTIONS),
+      ...backgroundOrder(background, backgroundSlots, "background"),
+    ].slice(0, sharedStreamConnectionBudget()),
   );
+}
+
+// Which entries change hands on this pass: essential streams every lease tick, background metadata
+// only every `BACKGROUND_LEASE_TICKS`-th one.
+function budgetOrders(mode: "retain" | "rotate"): [typeof rotateEntries, typeof rotateEntries] {
+  if (mode === "retain") return [retainLeasedEntries, retainLeasedEntries];
+  return [
+    rotateEntries,
+    budgetTicks % BACKGROUND_LEASE_TICKS === 0 ? rotateEntries : retainLeasedEntries,
+  ];
 }
 
 // Keep healthy leases stable between contention ticks. Essential streams precede recoverable
 // background metadata; active streams without replay retain their connection until completion.
 function refreshStreamBudget(mode: "retain" | "rotate" = "retain"): void {
   const entries = eligibleEntries();
-  const selected = selectBudgetEntries(
-    entries,
-    mode === "rotate" ? rotateEntries : retainLeasedEntries,
-  );
+  const selected = selectBudgetEntries(entries, ...budgetOrders(mode));
   for (const entry of sourcesByUrl.values()) {
     if (!selected.has(entry) && hasLease(entry)) suspendEntry(entry);
   }
   for (const entry of selected) openEntrySource(entry);
-  if (entries.length <= MAX_SHARED_CONNECTIONS) {
+  if (entries.length <= sharedStreamConnectionBudget()) {
     clearBudgetTimer();
     return;
   }
-  budgetTimer ??= window.setInterval(() => refreshStreamBudget("rotate"), STREAM_LEASE_MS);
+  budgetTimer ??= window.setInterval(() => {
+    budgetTicks += 1;
+    refreshStreamBudget("rotate");
+  }, STREAM_LEASE_MS);
 }
 
 function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
@@ -545,6 +560,7 @@ export function resetSharedEventSourcesForTests(): void {
   clearBudgetTimer();
   budgetCursors.essential = 0;
   budgetCursors.background = 0;
+  budgetTicks = 0;
   nextSourceGeneration = 0;
   removeVisibilityListenerIfIdle();
 }

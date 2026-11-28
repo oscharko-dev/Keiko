@@ -39,6 +39,26 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > fall back to unsigned commits, or report success for a commit GitHub branch protection will reject.
 > Git refuses such a commit before HEAD moves, so the verified commit reports it as
 > `failed / signing-failed`, never as an uncertain outcome the model would retry (#4546).
+>
+> **Clarified by the signing-follows-configuration repair (2026-11-27, #4491).** "Git's configured
+> signing flow" means Git's effective configuration for the repository. Keiko signs, for both the
+> ordinary `git commit` and the verified `git commit-tree`, when `commit.gpgsign` is true, read as a
+> Git boolean through the same identity lane the commit runs in (system, global, repository and
+> included scopes), or when the trusted branch-protection read for the target branch says
+> signatures are required (the verdict is read on the server at execution time, never taken from
+> model input; unknown, unavailable or no remote is "not required"). When neither applies, Keiko
+> commits unsigned exactly as Git would for that person, so a machine that never set up signing can
+> still deliver. It never passes `--no-gpg-sign`, so no hook or later configuration is overridden,
+> and it never falls back to an unsigned commit after a configured or required signer fails: that
+> stays `failed / signing-failed`. A configuration value that cannot be read or is malformed fails
+> closed toward signing, and the closed class of the read failure is logged with its frames and
+> cause chain. The decision is logged as the closed `signing` field (`configured`,
+> `required-by-branch-protection`, `not-configured`, `not-configured-protection-unavailable`,
+> `unknown-fail-closed`) on `git.verified-commit` and `git.delivery.mutation.completed`; the
+> fourth value records that the branch-protection read could not answer, so an unsigned commit that
+> a protected branch later rejects at push is explained from the log. The 2026-09-15 amendment's
+> "must not suppress signing" is read through this clarification: Keiko follows the repository's own
+> Git configuration like plain Git and never adds `--no-gpg-sign`.
 
 ## Context
 
@@ -407,6 +427,14 @@ Tool `output` strings are redacted at two points:
    returns a constant truncated-output marker instead of a partial raw prefix, so a secret split
    across the cap boundary cannot leak.
 
+   A policy with `outputOverflow: "retain-head-tail"` (governed verification, amended 2026-11-27)
+   does not end the command for output volume: `maxOutputBytes` is the size of the retained window,
+   each stream keeps a bounded head and tail, and the middle is counted and dropped
+   (`retainedByteCount`, `discardedByteCount`). The cut is made on line boundaries and a cut side
+   without a newline is dropped whole, so a credential, which never spans a newline, lies wholly in
+   the kept text (and is redacted) or wholly in the dropped text. Only bytes past
+   `runawayOutputBytes` end the command, with the constant marker above and reason `output-cap`.
+
    Internal typed Git readers use the existing `credentials-only` output scrub when ordinary
    environment values overlap their protocol or configured identity: remote URL reads and
    machine-parsed refs, revisions, index/tree entries, commit identities and GitHub branch, pull
@@ -416,7 +444,17 @@ Tool `output` strings are redacted at two points:
    declared credential values and built-in secret patterns remain scrubbed, and child environment
    isolation is unchanged. Machine metadata containing a redaction marker is rejected before
    parsing or hashing; corrupted identities must never become verification facts or permit a push.
-   The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the same scrub for
+   Those machine-parsed readers run with `outputScrub: "machine-metadata"` (U-25, 2026-11-28): the
+   same credential scrub, but without the full redactor's source-language projection. That
+   projection infers code or YAML from the text itself and fails closed by masking the rest of the
+   output; on a ~300-file index listing it hit a stack overflow in the YAML pass, and a tracked
+   file named like source (`class A {`) triggers it deterministically, so the metadata read was
+   rejected and a healthy commit could never be proved. Most reads on this lane are parsed and
+   never shown; the staged paths of the commit draft (seen by the model) and the branch and remote
+   names of the worktree snapshot (shown in the action sheet) are shown, and keep the credential
+   floor that content a person reads and the model receives keeps. Nothing on this lane is
+   evidence or Activity Log content. Content-bearing reads keep the full redactor.
+   The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the `credentials-only` scrub for
    one reason: it runs only a fixed, repository-independent Node metadata script whose output is
    bounded to 1 KiB and parsed against a closed key set, and a host that exports `NODE_VERSION` (the
    official Node container image does) would otherwise have its Node version redacted and the target

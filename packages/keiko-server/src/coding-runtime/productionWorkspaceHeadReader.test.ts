@@ -1,23 +1,28 @@
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   closeSync,
   fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { gitZeroObjectId, readGitHeadState } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import {
+  readProductionWorkspaceGitState,
   readProductionWorkspaceHead,
   type ProductionWorkspaceHeadFileSystem,
 } from "./productionWorkspaceHeadReader.js";
@@ -289,5 +294,153 @@ describe("production workspace HEAD reader worktree layouts", () => {
     expect(
       readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
     ).toBeUndefined();
+  });
+
+  describe("an unborn branch (#4491)", () => {
+    function unbornRepo(): string {
+      const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-unborn-"));
+      roots.push(root);
+      git(root, ["init", "-q", "-b", "main"]);
+      return root;
+    }
+
+    it("reads as the zero object id with the branch, never an empty string", () => {
+      const root = unbornRepo();
+      expect(readProductionWorkspaceGitState(root, root)).toMatchObject({
+        head: "0".repeat(40),
+        headState: "unborn",
+        branch: "main",
+      });
+      expect(readProductionWorkspaceHead(root, root)).toBe("0".repeat(40));
+    });
+
+    it("takes the zero id the tools reader reports for a SHA-256 repository", async () => {
+      const root = unbornRepo();
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(root, ["init", "-q", "-b", "main", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories; the SHA-1 case above still holds.
+      }
+      const workspace = {
+        root,
+        selectedRoot: root,
+        name: "test",
+        version: undefined,
+        testFramework: "vitest",
+        sourceDirs: [],
+        testDirs: [],
+        languages: [],
+        ignoreLines: [],
+      } as const;
+      const tools = await readGitHeadState({ workspace });
+      expect(tools).toEqual({ kind: "unborn", branch: "main", objectIdLength: 64 });
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(64));
+    });
+
+    // The same repository read through every spelling Git accepts for the format: the reader's
+    // stand-in length must follow what Git itself reports, never the raw text of one line.
+    it.each([
+      ["objectFormat = sha256", 64],
+      ['objectFormat = "sha256"', 64],
+      ["objectformat = sha256 # a comment", 64],
+      ["objectformat = sha256 ; a comment", 64],
+      ["objectformat = sha1", 40],
+      // Git's trailing-backslash line continuation joins the value across physical lines.
+      ["objectformat = sha\\\n256", 64],
+      ['objectformat = "sha\\\n256"', 64],
+      ["objectformat = sha\\\n1", 40],
+      // A comment ends at its line end: a backslash there continues nothing.
+      ["# note \\\nobjectformat = sha256", 64],
+      ["; note \\\nobjectformat = sha256", 64],
+      ["# note \\\\\nobjectformat = sha256", 64],
+      ['objectformat = "sha256" # note \\\n', 64],
+    ] as const)("keeps the unborn identity of a SHA-256 repository for `%s`", (line, length) => {
+      const root = unbornRepo();
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(root, ["init", "-q", "-b", "main", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories.
+      }
+      const configPath = join(root, ".git", "config");
+      const original = readFileSync(configPath, "utf8");
+      const respelled = original.replace(/^\s*objectformat\s*=.*$/imu, `\t${line}`);
+      expect(respelled).not.toBe(original);
+      writeFileSync(configPath, respelled);
+      const format = git(root, ["rev-parse", "--show-object-format"]).trim();
+      expect(format === "sha256" ? 64 : 40).toBe(length);
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(length));
+    });
+
+    // `[extensions] objectformat = sha256` on one line is valid Git config; Git is the authority.
+    it.each([
+      ["[extensions] objectformat = sha256", 64],
+      ['[Extensions]   objectFormat = "sha256"  # one line', 64],
+      ["[extensions] objectformat = sha1", 40],
+    ] as const)("reads `%s` as Git does", (header, length) => {
+      const root = unbornRepo();
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(root, ["init", "-q", "-b", "main", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories.
+      }
+      const configPath = join(root, ".git", "config");
+      const original = readFileSync(configPath, "utf8");
+      const respelled = original.replace(/^\[extensions\]\s*\n\s*objectformat\s*=.*$/imu, header);
+      expect(respelled).not.toBe(original);
+      writeFileSync(configPath, respelled);
+      const format = git(root, ["rev-parse", "--show-object-format"]).trim();
+      expect(format === "sha256" ? 64 : 40).toBe(length);
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(length));
+    });
+
+    it("ignores an objectformat key outside the extensions section", () => {
+      const root = unbornRepo();
+      const configPath = join(root, ".git", "config");
+      appendFileSync(configPath, '[other]\n\tobjectformat = sha256\n[remote "extensions"]\n');
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(40));
+    });
+
+    it("stays born once the first commit exists, and reads a packed branch as born", () => {
+      const root = unbornRepo();
+      git(root, ["config", "user.email", "runtime@keiko.example"]);
+      git(root, ["config", "user.name", "Keiko Runtime"]);
+      writeFileSync(join(root, "file.txt"), "bounded");
+      git(root, ["add", "file.txt"]);
+      git(root, ["commit", "-q", "-m", "fixture"]);
+      expect(readProductionWorkspaceGitState(root, root)?.headState).toBe("born");
+      git(root, ["pack-refs", "--all"]);
+      expect(readProductionWorkspaceGitState(root, root)).toMatchObject({
+        headState: "born",
+        head: git(root, ["rev-parse", "HEAD"]),
+      });
+    });
+
+    it("is not unborn when the branch ref is a directory", () => {
+      const root = unbornRepo();
+      mkdirSync(join(root, ".git", "refs", "heads", "main"));
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
+
+    it("is not unborn when a component of the ref path is a file (ENOTDIR)", () => {
+      const root = unbornRepo();
+      writeFileSync(join(root, ".git", "refs", "heads", "a"), "x\n");
+      writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/a/b\n");
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
+
+    it("is not unborn when the branch ref is a dangling symbolic link", () => {
+      const root = unbornRepo();
+      symlinkSync(join(root, "missing-target"), join(root, ".git", "refs", "heads", "main"));
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
+
+    it("is not unborn for a HEAD naming something other than a local branch", () => {
+      const root = unbornRepo();
+      writeFileSync(join(root, ".git", "HEAD"), "ref: refs/remotes/origin/main\n");
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
   });
 });

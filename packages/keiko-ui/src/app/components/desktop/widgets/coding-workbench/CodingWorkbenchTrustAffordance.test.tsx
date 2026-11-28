@@ -25,8 +25,8 @@ vi.mock("@/lib/client-diagnostics", () => ({
   reportClientDiagnostic: diagnostic,
 }));
 
-const ALLOW = "Allow package scripts for verification";
-const RUN_WAITING_NOTICE = /This run is paused/u;
+const ALLOW = "Trust this repository's build files";
+const RUN_WAITING_NOTICE = /This run is waiting for you/u;
 
 function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTrustStatus {
   return {
@@ -126,7 +126,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
     await waitFor(() => expect(mutateTrust).toHaveBeenNthCalledWith(2, "/worktree-a", "grant"));
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: /Allow package scripts/u }),
+        screen.queryByRole("button", { name: /Trust this repository's build files/u }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -145,9 +145,15 @@ describe("CodingWorkbenchTrustAffordance", () => {
     );
 
     const action = await screen.findByRole("button", { name: ALLOW });
+    const alert = screen.getByRole("alert");
+    const announced = alert.textContent;
     await user.click(action);
 
     expect(await screen.findByRole("button", { name: "Allowing…" })).toBeDisabled();
+    // The busy label belongs to the button: the announced notice is the same node with the same text.
+    expect(screen.getByRole("alert")).toBe(alert);
+    expect(alert.textContent).toBe(announced);
+    expect(alert).not.toContainElement(screen.getByRole("button"));
     resolveMutate(status("/repo-a", "trusted"));
   });
 
@@ -214,6 +220,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
       <CodingWorkbenchTrustAffordance binding={binding()} pauseReason="workspace-script-trust" />,
     );
 
+    expect(await screen.findByRole("alert")).toHaveTextContent(RUN_WAITING_NOTICE);
     expect(await screen.findByText(RUN_WAITING_NOTICE)).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: ALLOW })).toBeEnabled();
   });

@@ -210,6 +210,9 @@ export function MutationOutcome({
       >
         {outcome.actionKind}: {STATUS_LABEL[outcome.status]}
         {signingFailure ? ` ${tUi("gitClientWindow.ui.commitSigningRecovery")}` : null}
+        {outcome.executionNote === "recorded-despite-late-error"
+          ? ` ${tUi("gitClientWindow.ui.commitLateError")}`
+          : null}
       </output>
       {codes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: 18, font: "400 11px var(--font-ui)" }}>

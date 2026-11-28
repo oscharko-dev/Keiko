@@ -929,7 +929,7 @@ otherwise keep working in the folder with edits, commands and verification.
 A run that has just passed verification asks to stage its changes and does not deliver. The activity
 log carries `op: "git.runtime-action"` with `phase: "stage-propose"` on the run's correlation id and
 one of three shapes: `state: "blocked"` with `reason: "selection-unreviewed"` (or `buffers-dirty`,
-`proposal-limit`) and the request's `pathCount`; `state: "refused"` with a `reason` naming the
+`proposal-limit`) and the request's `requestedCount` (a refusal before any expansion carries no `pathCount`); `state: "refused"` with a `reason` naming the
 condition (`guard-rejected`, `signal-aborted`, `run-not-live`, `mode-unavailable`,
 `proposal-unknown`); or `state: "failed"` at warn level with `errorKind: "internal"`, the thrown
 class and, when the helper threw a closed literal, its `code` (for example
@@ -944,9 +944,11 @@ Before 2026-09-10 every one of these surfaced as `state: "unavailable"` and reac
 **Root Cause**
 
 The runtime Git service admits a stage selection against Git's own change list: every requested path
-must be an exact file path the list names as a pending change (or as fully staged already). A path
-that is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list refuses
-the whole selection as `selection-unreviewed`. Until run 13 the admission check reused the
+must be an exact file path the list names as a pending change (or as fully staged already), or a
+directory (`"."` for the whole workspace) with at least one pending change below it, which expands to
+those files (U-28; `pathCount` on the line is the expanded file count). A path that is unchanged,
+absent or in conflict, a directory with no pending change, a selection hidden behind a truncated
+change list, or one above 10,000 files refuses the whole selection as `selection-unreviewed`. Until run 13 the admission check reused the
 model-facing diff reader instead and refused whenever that reader had truncated its response — a
 byte budget for a response, not a property of the selection — so eight ordinary files could not be
 staged at all.

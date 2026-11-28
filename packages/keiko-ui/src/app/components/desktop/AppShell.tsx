@@ -1,6 +1,7 @@
 "use client";
 
-import { startingProjectRoot } from "./windows/startingProjectRoot";
+import { decideGitReopen, startingProjectRoot } from "./windows/startingProjectRoot";
+import { useRememberedGitRoot } from "./windows/useRememberedGitRoot";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
@@ -95,7 +96,12 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
-import type { ChatBindingTarget, ChatUnbindTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
+import type {
+  ChatBindingTarget,
+  ChatUnbindTarget,
+  ToolToggleOutcome,
+  WorkspaceApi,
+} from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
@@ -444,33 +450,68 @@ function panelBindingRoot(
   return panel === "search" ? resolveSearchRoot(null, win) : gitWindowRoot(win);
 }
 
-export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefined): void {
+export function openOrFocusSearchWindow(
+  api: WorkspaceApi,
+  root: string | undefined,
+): string | null {
   // WorkspaceApi.add is the singleton-aware open/focus operation. Passing an explicit undefined
   // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
-  api.add("search", { root });
-  dispatchWorkspaceSearchFocus();
+  // It answers null when the window limit refused the window: nothing opened, nothing to focus.
+  const id = api.add("search", { root });
+  if (id !== null) dispatchWorkspaceSearchFocus();
+  return id;
 }
 
-function openShellTool(
+// Body-free: only the closed reason is reported, never the repository path, and once per
+// remembered root rather than on every rail click.
+const reportedGitReopenFallbacks = new Set<string>();
+
+function reopenGitRoot(
+  remembered: string | undefined,
+  projects: Parameters<typeof decideGitReopen>[1],
+  fallback: string | undefined,
+): string | undefined {
+  const decision = decideGitReopen(remembered, projects, fallback);
+  if (
+    remembered !== undefined &&
+    decision.fallbackReason !== undefined &&
+    !reportedGitReopenFallbacks.has(remembered)
+  ) {
+    reportedGitReopenFallbacks.add(remembered);
+    reportClientDiagnostic(
+      `Git window reopened on the active repository (${decision.fallbackReason}).`,
+    );
+  }
+  return decision.root;
+}
+
+function pushPanelToggleUnlessNoop(
+  undoStack: WorkspaceUndoStackApi,
+  outcome: ToolToggleOutcome,
+  action: WorkspaceUiAction,
+): void {
+  if (outcome !== "raise" && outcome !== "blocked") undoStack.push(action);
+}
+
+export function openShellTool(
   api: WorkspaceApi,
   panel: WindowType,
   opensSearch: boolean,
   opensProjectGit: boolean,
   searchRoot: string | undefined,
   projectRoot: string | undefined,
-): void {
+): ToolToggleOutcome {
   if (opensSearch) {
-    openOrFocusSearchWindow(api, searchRoot);
-    return;
+    return openOrFocusSearchWindow(api, searchRoot) === null ? "blocked" : "open";
   }
   if (opensProjectGit) {
-    api.add("governedGit", {
+    const id = api.add("governedGit", {
       projectPath: projectRoot,
       rootBinding: projectRoot === undefined ? undefined : "coding-repository",
     });
-    return;
+    return id === null ? "blocked" : "open";
   }
-  api.toggleTool(panel);
+  return api.toggleTool(panel);
 }
 
 // GEN-PERF-WORKSPACE-008 — cheap signature of exactly the window fields the
@@ -1807,7 +1848,6 @@ function AppShellInner(): ReactNode {
   const shortcutRoot = activeWorkspace.activeRoot ?? startingRoot;
   // Git is repository control, not task-worktree content. Opening it from shell chrome must therefore
   // use the selected repository root and must not borrow `activeWorkspace.activeRoot`.
-  const repositoryShortcutRoot = startingRoot;
   const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
     EMPTY_SHELL_SHORTCUT_STATE,
   );
@@ -3063,6 +3103,10 @@ function AppShellInner(): ReactNode {
   );
   const undoStack = useUndoStack({ apply: applyUndoAction });
 
+  // W-4: reopening Git returns to the repository the person last chose in a Git window; the starting
+  // project is only the fallback (gitReopenRoot owns the rule, ADR-0027).
+  const rememberedGitRoot = useRememberedGitRoot(ws.wins);
+  const sessionProjects = session.projects;
   const onTool = useCallback(
     (id: string): void => {
       if (!(id in WIN_TYPES)) return;
@@ -3080,10 +3124,20 @@ function AppShellInner(): ReactNode {
       }
       let projectRoot: string | undefined;
       if (panel === "governedGit") {
-        projectRoot = before ? panelBindingRoot(ws.wins, "governedGit") : repositoryShortcutRoot;
+        projectRoot = before
+          ? panelBindingRoot(ws.wins, "governedGit")
+          : reopenGitRoot(rememberedGitRoot.current, sessionProjects, startingRoot);
       }
-      openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
-      undoStack.push({
+      const outcome = openShellTool(
+        ws.api,
+        panel,
+        opensSearch,
+        opensProjectGit,
+        searchRoot,
+        projectRoot,
+      );
+      // A raise or a blocked click opened and closed nothing, so there is nothing for undo to reverse.
+      pushPanelToggleUnlessNoop(undoStack, outcome, {
         kind: "ui.panel.toggle",
         panel,
         before,
@@ -3092,7 +3146,16 @@ function AppShellInner(): ReactNode {
         ...(panel === "governedGit" ? { projectRoot } : {}),
       });
     },
-    [activeWorkspace.activeRoot, repositoryShortcutRoot, searchOwner, undoStack, ws.api, ws.wins],
+    [
+      activeWorkspace.activeRoot,
+      rememberedGitRoot,
+      searchOwner,
+      sessionProjects,
+      startingRoot,
+      undoStack,
+      ws.api,
+      ws.wins,
+    ],
   );
 
   useEffect(() => {

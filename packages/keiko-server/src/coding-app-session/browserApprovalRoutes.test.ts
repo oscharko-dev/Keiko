@@ -265,6 +265,7 @@ describe("browser approval on the real mounted BFF", () => {
     expect(events[0]?.extra).toEqual({
       action: "inspect",
       outcome: "accepted",
+      reader: "with-session",
       sessionCount: 3,
       pendingRequestCount: 0,
       sessionApprovalCount: 1,
@@ -273,6 +274,51 @@ describe("browser approval on the real mounted BFF", () => {
       loss: "none",
     });
     expect(JSON.stringify(events)).not.toContain(owner);
+  });
+  // Lab O-9: `unavailable` and `accepted` alternated about every 30 s because a connected page and a
+  // browser without a session both polled `inspect`. A poll that sees what it saw before is not a
+  // state change; each distinct reader and each real change still leaves one line.
+  it("writes one inspect line per reader and per change, not one per poll", async () => {
+    const { server, owner } = await fixture();
+    const route = BROWSER_APPROVAL_ROUTES.find((entry) => entry.method === "GET");
+    if (route === undefined) throw new Error("Missing inspection route");
+    const events: ServerLogEvent[] = [];
+    const deps = {
+      ...server.deps,
+      activityLog: {
+        write: (event: ServerLogEvent): void => {
+          events.push(event);
+        },
+      },
+    };
+    const poll = async (cookie: string | undefined): Promise<void> => {
+      const req = new IncomingMessage(new Socket());
+      if (cookie !== undefined) req.headers.cookie = cookie;
+      await route.handler(
+        {
+          req,
+          res: new ServerResponse(req),
+          correlationId: "browser-approval-poll",
+          params: {},
+          url: new URL(`${server.baseUrl}${ROOT}`),
+        },
+        deps,
+      );
+    };
+    for (let round = 0; round < 4; round += 1) {
+      await poll(owner);
+      await poll(undefined);
+    }
+    const outcomes = events.map((event) => [event.extra?.outcome, event.extra?.reader]);
+    expect(outcomes).toEqual([
+      ["accepted", "with-session"],
+      ["unavailable", "without-session"],
+    ]);
+    await approveBrowser(server, owner, keyPair(), false);
+    await poll(owner);
+    await poll(owner);
+    expect(events).toHaveLength(3);
+    expect(events[2]?.extra).toMatchObject({ outcome: "accepted", sessionApprovalCount: 1 });
   });
   it("manages and revokes actual session-only draft access after the request window closes", async () => {
     let now = Date.now();

@@ -86,7 +86,6 @@ function deps(runId: string): VerifiedCommitRuntimeDependencies {
     authorityDigest: digest,
     bindingDigest: digest,
     provenanceDigest: digest,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
   });
@@ -131,8 +130,14 @@ describe("server-built delivery approval requests", () => {
         command: { kind: "stage" },
       }),
     } as unknown as RuntimeGitService;
-    requestRuntimeStageApproval(service, "stage-1", (event) => void events.push(event));
+    requestRuntimeStageApproval(
+      service,
+      "stage-1",
+      (event) => void events.push(event),
+      "call_stage_1",
+    );
     expect(events[0]?.permissionRequest).toMatchObject({
+      callId: "call_stage_1",
       actionKind: "git-stage",
       reasonCode: "stage-approval-required",
       scopeLabel: "workspace-scope",
@@ -166,12 +171,22 @@ describe("server-built delivery approval requests", () => {
     const service = {
       review: () => ({ binding: { runId: "run-commit" }, expiresAtMs: EXPIRES_AT_MS, review: {} }),
     } as unknown as VerifiedCommitService;
-    requestVerifiedCommitApproval(service, "commit-1", (event) => void events.push(event));
+    requestVerifiedCommitApproval(
+      service,
+      "commit-1",
+      (event) => void events.push(event),
+      "call_commit_1",
+    );
     expect(events[0]?.permissionRequest).toMatchObject({
+      callId: "call_commit_1",
       actionKind: "commit",
       scopeLabel: "workspace-scope",
       policyReason: "approval-required",
     });
+    // An ask that names no call never invents one.
+    const unbound: CodingWorkbenchRuntimeEvent[] = [];
+    requestVerifiedCommitApproval(service, "commit-2", (event) => void unbound.push(event));
+    expect(unbound[0]?.permissionRequest).not.toHaveProperty("callId");
   });
 });
 
@@ -212,6 +227,19 @@ describe("resolveVerifiedCommitContext after a governed task branch (#3907)", ()
       binding(runId),
     );
     expect(unrelated).toMatchObject({ headRef: "codex/task", baseRef: "dev" });
+  });
+
+  it("marks the base never born only when the record's head is the all-zero id", () => {
+    const born = resolveVerifiedCommitContext(
+      { ...deps(runId), governedTaskBranch: () => moved },
+      binding(runId),
+    );
+    expect(born).not.toHaveProperty("baseNeverBorn");
+    const unborn = resolveVerifiedCommitContext(
+      { ...deps(runId), governedTaskBranch: () => ({ ...moved, headSha: "0".repeat(40) }) },
+      binding(runId),
+    );
+    expect(unborn).toMatchObject({ headRef: "feature/x", baseRef: "dev", baseNeverBorn: true });
   });
 
   it("takes both branches from the record Keiko made for this run", () => {

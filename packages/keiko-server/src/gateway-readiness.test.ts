@@ -414,6 +414,51 @@ describe("gateway readiness route", () => {
     );
   });
 
+  // U-12 (#4491): the same explicit activation can be started from the Workbench; the log says where
+  // from through one closed value, and a value outside the closed set is dropped, not logged.
+  it.each([
+    [undefined, "settings"],
+    ["coding-workbench", "coding-workbench"],
+    ["chat", "chat"],
+    ["somewhere-else", "settings"],
+  ] as const)(
+    "records the surface %s of an activation as %s on both lines of the check",
+    async (requested, recorded) => {
+      const events: ServerLogEvent[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsWith(
+          gatewayConfig(),
+          vi.fn(() => Promise.resolve(jsonResponse(chatPayload("OK"), 200))),
+        ),
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+
+      await handleGatewayReadiness(
+        {
+          ...ctx({
+            modelId: "test-chat-model",
+            options: { probes: [], ...(requested === undefined ? {} : { surface: requested }) },
+          }),
+          correlationId: "corr-surface-route-0001",
+        },
+        deps,
+      );
+
+      const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+      expect(readiness.map((event) => [event.op, event.extra?.surface])).toEqual([
+        ["gateway.readiness.started", recorded],
+        ["gateway.readiness.completed", recorded],
+      ]);
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.started.line",
+          formatActivityLogProofLine(readiness[0] ?? {}),
+        ),
+      ).toMatchObject({ trigger: "settings", surface: recorded });
+      deps.store.close();
+    },
+  );
+
   // The full id serves provider selection and the response; the log carries only the digest of the
   // whole id, never a truncated prefix that two long ids could share (#3557 review).
   it("logs a long configured model id only as a whole-id digest", async () => {
@@ -1023,7 +1068,11 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "json_schema", status: "skipped" }),
       expect.objectContaining({ name: "tool_calling", status: "skipped" }),
     ]);
-    expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0);
+    // The failure that invalidated the observation also removes the durable activation record.
+    expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0, {
+      cause: "invalidated",
+      correlationId: expect.any(String) as string,
+    });
     deps.store.close();
   });
 
@@ -1069,6 +1118,9 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -1638,6 +1690,9 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -1746,6 +1801,9 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ contextWindow: 64_000 }),
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     expect(report.probes).toEqual([
       expect.objectContaining({ name: "chat", status: "passed" }),
@@ -1895,6 +1953,9 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ conversationReady: true }),
       report.checkedAt,
       7,
+      undefined,
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -1936,6 +1997,9 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       4,
+      undefined,
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -1966,6 +2030,9 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -2002,6 +2069,8 @@ describe("gateway readiness route", () => {
       "2026-08-15T00:00:00.000Z",
       4,
       expect.any(String),
+      undefined,
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -2254,8 +2323,10 @@ it.each([true, false])(
         "2026-10-07T12:00:00.000Z",
         0,
         report.checkedAt,
-        // Failed chat observations explicitly pass the optional citation and failure slots.
-        ...(passes ? [] : [undefined, undefined]),
+        // The citation slot stays empty; the evidence object follows it.
+        undefined,
+        // The record carries the check's correlation id, so an invalidation it causes is traceable.
+        { correlationId: expect.any(String) as string },
       );
     } finally {
       deps.store.close();

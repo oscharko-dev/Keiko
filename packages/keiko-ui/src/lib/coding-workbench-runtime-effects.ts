@@ -3,6 +3,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_UPDATED_EVENT,
+  requestGatewayModelCatalogRefresh,
   gatewayModelCatalogCorrelationId,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import type {
@@ -17,14 +18,21 @@ import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-r
 import {
   useCodingAppSessionEstablishments,
   useCodingAppSessionRedemptions,
+  settleCodingAppSessionUnpairedReport,
+  useCodingAppSessionUnpairedObservations,
 } from "./coding-app-session-client";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
+  CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
+import { newClientCorrelationId } from "./bff-correlation";
+import { activeRunState } from "@/app/components/desktop/widgets/coding-workbench/codingWorkbenchLabels";
+import type { ClientCodingWorkbenchReadinessRetryOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 
@@ -78,6 +86,71 @@ function usePickedModelRefreshEffect({
   }, [state.runtimePreference, state.selectedModelId, refreshSource, intent]);
 }
 
+/**
+ * U-45: a Start the server refused because the model is not admitted is the one moment the window
+ * may still not know that the model is inactive (a catalog or source read that never landed). The
+ * refusal therefore re-reads the source once, which also asks for the unfiltered model catalog, so
+ * the "Activate {model}" notice appears right after it. A model that is only still being checked
+ * is not an inactive one and re-reads nothing. One read per refusal, never a loop.
+ */
+function useModelRefusalReread(
+  mutation: CodingWorkbenchRuntimeState["mutation"],
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  const refused =
+    mutation.status === "error" &&
+    mutation.error?.code === "CODING_RUNTIME_MODEL_UNAVAILABLE" &&
+    mutation.error.modelRefusalReason !== "model-verification-pending"
+      ? mutation.requestId
+      : null;
+  useEffect(() => {
+    if (refused !== null) void refreshSource(false, undefined, "use");
+  }, [refused, refreshSource]);
+}
+
+/**
+ * U-45: a page that stays open across a Keiko restart and is paired again in place (a fragment
+ * navigation, no reload) still holds a source that said "admitted" for a server whose models are all
+ * inactive again (ADR-0171 D2), which hid the activation notice. A NEW app session therefore re-reads
+ * the source and the runtime posture and asks for the model catalog once. It is not a mount read:
+ * the first value of the count is the mount's own, and only a later change acts.
+ */
+function useNewSessionReread(
+  refreshRuntime: () => Promise<void>,
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  const established = useCodingAppSessionEstablishments();
+  const seen = useRef(established);
+  useEffect(() => {
+    if (seen.current === established) return;
+    seen.current = established;
+    void refreshRuntime();
+    void refreshSource(false, undefined, "use");
+    requestGatewayModelCatalogRefresh({ check: true });
+  }, [established, refreshRuntime, refreshSource]);
+}
+
+function useModelRereads(
+  mutation: CodingWorkbenchRuntimeState["mutation"],
+  refreshRuntime: () => Promise<void>,
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  useModelRefusalReread(mutation, refreshSource);
+  useNewSessionReread(refreshRuntime, refreshSource);
+}
+
 export function useCodingWorkbenchRuntimeRefreshEffects({
   state,
   refreshRuntime,
@@ -93,12 +166,13 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
     parentCorrelationId?: string,
     checkModel?: CodingWorkbenchModelCheck,
   ) => Promise<void>;
-  readonly refreshRun: () => Promise<void>;
+  readonly refreshRun: (quiet?: boolean) => Promise<void>;
 }): void {
   useEffect(() => {
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
   usePickedModelRefreshEffect({ state, refreshSource, intent });
+  useModelRereads(state.mutation, refreshRuntime, refreshSource);
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,
@@ -126,7 +200,135 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRun();
   }, [refreshRun]);
+  useRunRereadOnReturn(refreshRun);
   usePostRunDescriptionRefresh(state.run.value, refreshRun);
+  useRuntimeReadinessRetry(state.runtime.status, refreshRuntime);
+  useAnchoredReadinessReread(state, refreshRuntime);
+}
+
+/** Waits before each re-read of a failed runtime readiness; after the last one the failure stays. */
+export const RUNTIME_READINESS_RETRY_DELAYS_MS: readonly number[] = [2_000, 8_000, 30_000];
+
+/**
+ * A failed readiness read heals itself (U-37). Nothing else re-reads readiness on its own, so one
+ * transient failure (a refused or reset request while the page was still reloading) left "Runtime
+ * could not be refreshed" on screen, and the composer without its agent switch, although every
+ * later read of the same server succeeded. A bounded, backed-off retry runs only while the
+ * resource is in error and ends at the first success; it is not a polling loop. Each attempt, the
+ * recovery and the exhaustion are reported as body-free closed evidence under one correlation id.
+ */
+function useRuntimeReadinessRetry(
+  status: CodingWorkbenchResourceStatus,
+  refreshRuntime: () => Promise<void>,
+): void {
+  const episode = useRef<ReadinessRetryEpisode>({
+    attempts: 0,
+    exhausted: false,
+    retryInFlight: false,
+    correlationId: undefined,
+  });
+  useEffect(() => {
+    const current = episode.current;
+    settleReadinessRetryEpisode(current, status);
+    if (status !== "error") return;
+    const delay = RUNTIME_READINESS_RETRY_DELAYS_MS[current.attempts];
+    if (delay === undefined) {
+      if (!current.exhausted) {
+        current.exhausted = true;
+        reportReadinessRetry("exhausted", current.attempts, current.correlationId);
+      }
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      current.attempts += 1;
+      current.retryInFlight = true;
+      current.correlationId ??= newClientCorrelationId();
+      reportReadinessRetry("started", current.attempts, current.correlationId);
+      void refreshRuntime();
+    }, delay);
+    return (): void => {
+      window.clearTimeout(timer);
+    };
+  }, [status, refreshRuntime]);
+}
+
+// Keeps the episode in step with the resource: a refresh the retry did not start (a mode change, a
+// manual read) opens a new episode, since the earlier attempts were spent on an earlier failure.
+function settleReadinessRetryEpisode(
+  episode: ReadinessRetryEpisode,
+  status: CodingWorkbenchResourceStatus,
+): void {
+  if (status === "loading" && !episode.retryInFlight) resetReadinessRetryEpisode(episode);
+  if (status === "ready") {
+    if (episode.attempts > 0) {
+      reportReadinessRetry("recovered", episode.attempts, episode.correlationId);
+    }
+    resetReadinessRetryEpisode(episode);
+  }
+  if (status === "ready" || status === "error") episode.retryInFlight = false;
+}
+
+interface ReadinessRetryEpisode {
+  attempts: number;
+  /** `exhausted` is reported once per episode, not on every effect re-run. */
+  exhausted: boolean;
+  /** The refresh now loading was started by the retry itself. */
+  retryInFlight: boolean;
+  correlationId: string | undefined;
+}
+
+function resetReadinessRetryEpisode(episode: ReadinessRetryEpisode): void {
+  episode.attempts = 0;
+  episode.exhausted = false;
+  episode.correlationId = undefined;
+}
+
+function reportReadinessRetry(
+  readinessRetryOutcome: ClientCodingWorkbenchReadinessRetryOutcome,
+  attempt: number,
+  correlationId: string | undefined,
+): void {
+  reportCodingWorkbenchInteraction(
+    { interaction: "runtime-readiness-retry", readinessRetryOutcome, attempt },
+    correlationId,
+  );
+}
+
+/**
+ * A readiness answer anchored to a live run states that run's posture. When the run has ended the
+ * answer is stale (the next run holds what is selected now), so it is read again once; the new
+ * answer is not anchored, which ends the effect.
+ */
+function useAnchoredReadinessReread(
+  state: CodingWorkbenchRuntimeState,
+  refreshRuntime: () => Promise<void>,
+): void {
+  const anchored = state.runtime.value?.liveRunAnchored === true;
+  const runSettled = state.run.status === "ready" && !activeRunState(state.run.value?.state);
+  useEffect(() => {
+    if (anchored && runSettled) void refreshRuntime();
+  }, [anchored, runSettled, refreshRuntime]);
+}
+
+/**
+ * U-14: another paired window of the same installation can start a run while this one sits idle,
+ * and nothing pushes that to a window that follows no run. The run is therefore read again each
+ * time the person returns to this window (the window gains focus, or its tab becomes visible), so
+ * the active run is on screen, and Start is not offered, before the person types a task for it.
+ * Not a polling loop: one coalesced status read per return.
+ */
+function useRunRereadOnReturn(refreshRun: (quiet?: boolean) => Promise<void>): void {
+  useEffect(() => {
+    const reread = (): void => {
+      if (document.visibilityState === "visible") void refreshRun(true);
+    };
+    window.addEventListener("focus", reread);
+    document.addEventListener("visibilitychange", reread);
+    return (): void => {
+      window.removeEventListener("focus", reread);
+      document.removeEventListener("visibilitychange", reread);
+    };
+  }, [refreshRun]);
 }
 
 /** How often, and for how long at most, the settled run's snapshot is re-read while its
@@ -187,10 +389,13 @@ function usePostRunDescriptionRefresh(
  */
 export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void {
   const redemptions = useCodingAppSessionRedemptions();
+  // U-22: a channel read that came back unpaired (a restarted Keiko) re-confirms the pairing here.
+  const unpairedReads = useCodingAppSessionUnpairedObservations();
   useEffect(() => {
     let cancelled = false;
     void fetchWorkspaceManifestAccess().then(
       (access) => {
+        if (access.session === "paired") settleCodingAppSessionUnpairedReport();
         if (!cancelled) dispatch({ kind: "pairing-set", pairing: access.session });
       },
       (error: unknown) => {
@@ -208,7 +413,7 @@ export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void
     return () => {
       cancelled = true;
     };
-  }, [dispatch, redemptions]);
+  }, [dispatch, redemptions, unpairedReads]);
 }
 
 /**
@@ -289,6 +494,9 @@ export function useCodingWorkbenchRuntimeStream({
     },
     onReconnecting: () => {
       dispatch({ kind: "stream-reconnecting" });
+    },
+    onCapacityWaiting: (waiting, heldElsewhere = false) => {
+      dispatch({ kind: "stream-capacity-waiting", waiting, heldElsewhere });
     },
     onError: (error) => {
       const mapped = codingWorkbenchRuntimeApiError(error);

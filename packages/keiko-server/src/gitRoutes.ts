@@ -23,7 +23,10 @@ import {
   GIT_EDITOR_SCHEMA_VERSION,
   parseGitEditorBlameRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
-import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
+  GIT_REPOSITORY_SCHEMA_VERSION,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   classifyGitFailure,
@@ -92,7 +95,7 @@ export type {
 
 const DEFAULT_STATUS_MAX_BYTES = 512 * 1024;
 const DEFAULT_DIFF_MAX_BYTES = 128 * 1024;
-const DEFAULT_MAX_CHANGES = 500;
+export const DEFAULT_MAX_CHANGES = 500;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 export interface GitRouteOptions {
@@ -159,6 +162,8 @@ export interface GitBranchListResponse {
   readonly reason?: GitRepositoryStatusResponse["reason"] | undefined;
   readonly message?: string | undefined;
   readonly branches: readonly GitBranchListEntry[];
+  /** The branch HEAD names when that branch has no commit yet (a fresh `git init`); it is in no list. */
+  readonly unbornBranch?: string | undefined;
   readonly truncated: boolean;
 }
 
@@ -660,6 +665,8 @@ export function parseStatus(
       collected.scopedChangeCount,
     ),
     maxChanges,
+    // A byte-cut listing proves only the records it shows: the total is unknown, never a count.
+    ...(processTruncated ? {} : { totalChanges: collected.scopedChangeCount }),
   };
 }
 
@@ -811,6 +818,29 @@ function branchListFailure(
   };
 }
 
+// HEAD is symbolic on a branch that has no commit yet: `for-each-ref` lists nothing for it, so the
+// Workbench would show no branch for a fresh `git init` (#4491). Asked only when the list has no
+// current entry, and then only of a repository that is provably unborn (`rev-parse --verify
+// --quiet HEAD` exits 1): a truncated list or a detached HEAD is never read as an unborn branch.
+async function readUnbornBranch(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+): Promise<string | undefined> {
+  const run = (args: readonly string[]): ReturnType<GitProcessRunner> =>
+    options.runner([...GIT_BASE_ARGS, "-C", repo.repositoryRoot, ...args], {
+      cwd: repo.repositoryRoot,
+      maxBytes: options.maxStatusBytes,
+      timeoutMs: options.timeoutMs,
+      ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+    });
+  if ((await run(["rev-parse", "--verify", "--quiet", "HEAD"])).exitCode !== 1) return undefined;
+  const symbolic = await run(["symbolic-ref", "--quiet", "HEAD"]);
+  const reference = symbolic.exitCode === 0 ? symbolic.stdout.trim() : "";
+  if (!reference.startsWith("refs/heads/")) return undefined;
+  const name = reference.slice("refs/heads/".length);
+  return name.length > 0 && isSafeGitRefName(name) ? name : undefined;
+}
+
 export async function handleGitBranches(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -841,6 +871,10 @@ export async function handleGitBranches(
     if (result.exitCode !== 0) {
       return { status: 200, body: redacted(deps, branchListFailure(repo, result)) };
     }
+    const branches = parseBranches(result.stdout);
+    const unbornBranch = branches.some((entry) => entry.current)
+      ? undefined
+      : await readUnbornBranch(repo, options);
     return {
       status: 200,
       body: redacted(deps, {
@@ -849,7 +883,8 @@ export async function handleGitBranches(
         repositoryRoot: repo.repositoryRoot,
         available: true,
         state: "available",
-        branches: parseBranches(result.stdout),
+        branches,
+        ...(unbornBranch === undefined ? {} : { unbornBranch }),
         truncated: result.truncated,
       } satisfies GitBranchListResponse),
     };

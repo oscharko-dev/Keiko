@@ -6,6 +6,11 @@
  * debounced across a cursor/selection burst.
  */
 import { act, renderHook } from "@testing-library/react";
+import { createOriginLocksFixture } from "../../../../../test-utils/origin-locks-fixture";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+} from "../../../../../lib/browser-stream-capacity";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import {
@@ -630,5 +635,48 @@ describe("useEditorAgentBridge — observed activity state (Issue #2120)", () =>
     });
     expect(vi.getTimerCount()).toBe(0);
     hook.unmount();
+  });
+});
+
+// #4491: the bridge stream is essential and never yields. The server treats a dropped bridge as an
+// unavailable session and keeps no replay, so a gap would lose actions and their results.
+describe("useEditorAgentBridge — holding its connection", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+  });
+
+  it("keeps its stream while its document is hidden and a visible tab's essential stream waits", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+    renderHook(() =>
+      useEditorAgentBridge({
+        agentSessionId: "session-hold",
+        controllers: makeControllers(),
+        registerSnapshot: registeredSnapshot(capability("H")),
+        onConflict: vi.fn(),
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(EDITOR_SNAPSHOT_DEBOUNCE_MS);
+    });
+    expect(createSourceSpy).toHaveBeenCalledOnce();
+    const source = latestEventSource();
+    const others = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(source.closed).toBe(false);
+    expect(createSourceSpy).toHaveBeenCalledOnce();
+    others.forEach((admission) => admission.release());
   });
 });

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -1339,6 +1341,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
             idempotencyKey: "session:call",
             approvalId: "session:call",
             approvalDigest: "a".repeat(64),
+            packageDir: "packages/app",
           },
         },
       },
@@ -1348,7 +1351,42 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       type: "permission-request",
       kind: "command-execution",
       actionKind: "verification-command",
+      packageDir: "packages/app",
     });
+    // The ask names the package folder the call asked for, validated like any contained path: a
+    // missing key, an escaping folder or a non-string is not a governed verification ask (ADR-0124 D6).
+    const verificationAsk = (packageDir: unknown, omit = false): unknown =>
+      projectOpenCodePermissionEvent(
+        {
+          ...base,
+          properties: {
+            ...base.properties,
+            patterns: ["typecheck"],
+            metadata: {
+              kind: "command-execution",
+              actionClass: "command-execution",
+              reasonCode: "approval-required",
+              expiresAt: "2026-07-23T14:05:00.000Z",
+              actionKind: "verification-command",
+              scopeLabel: "workspace-scope",
+              risk: "low",
+              policyReason: "approval-required",
+              commandLabel: "typecheck",
+              actionId: "session:call",
+              idempotencyKey: "session:call",
+              approvalId: "session:call",
+              approvalDigest: "a".repeat(64),
+              ...(omit ? {} : { packageDir }),
+            },
+          },
+        },
+        "ses_1",
+      );
+    expect(verificationAsk("")).toBeDefined();
+    expect(verificationAsk(undefined, true)).toBeUndefined();
+    expect(verificationAsk("../outside")).toBeUndefined();
+    expect(verificationAsk("C:/abs")).toBeUndefined();
+    expect(verificationAsk(7)).toBeUndefined();
     expect(projectedVerification?.requestId).toMatch(/^permission-[0-9]+$/u);
     const projectedTargeted = projectOpenCodePermissionEvent(
       {
@@ -1371,6 +1409,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
             approvalId: "session:targeted",
             approvalDigest: "b".repeat(64),
             targetPathHash: "c".repeat(64),
+            packageDir: "",
           },
         },
       },
@@ -1474,7 +1513,8 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
               idempotencyKey: "session:branch-call",
               approvalId: "session:branch-call",
               approvalDigest: "b".repeat(64),
-              targetPathHash: "c".repeat(64),
+              targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+              branchName: "feature/x",
               ...overrides,
             },
           },
@@ -1485,14 +1525,31 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       actionKind: "git-branch",
       commandLabel: "branch",
       risk: "medium",
-      targetPathHash: "c".repeat(64),
+      targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+      branchName: "feature/x",
     });
     expect(branchAsk({ targetPathHash: undefined })).toBeUndefined();
     expect(branchAsk({ targetPathHash: "feature/x" })).toBeUndefined();
     expect(branchAsk({ commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
     expect(branchAsk({ risk: "low" })).toBeUndefined();
     expect(branchAsk({}, ["feature/x"])).toBeUndefined();
-    expect(branchAsk({ branchName: "feature/x" })).toBeUndefined();
+    // U-27: the ask names the branch the card shows, and that name must be the one the approval is
+    // bound to: absent, foreign, empty or control-character names are not the ask.
+    expect(branchAsk({ branchName: undefined })).toBeUndefined();
+    expect(branchAsk({ branchName: "feature/y" })).toBeUndefined();
+    expect(branchAsk({ branchName: "" })).toBeUndefined();
+    expect(branchAsk({ branchName: "feature/x\n" })).toBeUndefined();
+    // The review contract refuses bidi, zero-width and line-separator characters, so the ask must
+    // too: otherwise the card would wait on a review that can never validate.
+    for (const name of ["a\u202eb", "a\u200bb", "a\u2028b", "a\ufeffb"]) {
+      expect(
+        branchAsk({
+          branchName: name,
+          targetPathHash: createHash("sha256").update(name, "utf8").digest("hex"),
+        }),
+      ).toBeUndefined();
+    }
+    expect(syncAsk("fetch", { branchName: "feature/x" })).toBeUndefined();
     expect(syncAsk("pull", { commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
     expect(syncAsk("pull", { risk: "low" })).toBeUndefined();
     expect(syncAsk("fetch", {}, ["origin"])).toBeUndefined();

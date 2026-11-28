@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pathIsDenied } from "./files-deny.js";
 import {
+  insideInstallationPayload,
+  installationDenialCause,
   insideProgramFolder,
   launchedFromProgramFolder,
   PROGRAM_FOLDER_LAUNCH_ENV,
@@ -135,5 +137,111 @@ describe("pathIsDenied on a program-folder launch", () => {
     expect(pathIsDenied("src/index.ts")).toBe(false);
     expect(pathIsDenied("keiko.config.json")).toBe(true);
     expect(pathIsDenied(".env")).toBe(true);
+  });
+});
+
+describe("insideInstallationPayload", () => {
+  it("names the payload of any installation by its layout, with either separator and any case", () => {
+    for (const path of [
+      "C:\\Users\\kstd\\Keiko159\\Keiko\\system\\Keiko\\app",
+      "c:\\users\\kstd\\keiko159\\keiko\\SYSTEM\\keiko\\App\\dist\\x.js",
+      "/Users/me/Keiko/system/Keiko/runtime/node",
+      "/Users/me/Keiko/system/Keiko/Keiko.app/Contents/Resources/app",
+      "/Users/me/Keiko/system/Keiko/.portable",
+      "D:/Keiko/node_modules/@oscharko-dev/keiko/dist",
+    ]) {
+      expect(insideInstallationPayload(path), path).toBe(true);
+    }
+  });
+
+  it("leaves ordinary folders, look-alikes and relative paths alone", () => {
+    for (const path of [
+      "/Users/me/work/project",
+      "/Users/me/system/Keiko-projects/app",
+      "/Users/me/system/other/app",
+      "/Users/me/Keiko/system",
+      "/Users/me/node_modules/@oscharko-dev/keiko-ui",
+      "C:\\Users\\me\\repo",
+      "system/Keiko/app",
+    ]) {
+      expect(insideInstallationPayload(path), path).toBe(false);
+    }
+  });
+});
+
+describe("insideInstallationPayload on a POSIX host", () => {
+  it("keeps the case of a POSIX path, so a person's lower-case folder is not a payload", (context) => {
+    if (process.platform === "win32") context.skip();
+    for (const path of [
+      "/home/u/code/system/keiko/app",
+      "/home/u/code/system/Keiko/APP",
+      "/home/u/code/Node_Modules/@oscharko-dev/keiko",
+    ]) {
+      expect(insideInstallationPayload(path), path).toBe(false);
+    }
+    expect(insideInstallationPayload("/home/u/Keiko/system/Keiko/app")).toBe(true);
+  });
+
+  it("reads a UNC share and a trailing separator as a Windows path", () => {
+    expect(insideInstallationPayload("\\\\server\\share\\SYSTEM\\keiko\\App\\")).toBe(true);
+    expect(insideInstallationPayload("C:\\Keiko\\system\\Keiko\\runtime\\")).toBe(true);
+    expect(insideInstallationPayload("/Users/me/Keiko/system/Keiko/app/")).toBe(true);
+  });
+
+  it("judges an existing path by the name the operating system gives it", () => {
+    const { root } = folders();
+    const payload = join(root, "system", "Keiko", "app");
+    mkdirSync(payload, { recursive: true });
+    const alias = join(root, "alias");
+    symlinkSync(payload, alias, "dir");
+    expect(insideInstallationPayload(alias)).toBe(true);
+    expect(insideInstallationPayload(join(root, "Keiko-projects"))).toBe(false);
+  });
+
+  it("refuses a path it cannot resolve for a reason other than not existing", (context) => {
+    if (process.platform === "win32" || process.getuid?.() === 0) context.skip();
+    const { root } = folders();
+    const locked = join(root, "locked");
+    mkdirSync(join(locked, "inner"), { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      expect(insideInstallationPayload(join(locked, "inner"))).toBe(true);
+      expect(pathIsDenied(join(locked, "inner"))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+    // A path that simply does not exist is another folder, not a refusal.
+    expect(insideInstallationPayload(join(root, "no-such-folder"))).toBe(false);
+  });
+});
+
+describe("installationDenialCause", () => {
+  it("names why a path is refused as a closed value that carries no path", () => {
+    const { program, sibling, root } = folders();
+    vi.stubEnv(PROGRAM_FOLDER_LAUNCH_ENV, "1");
+    expect(installationDenialCause(join(program, "node_modules"), process.env, program)).toBe(
+      "program-folder",
+    );
+    expect(installationDenialCause(sibling, process.env, program)).toBeUndefined();
+    expect(installationDenialCause("/Users/me/Keiko/system/Keiko/app", process.env, program)).toBe(
+      "installation-payload",
+    );
+    expect(
+      installationDenialCause(join(root, "no-such-folder"), process.env, program),
+    ).toBeUndefined();
+  });
+
+  it("names a name the operating system cannot give as unresolvable, still refused", (context) => {
+    if (process.platform === "win32" || process.getuid?.() === 0) context.skip();
+    const { root } = folders();
+    const locked = join(root, "locked");
+    mkdirSync(join(locked, "inner"), { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      expect(installationDenialCause(join(locked, "inner"))).toBe("unresolvable-name");
+      expect(pathIsDenied(join(locked, "inner"))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
   });
 });

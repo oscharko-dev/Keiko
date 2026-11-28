@@ -31,7 +31,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
 import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
-import { SSE_HEADERS } from "../sse.js";
+import { openSseResponse } from "../sse.js";
 import { writeSseFrame } from "../sse-write.js";
 import {
   STREAMING,
@@ -696,7 +696,7 @@ export async function handleStartQiRun(
     );
   }
 
-  ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
+  openSseResponse(ctx.res);
   const write: WriteFn = (message) => {
     writeSseFrame(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
   };

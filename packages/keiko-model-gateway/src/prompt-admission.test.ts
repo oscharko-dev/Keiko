@@ -48,9 +48,11 @@ describe("complete prompt admission", () => {
     const profile = deriveContextProfileFromCapability(capability);
     expect(() =>
       admitGatewayPrompt(request, capability, log, "fixture", {
-        status: "available",
-        tokens: profile.effectiveInputBudget + 1,
-        tokenizer: "huggingface",
+        measured: {
+          status: "available",
+          tokens: profile.effectiveInputBudget + 1,
+          tokenizer: "huggingface",
+        },
       }),
     ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
     expect(log.events[0]?.extra).toMatchObject({
@@ -61,7 +63,9 @@ describe("complete prompt admission", () => {
 
   it("keeps the local complete projection when the remote counter omits context", () => {
     const log = recorder();
-    admitGatewayPrompt(request, capability, log, "fixture", { status: "available", tokens: 1 });
+    admitGatewayPrompt(request, capability, log, "fixture", {
+      measured: { status: "available", tokens: 1 },
+    });
     expect(log.events[0]?.extra).toMatchObject({
       counterSource: "fallback-estimated",
       counterStatus: "available",
@@ -73,7 +77,7 @@ describe("complete prompt admission", () => {
     "uses calibrated fallback for a %s counter",
     (status) => {
       const log = recorder();
-      admitGatewayPrompt(request, capability, log, "fixture", { status });
+      admitGatewayPrompt(request, capability, log, "fixture", { measured: { status } });
       expect(log.events[0]?.extra).toMatchObject({ state: "admitted", counterStatus: status });
     },
   );
@@ -103,8 +107,7 @@ it("retains schema cost when the remote message count wins", () => {
   const remote = profile.maxInputTokens - 800 - profile.safetyMarginTokens;
   expect(() =>
     admitGatewayPrompt(complete, capability, log, "schema-remote", {
-      status: "available",
-      tokens: remote,
+      measured: { status: "available", tokens: remote },
     }),
   ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
   expect(log.events[0]?.extra?.promptTokens).toBe(remote + schemaCost);
@@ -152,7 +155,7 @@ it("retains the text/tool/schema floor when a provider reports the image contrib
       { ...capability, contextWindow: 8192 },
       recorder(),
       "image-text-floor",
-      { status: "available", tokens: 100 },
+      { measured: { status: "available", tokens: 100 } },
     ),
   ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
 });
@@ -208,7 +211,7 @@ it.each([0, 100])(
       contextWindow: 8192,
       imageTokensMeasured: true,
     });
-    admitGatewayPrompt(input, vision, log, "image-accounting-floor", measured);
+    admitGatewayPrompt(input, vision, log, "image-accounting-floor", { measured });
     const line = formatActivityLogProofLine(log.events[0] ?? {});
     const persisted = expectActivityLogProof("gateway.prompt.admission.bounds", line);
     expect(persisted).toMatchObject({
@@ -238,8 +241,7 @@ describe("independent model input ceiling admission", () => {
       const log = recorder();
       expect(() =>
         admitGatewayPrompt(boundedRequest, constrained, log, "input-ceiling", {
-          status: "available",
-          tokens: 129,
+          measured: { status: "available", tokens: 129 },
         }),
       ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
       expect(log.events[0]?.extra).toMatchObject({
@@ -249,8 +251,7 @@ describe("independent model input ceiling admission", () => {
       });
       expect(() =>
         admitGatewayPrompt(boundedRequest, constrained, recorder(), "input-ceiling", {
-          status: "available",
-          tokens: 128,
+          measured: { status: "available", tokens: 128 },
         }),
       ).not.toThrow();
     },

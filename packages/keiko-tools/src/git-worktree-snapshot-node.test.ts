@@ -5,7 +5,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitEnv } from "@oscharko-dev/keiko-git";
@@ -21,10 +29,14 @@ import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitLazyFetchGuardUnsupportedError,
   GitWorktreeReadError,
+  createGitReadSession,
   ensureGitLazyFetchGuardSupported,
   gitConfigIndicatesPromisorRemote,
   readGitRemoteAliases,
   readGitRemoteUrl,
+  readGitStagedChangeSummary,
+  readGitStagedDiff,
+  readGitBlobTextWithin,
   readGitPushRemoteUrls,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
@@ -327,6 +339,49 @@ describe("lazy-fetch guard: promisor detection matches git's effective configura
     );
     // A second, healthy call on the SAME spawn function must re-probe and succeed: the first
     // probe's spawn failure is indeterminate, not a durable "guard unsupported" fact.
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
+  });
+});
+
+// Real git for everything, except `git version` answers as the given release: the installed git
+// decides whether GIT_NO_LAZY_FETCH is enforced, and CI's own git (2.43) does not enforce it.
+function realSpawnReportingGitVersion(banner: string): SpawnFn {
+  return (command, args, options) =>
+    args[0] === "version"
+      ? nodeSpawnFn(
+          process.execPath,
+          ["-e", `process.stdout.write(${JSON.stringify(banner)})`],
+          options,
+        )
+      : nodeSpawnFn(command, args, options);
+}
+
+describe("lazy-fetch guard: a session never carries a negative verdict past a git that does not enforce the guard", () => {
+  it("re-checks the effective configuration at the next effect when git ignores GIT_NO_LAZY_FETCH", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const readerDeps = {
+      ...deps(),
+      spawn: realSpawnReportingGitVersion("git version 2.43.0\n"),
+      readSession: createGitReadSession(),
+    };
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
+    // The promisor remote appears between two effects of the SAME operation.
+    git(["config", "remote.origin.promisor", "true"]);
+    await expect(ensureGitLazyFetchGuardSupported(readerDeps)).rejects.toBeInstanceOf(
+      GitLazyFetchGuardUnsupportedError,
+    );
+  });
+
+  it("keeps one verdict per operation when git itself enforces the guard", async () => {
+    git(["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    const readerDeps = {
+      ...deps(),
+      spawn: realSpawnReportingGitVersion("git version 2.45.0\n"),
+      readSession: createGitReadSession(),
+    };
+    await ensureGitLazyFetchGuardSupported(readerDeps);
+    git(["config", "remote.origin.promisor", "true"]);
+    // Git enforces GIT_NO_LAZY_FETCH itself, so the first verdict still stands for the operation.
     await expect(ensureGitLazyFetchGuardSupported(readerDeps)).resolves.toBeUndefined();
   });
 });
@@ -741,6 +796,33 @@ describe("readStagedConflictMarkerFileCount", () => {
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+describe("staged change summary (G-4)", () => {
+  it("lists a pure rename as one entry with no content and exact counts for an edit", async () => {
+    writeFileSync(join(root, "a.js"), "one\ntwo\nthree\n", "utf8");
+    writeFileSync(join(root, "b.js"), "keep\n", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-m", "base"]);
+    renameSync(join(root, "a.js"), join(root, "renamed name.js"));
+    writeFileSync(join(root, "b.js"), "keep\nmore\n", "utf8");
+    git(["add", "-A"]);
+    expect(await readGitStagedChangeSummary(deps())).toEqual([
+      { path: "b.js", addedLines: 1, deletedLines: 0, binary: false },
+      { path: "renamed name.js", oldPath: "a.js", addedLines: 0, deletedLines: 0, binary: false },
+    ]);
+    const patch = await readGitStagedDiff(deps());
+    expect(patch).toContain("rename from a.js");
+    expect(patch).not.toContain("deleted file mode");
+  });
+  it("reads a blob within its bound and says so, never throwing, when it is larger", async () => {
+    writeFileSync(join(root, "big.txt"), "x".repeat(70_000), "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-m", "big"]);
+    const sha = git(["rev-parse", "HEAD:big.txt"]).trim();
+    expect((await readGitBlobTextWithin(deps(), sha, 100_000))?.length).toBe(70_000);
+    expect(await readGitBlobTextWithin(deps(), sha, 1_000)).toBeUndefined();
   });
 });
 

@@ -3,6 +3,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  PROBE_GATEWAY_BUSY_WARNING,
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
   askGrounded,
   cancelDesktopChatTurn,
   updateChatConnectedScopes,
@@ -60,6 +65,7 @@ import {
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   reconnectProject,
+  activateChatModelFromSurface,
   runGatewayReadiness,
   setupGateway,
   checkUpdatePreflight,
@@ -2584,6 +2590,60 @@ describe("runGatewayReadiness", () => {
       }),
     );
   });
+
+  it.each([
+    ["passes", "passed", "passed"],
+    ["fails", "failed", "failed"],
+    ["ends without a verdict", "skipped", "inconclusive"],
+  ] as const)(
+    "activates a model from a surface through the same route and says whether the chat check %s",
+    async (_label, chat, expected) => {
+      const report = {
+        modelId: "test-chat-model",
+        checkedAt: "2026-11-27T09:00:00.000Z",
+        overallStatus: chat === "passed" ? "ready" : "partial",
+        probes: [{ name: "chat", status: chat, latencyMs: 80, evidence: "chat probe" }],
+        verifiedCapabilities: {},
+      };
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(report));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        activateChatModelFromSurface("test-chat-model", "coding-workbench"),
+      ).resolves.toBe(expected);
+
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        "/api/gateway/readiness",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            modelId: "test-chat-model",
+            options: { surface: "coding-workbench" },
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each([PROBE_TIMED_OUT_WARNING, PROBE_UNREACHABLE_WARNING, PROBE_GATEWAY_BUSY_WARNING])(
+    "reads a chat probe that failed only with %j as inconclusive, not as a failed check",
+    async (warning) => {
+      const report = {
+        modelId: "test-chat-model",
+        checkedAt: "2026-11-27T09:00:00.000Z",
+        overallStatus: "failed",
+        probes: [
+          { name: "chat", status: "failed", latencyMs: 30_000, evidence: "chat probe", warning },
+        ],
+        verifiedCapabilities: {},
+      };
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(report)));
+
+      await expect(
+        activateChatModelFromSurface("test-chat-model", "coding-workbench"),
+      ).resolves.toBe("inconclusive");
+    },
+  );
 
   it("encodes the model id and patches only the explicitly confirmed verified fields", async () => {
     const model = { id: "model/one", toolCalling: false };

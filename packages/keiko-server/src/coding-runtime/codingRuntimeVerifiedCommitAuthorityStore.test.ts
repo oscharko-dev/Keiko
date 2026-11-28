@@ -115,7 +115,6 @@ function snapshot(): CodingRuntimeSnapshot {
     authorityDigest: digest,
     bindingDigest: digest,
     provenanceDigest: digest,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
   };

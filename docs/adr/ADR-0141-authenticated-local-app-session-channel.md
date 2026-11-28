@@ -497,7 +497,7 @@ Only a stream that does not drain within `CODING_APP_SESSION_STREAM_DRAIN_TIMEOU
 2026-10-28 the shared SSE stalled-reader bound of 30 s, previously one second; ADR-0173) is a stalled
 reader: it records `sse-backpressure`, stops its live source and closes, exactly as
 before. The KEIKO-0225 regression pin for that diagnostic was relocated to this bound, not relaxed.
-The live stream's closed line counts `drainWaitCount` and `coalescedSnapshotCount`. The browser
+The live stream's closed line counts `drainWaitCount` and `coalescedSnapshotCount`; a replaced snapshot's text deltas travel in the newer one (`carriedTextDeltaCount`), or are left to page reads when they would pass the delta count or frame budget (`carryFallbackCount`). The browser
 reconnects a dropped live channel by itself, at most five times with growing pauses, and gets a
 fresh budget only after a reconnected channel stayed live for 30 seconds; the Reconnect action
 remains after the last attempt.

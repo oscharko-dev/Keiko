@@ -90,6 +90,8 @@ export function sseEventKeys(kind: unknown): readonly string[] {
         "contentTrust",
         "verificationSummary",
         "nativeRetry",
+        "activeSubagentCount",
+        "refusedAgentModelCount",
       ]
     : [...common, "verificationGap"];
 }
@@ -115,6 +117,22 @@ export function validateSseEventFields(
   validateSseVerificationGap(value, errors);
   validateSseVerificationSummary(value, errors);
   validateSseNativeRetry(value, errors);
+  validateSseCountFact(value, errors, "native-subagents-changed", "activeSubagentCount");
+  validateSseCountFact(value, errors, "native-agent-models-refused", "refusedAgentModelCount");
+}
+
+// A count fact (U-52, U-53): required on its own event kind and admissible on no other.
+function validateSseCountFact(
+  value: Record<string, unknown>,
+  errors: string[],
+  eventKind: string,
+  key: string,
+): void {
+  if (value.kind === "runtime-event" && value.eventKind === eventKind) {
+    validateNonNegativeSafeInteger(value[key], key, errors);
+  } else if (value[key] !== undefined) {
+    errors.push(`${key} is only admissible on ${eventKind}`);
+  }
 }
 
 export function isCodingWorkbenchVerificationSummary(

@@ -52,6 +52,7 @@ export function workspaceApiFixture(patch: Partial<WorkspaceApi> = {}): Workspac
     add: vi.fn(() => null),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
+    setToolOpen: vi.fn(),
     activateWindow: activation.activateWindow,
     focus: activation.focus,
     currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),

@@ -377,6 +377,11 @@ export interface NativeTreeStatusDeps {
   /** The run's tree, for the primary session the adapter asks about. */
   readonly tree: (sessionId: string) => NativeSessionTreeRun;
   readonly activityLog: ServerLogSink | undefined;
+  /**
+   * Told how many owned subagent sessions work while the run's primary session is idle, whenever
+   * that count changes (never per poll; zero once they end or the primary runs again).
+   */
+  readonly onActiveSubagents?: ((count: number) => void) | undefined;
 }
 
 /**
@@ -391,8 +396,14 @@ export function createNativeTreeStatusPort(
   deps: NativeTreeStatusDeps,
 ): (sessionId: string, signal: AbortSignal) => Promise<"activity" | "held" | "terminal"> {
   let holding = false;
+  let reportedSubagents = 0;
   return async (sessionId, signal) => {
     const activity = await nativeTreeActivity(deps.client, deps.tree(sessionId), signal);
+    const subagents = activity.primaryActive ? 0 : activity.activeChildren.length;
+    if (subagents !== reportedSubagents) {
+      reportedSubagents = subagents;
+      deps.onActiveSubagents?.(subagents);
+    }
     const held = !activity.primaryActive && !nativeTreeInactive(activity);
     if (held !== holding) {
       holding = held;

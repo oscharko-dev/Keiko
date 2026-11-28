@@ -5,7 +5,10 @@ import type {
   CodingWorkbenchOperatorDecision,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import { CODING_WORKBENCH_VERIFICATION_GAPS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
 import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "../store/schema.js";
@@ -33,7 +36,6 @@ function snapshot(runId = "run-1"): CodingRuntimeSnapshot {
     authorityDigest: digest,
     bindingDigest: digest,
     provenanceDigest: digest,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
   };
@@ -97,7 +99,7 @@ function seedV29Row(db: DatabaseSync): void {
     s.authorityDigest,
     s.bindingDigest,
     s.provenanceDigest,
-    s.toolCallCount,
+    0, // tool_call_count: a retired column the store no longer reads or writes (default 0).
     s.patchByteCount,
     s.modelRequestCount,
     ISSUE_BINDING.repositoryId,
@@ -408,7 +410,6 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
     expect(() =>
       s.create({ ...snapshot(), state: "exploded" as CodingRuntimeSnapshot["state"] }),
     ).toThrow("invalid runtime snapshot state");
-    expect(() => s.create({ ...snapshot(), toolCallCount: -1 })).toThrow("invalid toolCallCount");
     expect(() => s.create({ ...snapshot(), patchByteCount: Number.MAX_SAFE_INTEGER + 2 })).toThrow(
       "invalid patchByteCount",
     );
@@ -910,5 +911,107 @@ describe("verified commit persistence (#3386, schema v23)", () => {
     expect(() => update.run("not-json")).toThrow();
     expect(() => update.run(JSON.stringify({ body: "x".repeat(8192) }))).toThrow();
     db.close();
+  });
+});
+
+// U-31: why Keiko's shutdown cancelled a run is durable, so the restarted Workbench can say so; a
+// person's own Stop leaves none.
+describe("stopCause persistence (schema v85)", () => {
+  function causeRow(db: DatabaseSync): string | null {
+    return (
+      db
+        .prepare("SELECT stop_cause FROM coding_runtime_snapshots WHERE run_id = ?")
+        .get("run-1") as { stop_cause: string | null }
+    ).stop_cause;
+  }
+
+  function cancelled(stopCause?: CodingRuntimeSnapshot["stopCause"]): {
+    readonly db: DatabaseSync;
+    readonly store: ReturnType<typeof createCodingRuntimeSnapshotStore>;
+  } {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const store = createCodingRuntimeSnapshotStore(db);
+    store.create(snapshot());
+    store.transition("run-1", {
+      state: "cancelled",
+      revision: 1,
+      updatedAt: at,
+      terminalAt: at,
+      ...(stopCause === undefined ? {} : { stopCause }),
+    });
+    return { db, store };
+  }
+
+  it.each(CODING_WORKBENCH_STOP_CAUSES)("round-trips %s through the cancellation", (cause) => {
+    const { db, store } = cancelled(cause);
+    expect(store.get("run-1")?.stopCause).toBe(cause);
+    expect(causeRow(db)).toBe(cause);
+    db.close();
+  });
+
+  it("stores no cause for a cancellation without one", () => {
+    const { db, store } = cancelled();
+    expect(store.get("run-1")?.stopCause).toBeUndefined();
+    expect(causeRow(db)).toBeNull();
+    db.close();
+  });
+
+  it("refuses a cause on a run that was not cancelled", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const store = createCodingRuntimeSnapshotStore(db);
+    store.create(snapshot());
+    expect(() => {
+      store.transition("run-1", {
+        state: "failed",
+        revision: 1,
+        updatedAt: at,
+        terminalAt: at,
+        stopCause: "server-shutdown-working",
+      });
+    }).toThrow("stopCause is only valid on a cancelled run");
+    db.close();
+  });
+});
+
+// U-38: what the check-failed gap adds is durable, and only beside that gap.
+describe("verificationGapDetail persistence (schema v86)", () => {
+  function failedWith(
+    gap: CodingRuntimeSnapshot["verificationGap"],
+    detail: CodingRuntimeSnapshot["verificationGapDetail"],
+  ): {
+    readonly db: DatabaseSync;
+    readonly store: ReturnType<typeof createCodingRuntimeSnapshotStore>;
+  } {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const store = createCodingRuntimeSnapshotStore(db);
+    store.create(snapshot());
+    store.transition("run-1", {
+      state: "failed",
+      revision: 1,
+      updatedAt: at,
+      terminalAt: at,
+      failureCode: "verification-not-evidenced",
+      ...(gap === undefined ? {} : { verificationGap: gap }),
+      ...(detail === undefined ? {} : { verificationGapDetail: detail }),
+    });
+    return { db, store };
+  }
+
+  it("round-trips the detail beside the check-failed gap", () => {
+    const { db, store } = failedWith("check-failed", "unchanged-after-continuation");
+    expect(store.get("run-1")).toMatchObject({
+      verificationGap: "check-failed",
+      verificationGapDetail: "unchanged-after-continuation",
+    });
+    db.close();
+  });
+
+  it("refuses the detail beside any other gap", () => {
+    expect(() => failedWith("no-check-run", "unchanged-after-continuation")).toThrow(
+      "verificationGapDetail is only valid with the check-failed gap",
+    );
   });
 });

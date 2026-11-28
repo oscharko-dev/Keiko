@@ -251,6 +251,31 @@ describe("parseGitEditorDiffResponse", () => {
     ).toMatchObject({ ok: true });
   });
 
+  it("lists a file whose name holds a backslash instead of invalidating the response", () => {
+    const files = [diffFile({ path: "dir/back\\slash.js" }), diffFile({ path: "src/app.ts" })];
+    expect(parseGitEditorDiffResponse(diffResponse({ files, totalFiles: 2 }))).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it.each(["~$report.docx", "C:notes", "docs/~$lock.docx"])(
+    "lists the reported file %j that only looks like a home or drive path",
+    (path) => {
+      expect(
+        parseGitEditorDiffResponse(diffResponse({ files: [diffFile({ path })] })),
+      ).toMatchObject({ ok: true });
+    },
+  );
+
+  it.each(["\\\\server\\share\\f.js", "\\\\?\\C:\\f.js", "dir\\..\\f.js", "..\\f.js"])(
+    "still rejects the escaping reported path %j",
+    (path) => {
+      expect(
+        parseGitEditorDiffResponse(diffResponse({ files: [diffFile({ path })] })),
+      ).toMatchObject({ ok: false });
+    },
+  );
+
   it("rejects malformed responses, oversized file lists, and false truncation markers", () => {
     expect(parseGitEditorDiffResponse(diffResponse({ files: "invalid" }))).toMatchObject({
       ok: false,

@@ -16,7 +16,7 @@ import type { ContainerRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "../sse.js";
+import { startSseHeartbeat, readyMessage, openSseResponse } from "../sse.js";
 import { writeSseFrame, type SseBackpressureSignal } from "../sse-write.js";
 import { redactedEventJson } from "../sse-frame-cache.js";
 import {
@@ -249,7 +249,7 @@ export function openContainerSseStream(
   onBackpressure?: (signal: SseBackpressureSignal) => void,
   correlationId?: string,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { openFrame: false });
   startSseHeartbeat(res);
   // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
   // which unsubscribes from the manager so no further frames are produced for a dead socket. The

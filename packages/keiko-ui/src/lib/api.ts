@@ -4,6 +4,7 @@
  * Never logs response bodies.
  */
 
+import { isInconclusiveReadinessProbe } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { reinspectSessionAfterMutationRefusal } from "./bff-session-reinspection";
 
 import type {
@@ -39,6 +40,7 @@ import type {
   GitSyncPreview,
   GatewayReadinessOptions,
   GatewayReadinessReport,
+  GatewayReadinessSurface,
   EditorDocumentVersion,
   EditorCompletionContextSelectors,
   EditorCompletionWireRequest,
@@ -111,6 +113,7 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
+  GitDeliveryExecutionNote,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalClaim,
@@ -887,6 +890,7 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
 export async function runGatewayReadiness(
   modelId?: string,
   options?: GatewayReadinessOptions,
+  signal?: AbortSignal,
 ): Promise<GatewayReadinessReport> {
   return fetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
     method: "POST",
@@ -894,7 +898,27 @@ export async function runGatewayReadiness(
       ...(modelId === undefined ? {} : { modelId }),
       ...(options === undefined ? {} : { options }),
     }),
+    ...(signal === undefined ? {} : { signal }),
   });
+}
+
+/**
+ * Activates one chat model from a surface other than the Settings list. It is the same route and
+ * the same basic-chat readiness check Settings > Models runs (ADR-0171 D2); the surface only tells
+ * the Activity Log where the person asked for it. Resolves to the chat probe's verdict; a probe that
+ * reached none (a timeout, a transient overload, an unreachable gateway; the server reports those as
+ * `failed` with a closed warning) is "inconclusive", never a failure (the contract
+ * leaves `conversationReady` absent for it).
+ */
+export async function activateChatModelFromSurface(
+  modelId: string,
+  surface: GatewayReadinessSurface,
+  signal?: AbortSignal,
+): Promise<"passed" | "failed" | "inconclusive"> {
+  const report = await runGatewayReadiness(modelId, { surface }, signal);
+  const chat = report.probes.find((probe) => probe.name === "chat");
+  if (chat === undefined || isInconclusiveReadinessProbe(chat)) return "inconclusive";
+  return chat.status === "passed" || chat.status === "failed" ? chat.status : "inconclusive";
 }
 
 export interface ChatModelDeactivation {
@@ -2110,6 +2134,8 @@ export async function copyFilesEntry(input: {
 // settlement lines on one timeline (PR #3625 review).
 interface GitReadRequestOptions {
   readonly correlationId?: string | undefined;
+  /** Ends the request; a caller that gives up on a read (a timed-out probe) aborts it. */
+  readonly signal?: AbortSignal | undefined;
 }
 
 export async function fetchGitStatus(
@@ -2188,6 +2214,8 @@ export interface GitBranchListResponse {
   readonly reason?: string;
   readonly message?: string;
   readonly branches: readonly GitBranchListEntry[];
+  /** The branch HEAD names while it has no commit yet (a fresh `git init`); not in `branches`. */
+  readonly unbornBranch?: string;
   readonly truncated: boolean;
 }
 
@@ -2199,7 +2227,7 @@ export async function fetchGitBranches(
   params.set("root", root);
   return fetchJson(
     `/api/git/branches?${params.toString()}`,
-    undefined,
+    options?.signal === undefined ? undefined : { signal: options.signal },
     undefined,
     options?.correlationId,
     undefined,
@@ -3080,6 +3108,7 @@ export interface GitDeliveryMutationResponse {
   readonly preflightFindingCodes?: readonly string[];
   readonly requiredApprovers?: readonly string[];
   readonly executionErrorCode?: string;
+  readonly executionNote?: GitDeliveryExecutionNote;
   readonly messageViolations?: readonly GitCommitMessageViolationCode[];
 }
 

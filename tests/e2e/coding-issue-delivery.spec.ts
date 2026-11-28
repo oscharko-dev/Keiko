@@ -511,7 +511,10 @@ async function expectGeneratedDescription(
   beforeRequests: number,
 ): Promise<void> {
   await expect
-    .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 60_000 })
+    // The description pipeline captures the change snapshot several times, and every capture runs
+    // dozens of git subprocesses through the hermetic transport (about 12 s each on a loaded host),
+    // so the wait covers the whole pipeline, not one capture.
+    .poll(async () => (await snapshot(page)).descriptionStatus?.reason, { timeout: 180_000 })
     .toBe("generated");
   const status = (await snapshot(page)).descriptionStatus;
   if (

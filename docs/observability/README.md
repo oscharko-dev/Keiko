@@ -810,6 +810,43 @@ metadata baseline for a bounded 30-second idle period, and an interrupted baseli
 again when a subscriber resumes. Finite file reads and diagnostic delivery can therefore use the
 remaining HTTP/1.1 connections instead of waiting indefinitely behind editor metadata streams.
 
+Every long-lived browser stream is admitted against one origin-wide ceiling of four persistent
+connections (the other two of the browser's six HTTP/1.1 connections stay free for finite reads),
+enforced with Web Locks shared by every tab of the origin; chat turns stream over their own fetch
+outside this pool. Streams are `essential` (the Workbench run and activity streams, the run events,
+the editor verification stream, the editor agent bridge) or `background` (relationship activity,
+Browser). A waiting essential stream keeps its queue position and never times out; after ten
+seconds it tells its surface, which shows a plain waiting status, and clears it on admission. A
+background holder gives its slot up only to a waiter a person can see (a visible document's
+essential stream or shared-pool consumer, or a waiter of its own document), never to another
+background stream and never to a hidden document's waiter. An essential stream of a hidden document
+that is replayable (the run events, the Workbench activity stream and the Workbench run stream,
+which reopen from a fresh snapshot or cursor) yields to a visible document's essential waiter while
+its own document is hidden. A replayable holder also yields to a waiting stream that matters more:
+a non-replayable one of any visible document, or the waiting document's own, or a replayable one of
+a higher rank, lowest rank first. The ranks are run events (lowest), activity, then the run stream,
+because the run stream carries the run state and pending approvals and loses the most when it is
+late; equal ranks never displace each other. A yielding stream is checked at once when the waiter
+announces itself in the same document, otherwise at the next five-second check of its holder; it
+shows the reconnecting state at once, reopens when a slot frees and shows the waiting status
+meanwhile, with a hint when another Keiko window holds connections. The editor verification stream
+and the editor agent bridge never yield, because their servers keep no replay. The four slots are
+shared by every document of the origin, so what a visible tab can hold shrinks with every
+non-replayable stream another (hidden) document holds. Beside one hidden tab that holds a bridge and
+a verification stream a visible tab has two slots left, but only while it holds no non-replayable
+stream of its own: with its own bridge and verification it has none left, and its run stream waits
+too. Two hidden tabs that each hold both fill all four slots, and a visible tab then waits for
+everything (also for a verification run that is starting or reconnecting). Rank displacement works
+across documents as well: a visible tab's waiting run stream (rank 2) displaces another window's
+run-events (rank 0) or activity (rank 1) holder, even a visible one, and a waiting activity stream
+displaces another window's run-events holder; the chain is bounded by 0, 1, 2, so it ends. A
+waiter takes exactly one slot: a higher rank checks again after the whole slot stagger and keeps its
+slot if a lower rank already served the waiter. The hint that another window holds connections is
+read once, when the wait passes its threshold. Keiko does not close another tab's non-replayable stream. "A single
+visible tab never starves" therefore holds only while no other document holds non-replayable
+streams. The shared pool always keeps one
+connection. Without Web Locks the ceiling holds for the current document only.
+
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
 every process, including segments sealed later in that window. For the automatic trigger, that pin is
 published synchronously in the same turn as the failure that caused it, before any later maintenance

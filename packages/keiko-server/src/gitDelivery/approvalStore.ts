@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type {
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
@@ -118,7 +119,7 @@ interface StoredApprovalRecord {
   readonly expiresAtMs: number;
 }
 
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_TTL_MS = GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
 const DEFAULT_MAX_RECORDS = 512;
 
 export function gitDeliveryApprovalBindingHash(binding: GitDeliveryApprovalBinding): string {

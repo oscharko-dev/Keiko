@@ -343,6 +343,41 @@ export function codingAppSessionPairingSettled(signal?: AbortSignal): Promise<bo
 // included. The boot redemption is not counted: every read already waits for it.
 let navigationRedemptions = 0;
 const redemptionListeners = new Set<() => void>();
+// U-22: a restarted Keiko drops the app session while this window stays open, and a channel read
+// answered with the constant `{ session: "unpaired" }` projection is the only signal the window
+// gets. The first such read since the last session change is counted, so the one owner of the
+// window's pairing state re-confirms it through its own read (a report alone is never trusted);
+// later reads add nothing until a pairing or re-inspection resets the flag.
+let unpairedObservations = 0;
+let unpairedReported = false;
+const unpairedListeners = new Set<() => void>();
+
+/** A session-channel read answered `{ session: "unpaired" }`: ask for one pairing confirmation. */
+export function reportCodingAppSessionUnpairedRead(): void {
+  if (unpairedReported) return;
+  unpairedReported = true;
+  unpairedObservations += 1;
+  for (const listener of unpairedListeners) listener();
+}
+
+/** The confirmation found the session paired: a later unpaired read is news again, not a repeat. */
+export function settleCodingAppSessionUnpairedReport(): void {
+  unpairedReported = false;
+}
+
+/** How many unpaired channel reads asked for a confirmation; the pairing state re-runs on it. */
+export function useCodingAppSessionUnpairedObservations(): number {
+  return useSyncExternalStore(
+    (listener): (() => void) => {
+      unpairedListeners.add(listener);
+      return (): void => {
+        unpairedListeners.delete(listener);
+      };
+    },
+    () => unpairedObservations,
+    () => 0,
+  );
+}
 let sessionChecks = 0;
 const sessionCheckListeners = new Set<() => void>();
 
@@ -378,6 +413,7 @@ function redemptionCount(): number {
 
 function publishSessionRefresh(): void {
   navigationRedemptions += 1;
+  unpairedReported = false;
   for (const listener of redemptionListeners) listener();
 }
 

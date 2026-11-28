@@ -714,6 +714,18 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.selectedModel).toBeUndefined();
   });
 
+  it("serves a catalog refresh requested before the session subscribed (U-45)", async () => {
+    // A Workbench window mounted in the same commit as the shell requests the unfiltered catalog
+    // before this hook's effects ran; the request must not be lost.
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    requestGatewayModelCatalogRefresh({ check: true });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.modelCatalogRead).toBeDefined());
+    expect(fetchModels).toHaveBeenCalledWith(expect.any(String), true);
+  });
+
   it("distinguishes a failed catalog from a successful empty catalog and then recovers", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });

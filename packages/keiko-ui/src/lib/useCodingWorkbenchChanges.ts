@@ -56,6 +56,8 @@ export interface CodingWorkbenchChangesState {
   /** The canonical repository root the status read resolved, when it reported one. */
   readonly repositoryRoot: string | null;
   readonly truncated: boolean;
+  /** The exact number of changed files Git listed; above `files.length` when the list is bounded. */
+  readonly totalFiles: number;
   readonly diffStatus: CodingWorkbenchDiffStatus;
   readonly diff: DiffParseResult | null;
   readonly diffTruncated: boolean;
@@ -88,6 +90,7 @@ const EMPTY_STATE: CodingWorkbenchChangesState = {
   head: null,
   repositoryRoot: null,
   truncated: false,
+  totalFiles: 0,
   diffStatus: "idle",
   diff: null,
   diffTruncated: false,
@@ -129,6 +132,7 @@ function readyState(
     head: headLabel(status, history),
     repositoryRoot: status.repositoryRoot ?? null,
     truncated: status.truncated,
+    totalFiles: Math.max(status.totalChanges ?? 0, status.changes.length),
     diffStatus: diffStatusForMerge(current, selectedPath, sameSelection),
     diff: sameSelection ? current.diff : null,
     diffTruncated: sameSelection ? current.diffTruncated : false,

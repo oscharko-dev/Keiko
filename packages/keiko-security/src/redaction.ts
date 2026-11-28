@@ -9,6 +9,7 @@
 // gate green (ADR-0002).
 
 import { privateKeyRegions } from "./redaction-private-key.js";
+import { maskNonCanonicalGitPathRecords } from "./redaction-diff.js";
 import type { AuditRedactionConfig } from "@oscharko-dev/keiko-contracts";
 import {
   createStreamingRedactor as createBlockRedactor,
@@ -268,21 +269,23 @@ function unparsedDiffHunkFloorPorts(
   };
 }
 
-export function redact(
+interface RedactOptions {
+  readonly preserveSourceLineBreaks?: boolean;
+  readonly sourceLanguage?: SourceRedactionLanguage;
+  readonly inferSourceLanguage?: boolean;
+  readonly onCodeProjection?: (report: CodeRedactionReport) => void;
+  /**
+   * Diff views of the local user's own repository (#4114): a file whose hunks do not parse on
+   * their own keeps them readable under the credential floor instead of being masked whole.
+   */
+  readonly unparsedDiffHunks?: "mask" | "credential-floor";
+  readonly onUnparsedDiffHunkFloor?: () => void;
+}
+
+function redactProjected(
   input: string,
   additionalSecrets: readonly string[] = [],
-  options: {
-    readonly preserveSourceLineBreaks?: boolean;
-    readonly sourceLanguage?: SourceRedactionLanguage;
-    readonly inferSourceLanguage?: boolean;
-    readonly onCodeProjection?: (report: CodeRedactionReport) => void;
-    /**
-     * Diff views of the local user's own repository (#4114): a file whose hunks do not parse on
-     * their own keeps them readable under the credential floor instead of being masked whole.
-     */
-    readonly unparsedDiffHunks?: "mask" | "credential-floor";
-    readonly onUnparsedDiffHunkFloor?: () => void;
-  } = {},
+  options: RedactOptions = {},
 ): string {
   const preserve = options.preserveSourceLineBreaks === true;
   const floor = unparsedDiffHunkFloorPorts(options, additionalSecrets);
@@ -321,6 +324,16 @@ export function redact(
     replacement: redactPlain(input.slice(from), additionalSecrets, preserve),
   });
   return redactIdentifiedPatterns(replaceCodeSpans(input, spans), additionalSecrets, preserve);
+}
+
+export function redact(
+  input: string,
+  additionalSecrets: readonly string[] = [],
+  options: RedactOptions = {},
+): string {
+  return maskNonCanonicalGitPathRecords(redactProjected(input, additionalSecrets, options), {
+    redactPlain: (value): string => redactPlain(value, additionalSecrets, true),
+  });
 }
 
 function replaceCodeSpans(

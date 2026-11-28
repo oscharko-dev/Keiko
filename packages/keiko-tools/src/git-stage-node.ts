@@ -1,12 +1,31 @@
 import { createHash } from "node:crypto";
 import {
-  GIT_STAGE_CANDIDATE_MAX_BYTES,
+  CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
+  type CodingRuntimeGitStageCause,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  assertGitStageFileUnchanged,
+  GIT_STAGE_FILE_CHANGED,
+  inspectGitStageFile,
+  isGitStageLargeFile,
   withGitIndexTransaction,
-  readGitStageFile,
+  type GitIndexCleanupReport,
+  type GitObjectQuarantine,
+  type GitStageContent,
   type GitStageFile,
+  type GitStageLargeFile,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import {
+  analyzeLargeFile,
+  lfFormBlobIdOfLargeFile,
+  sha256OfLargeFile,
+  type LargeFileAnalysis,
+} from "./git-stage-stream.js";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
+import { eachInSequence } from "./sequential.js";
+import { gitHeadObjectIdLength } from "./git-head-state.js";
+import { gitBlobObjectId } from "./git-index-identity.js";
 import type { GitMutationArgvPlan, GitStageExecRequest } from "./git-mutation-adapter.js";
 
 export interface GitStageEffectContext {
@@ -20,48 +39,76 @@ export interface GitStageEffectContext {
     argv: readonly string[],
     stdin?: Uint8Array | string,
     indexPath?: string,
+    // A run that reads a large file by path is allowed time in proportion to its size.
+    timeoutMs?: number,
+    // A run that writes an object by path writes it here, not into the live object store.
+    quarantine?: GitObjectQuarantine,
   ) => Promise<CommandResult>;
+  // The private object directory the objects Git writes by path go to until they are verified.
+  readonly objectQuarantine?: GitObjectQuarantine | undefined;
+  // The run's cancellation: checked between the chunks of every streamed read.
+  readonly signal?: AbortSignal | undefined;
   // Every configured `filter.<name>` driver name, or `undefined` when the configuration cannot be
   // read. The conversion hash overrides each one, so no configured driver can run while staging.
   readonly filterDriverNames: () => Promise<readonly string[] | undefined>;
+  // Injected log port: what the index transaction's cleanup could not finish (a leftover quarantine
+  // or private index, or an index lock that stayed), as counts and flags. Never changes the result.
+  readonly onIndexCleanupFailure?: ((report: GitIndexCleanupReport) => void) | undefined;
   // The line-break class of each named path's index entry as `git ls-files --eol` reports it
   // (`lf`, `crlf`, `mixed`, `none`, `-text`; absent: no entry). Git keeps the bytes of a path whose
   // staged blob already holds a CR, so the conversion depends on it.
   readonly indexLineBreaks: (paths: readonly string[]) => Promise<ReadonlyMap<string, string>>;
 }
-function contentDigest(files: readonly GitStageFile[]): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify(
-        files.map((file) => [
-          file.path,
-          file.mode,
-          createHash("sha256").update(file.bytes).digest("hex"),
-        ]),
-      ),
-    )
-    .digest("hex");
+/**
+ * What a candidate read streamed instead of holding, for the body-free log line: how many files were
+ * above the inline bound and how many bytes they total. The caller owns the counters; `signal`
+ * cancels the streamed reads between chunks.
+ */
+export interface GitStageStreamObserver {
+  readonly signal?: AbortSignal | undefined;
+  largeFileCount: number;
+  streamedBytes: number;
+}
+async function contentDigest(
+  root: string,
+  files: readonly GitStageContent[],
+  options: { readonly fs?: WorkspaceFs | undefined; readonly signal?: AbortSignal | undefined },
+  observer?: GitStageStreamObserver,
+): Promise<string> {
+  const entries: (readonly [string, string, string])[] = [];
+  for (const file of files) {
+    if (isGitStageLargeFile(file) && observer !== undefined) {
+      observer.largeFileCount += 1;
+      observer.streamedBytes += file.size;
+    }
+    entries.push([
+      file.path,
+      file.mode,
+      isGitStageLargeFile(file)
+        ? await sha256OfLargeFile(root, file, options) // NOSONAR typescript:S9382 -- one streamed file at a time, one chunk in memory
+        : createHash("sha256").update(file.bytes).digest("hex"),
+    ]);
+  }
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 export async function readGitStageCandidate(
   root: string,
   paths: readonly string[],
   fs?: WorkspaceFs,
+  observer?: GitStageStreamObserver,
 ): Promise<string> {
-  return contentDigest(await readFiles(root, paths, fs));
+  const options = { fs, signal: observer?.signal };
+  return contentDigest(root, await readFiles(root, paths, fs), options, observer);
 }
+// A file above the governed stdin contract is returned as a large handle (size and identity), never
+// read whole: no selection size ends a staging, and memory holds at most the small files' bytes.
 async function readFiles(
   root: string,
   paths: readonly string[],
   fs: WorkspaceFs | undefined,
-): Promise<readonly GitStageFile[]> {
-  const files: GitStageFile[] = [];
-  let size = 0;
-  for (const path of paths) {
-    const file = await readGitStageFile(root, path, { fs }); // NOSONAR typescript:S9382 -- the selection's byte bound is checked before the next file is read
-    size += file.bytes.length;
-    if (size > GIT_STAGE_CANDIDATE_MAX_BYTES) throw new Error("git-stage-candidate-too-large");
-    files.push(file);
-  }
+): Promise<readonly GitStageContent[]> {
+  const files: GitStageContent[] = [];
+  for (const path of paths) files.push(await inspectGitStageFile(root, path, { fs })); // NOSONAR typescript:S9382 -- files are inspected one after the other
   return files;
 }
 function objectId(result: CommandResult): string {
@@ -70,6 +117,23 @@ function objectId(result: CommandResult): string {
     throw new Error("git-stage-object-unavailable");
   return value;
 }
+/**
+ * Body-free counts a settlement reports about its own bounds: attribute reads that were split in
+ * halves after a truncated answer, and paths a batch left undecided because the shared hash-run
+ * budget ran out. They make a partly unsettled batch distinguishable from files that are dirty.
+ */
+export interface GitStagedConversionStats {
+  attributeSplitCount: number;
+  hashBudgetExhaustedCount: number;
+  // Filled when present: the paths the port left unanswered because it could not JUDGE them (an
+  // attribute, an index line-break class or a path form it does not settle, or a failed hash), as
+  // opposed to paths where no conversion applies so the bytes are what staging stores. A caller
+  // that must never state a wrong number treats these as unknown (#4491).
+  cannotJudge?: Set<string>;
+}
+/** Why the staged-object port could not answer for a batch (a closed vocabulary for the log). */
+export type GitStagedUndecidableReason =
+  "config-unreadable" | "attributes-unreadable" | "attributes-truncated" | "hash-failed";
 /**
  * The effective `core.autocrlf` a verified staging runs under. `exact`: no conversion is configured,
  * so the index takes the verified bytes as they are. Otherwise a file Git would convert while
@@ -94,6 +158,48 @@ function allLineBreaksCrlf(bytes: Uint8Array): boolean {
     }
   }
   return breaks > 0;
+}
+// The line-break shape of a file's bytes, as the checkout decision reads it. The streaming reader
+// (`analyzeLargeFile`) reports the same three facts for a large file, so one rule judges both.
+interface LineShape {
+  readonly hasNul: boolean;
+  readonly loneLf: boolean;
+  readonly loneCr: boolean;
+}
+function lineShapeOf(bytes: Uint8Array): LineShape {
+  let hasNul = false;
+  let loneLf = false;
+  let loneCr = false;
+  bytes.forEach((byte, index) => {
+    if (byte === 0) hasNul = true;
+    if (byte === LF && bytes[index - 1] !== CR) loneLf = true;
+    if (byte === CR && bytes[index + 1] !== LF) loneCr = true;
+  });
+  return { hasNul, loneLf, loneCr };
+}
+/**
+ * Whether checking the raw bytes out again reproduces them, for a path whose own `eol` attribute
+ * declares the CRLF checkout. That checkout rewrites each line feed without a carriage return before
+ * it as CRLF, so a file with one is not what the index would give back. (A checkout that only the
+ * effective `core.autocrlf` chooses is Git's own `git add` semantics for a line-feed file and stays
+ * admitted.) Under `text=auto` Git leaves a file it
+ * judges binary (a NUL) or one with a bare carriage return alone. Equal clean hashes (`converted ===
+ * raw`) say only that staging converts nothing, never that checkout converts nothing.
+ */
+function checkoutKeepsRawBytes(
+  plan: Extract<StagePlan, { kind: "convert" }>,
+  shape: LineShape,
+): boolean {
+  if (!plan.declared || plan.checkout !== "crlf" || !shape.loneLf) return true;
+  return plan.auto && (shape.hasNul || shape.loneCr);
+}
+// The staged object a plan chose, unless it is the raw one and checkout would rewrite its bytes.
+function checkedChoice(
+  chosen: StagedChoice | undefined,
+  plan: Extract<StagePlan, { kind: "convert" }>,
+  shape: LineShape,
+): StagedChoice | undefined {
+  return chosen === "raw" && !checkoutKeepsRawBytes(plan, shape) ? undefined : chosen;
 }
 function withoutCrlf(bytes: Uint8Array): Uint8Array {
   return bytes.filter((byte, index) => byte !== CR || bytes[index + 1] !== LF);
@@ -147,7 +253,7 @@ async function hashObject(
   return objectId(await ctx.run(argv, bytes));
 }
 interface StageConversion {
-  readonly autocrlf: "true" | "input";
+  readonly autocrlf: "true" | "input" | "false";
   readonly path: string;
 }
 // Index line-break classes whose blob holds no CR, so Git applies its conversion (an absent entry
@@ -157,20 +263,82 @@ interface StageConversion {
 const INDEX_WITHOUT_CR = new Set(["lf", "none"]);
 const INDEX_WITH_CR = new Set(["crlf", "mixed"]);
 /**
- * Which object Git's own staging stores for bytes it would convert: `raw` when the index entry
- * already holds a CR, `converted` when the conversion is the exact LF form of an all-CRLF file under
- * `autocrlf=true` (which checkout reverses byte for byte), otherwise `undefined` (refused).
+ * How Git converts one path's line breaks, as `convert.c` decides it from the path's `text` and
+ * `eol` attributes and the effective `core.autocrlf` (#4491: a repository with `* text=auto`, the
+ * common GitHub default, refused every staging before this). `none`: Git stores and checks out the
+ * bytes as they are. Otherwise Git normalizes CRLF to LF while staging; `auto` (`text=auto`, or no
+ * attribute under `core.autocrlf`) keeps the bytes of a path whose index entry already holds a CR,
+ * and `checkout` is the line break Git writes back: `crlf`, `lf`, or `unknown` when it depends on
+ * `core.eol`, which this path does not read, so a conversion there is refused.
+ */
+type StagePlan =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "convert";
+      readonly auto: boolean;
+      readonly checkout: StageCheckout;
+      // True when the path's own `eol` attribute chose the checkout line break; false when only the
+      // effective `core.autocrlf` did.
+      readonly declared: boolean;
+    };
+// Which of the two candidate objects a stage plan stores.
+type StagedChoice = "raw" | "converted";
+type StageCheckout = "crlf" | "lf" | "unknown";
+interface GitStageLineEndingAttributes {
+  readonly text: string;
+  readonly eol: string;
+}
+const NO_CONVERSION: StagePlan = { kind: "none" };
+const AUTOCRLF_OF: Readonly<Record<GitStageLineEndings, StageConversion["autocrlf"]>> = {
+  exact: "false",
+  "autocrlf-true": "true",
+  "autocrlf-input": "input",
+};
+function attributeEol(eol: string): StageCheckout | undefined {
+  return eol === "lf" || eol === "crlf" ? eol : undefined;
+}
+function configuredCheckout(lineEndings: GitStageLineEndings): StageCheckout {
+  if (lineEndings === "autocrlf-true") return "crlf";
+  return lineEndings === "autocrlf-input" ? "lf" : "unknown";
+}
+function stagePlan(
+  lineEndings: GitStageLineEndings,
+  attributes: GitStageLineEndingAttributes,
+): StagePlan {
+  if (attributes.text === "unset") return NO_CONVERSION;
+  const eol = attributeEol(attributes.eol);
+  if (attributes.text === "set" || attributes.text === "auto")
+    return {
+      kind: "convert",
+      auto: attributes.text === "auto",
+      checkout: eol ?? configuredCheckout(lineEndings),
+      declared: eol !== undefined,
+    };
+  if (eol !== undefined) return { kind: "convert", auto: false, checkout: eol, declared: true };
+  if (lineEndings === "exact") return NO_CONVERSION;
+  return {
+    kind: "convert",
+    auto: true,
+    checkout: configuredCheckout(lineEndings),
+    declared: false,
+  };
+}
+/**
+ * Which object Git's own staging stores for bytes it would convert: `raw` when an `auto` path's
+ * index entry already holds a CR, `converted` when the conversion is the exact LF form of an
+ * all-CRLF file that checks out as CRLF again (so checkout reverses it byte for byte), otherwise
+ * `undefined` (refused).
  */
 async function convertedChoice(
   ctx: GitStageEffectContext,
   file: GitStageFile,
-  conversion: StageConversion,
+  plan: Extract<StagePlan, { kind: "convert" }>,
   converted: string,
   indexClass: string | undefined,
-): Promise<"raw" | "converted" | undefined> {
-  if (indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
-  if (indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
-  if (conversion.autocrlf !== "true" || !allLineBreaksCrlf(file.bytes)) return undefined;
+): Promise<StagedChoice | undefined> {
+  if (plan.auto && indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
+  if (plan.auto && indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
+  if (plan.checkout !== "crlf" || !allLineBreaksCrlf(file.bytes)) return undefined;
   return (await hashObject(ctx, withoutCrlf(file.bytes), false)) === converted
     ? "converted"
     : undefined;
@@ -178,55 +346,420 @@ async function convertedChoice(
 /**
  * The object a verified file is staged as, or `undefined` when Git would store bytes whose checkout
  * differs from the verified ones. The attribute check has already ruled out every filter driver,
- * `ident`, a working-tree encoding and `text`/`eol`/`crlf` attributes, so the only conversion left
- * is Git's built-in line-ending one, pinned here to the effective `core.autocrlf`. Only the object
- * that is staged is written.
+ * `ident`, a working-tree encoding and the legacy `crlf` attribute, so the only conversion left is
+ * Git's built-in line-ending one, pinned here to the effective `core.autocrlf` and the path's `text`
+ * and `eol` attributes. Only the object that is staged is written.
  */
 async function stagedObjectId(
   ctx: GitStageEffectContext,
   file: GitStageFile,
-  lineEndings: GitStageLineEndings,
-  indexClass: string | undefined,
+  stage: FileStage,
   write: boolean,
 ): Promise<string | undefined> {
-  if (lineEndings === "exact" || file.mode === "120000") return hashObject(ctx, file.bytes, write);
+  const { plan, lineEndings, indexClass } = stage;
+  if (plan.kind === "none" || file.mode === "120000") return hashObject(ctx, file.bytes, write);
   const raw = await hashObject(ctx, file.bytes, false);
-  const conversion: StageConversion = {
-    autocrlf: lineEndings === "autocrlf-true" ? "true" : "input",
-    path: file.path,
-  };
+  const conversion: StageConversion = { autocrlf: AUTOCRLF_OF[lineEndings], path: file.path };
   const converted = await hashObject(ctx, file.bytes, false, conversion);
-  const choice =
-    converted === raw ? "raw" : await convertedChoice(ctx, file, conversion, converted, indexClass);
+  const chosen =
+    converted === raw ? "raw" : await convertedChoice(ctx, file, plan, converted, indexClass);
+  const choice = checkedChoice(chosen, plan, lineShapeOf(file.bytes));
   if (choice === undefined) return undefined;
   if (!write) return choice === "raw" ? raw : converted;
   return hashObject(ctx, file.bytes, true, choice === "raw" ? undefined : conversion);
 }
-function stageIndexClasses(
+// Git reads a large file by path (`hash-object -- <path>`, run in the workspace root), so its bytes
+// never pass the bounded stdin and are never held in memory. The attributes, the filter-driver
+// overrides and the line-ending pins are exactly the ones `hashObject` applies to stdin bytes. A
+// run is given time in proportion to the file (it reads every byte): one minute plus 100 ms per MiB,
+// so no healthy multi-gigabyte file is ended by a fixed deadline (owner decision 2026-11-24).
+const LARGE_HASH_BASE_TIMEOUT_MS = 60_000;
+const LARGE_HASH_TIMEOUT_MS_PER_MIB = 100;
+export function largeHashTimeoutMs(size: number): number {
+  return LARGE_HASH_BASE_TIMEOUT_MS + Math.ceil(size / 1_048_576) * LARGE_HASH_TIMEOUT_MS_PER_MIB;
+}
+async function hashLargeObject(
   ctx: GitStageEffectContext,
-  files: readonly GitStageFile[],
+  file: GitStageLargeFile,
+  write: boolean,
+  conversion?: StageConversion,
+): Promise<string> {
+  const head =
+    conversion === undefined
+      ? ["hash-object", "--no-filters"]
+      : [
+          ...(await filterNeutralizingArgs(ctx)),
+          "-c",
+          `core.autocrlf=${conversion.autocrlf}`,
+          "-c",
+          "core.safecrlf=false",
+          "hash-object",
+        ];
+  const argv = [...head, ...(write ? ["-w"] : []), "--", file.path];
+  return objectId(
+    await ctx.run(
+      argv,
+      undefined,
+      undefined,
+      largeHashTimeoutMs(file.size),
+      write ? ctx.objectQuarantine : undefined,
+    ),
+  );
+}
+const streamOptions = (
+  ctx: GitStageEffectContext,
+): { readonly fs?: WorkspaceFs | undefined; readonly signal?: AbortSignal | undefined } => ({
+  fs: ctx.fs,
+  signal: ctx.signal,
+});
+// Git read the file by path, which follows a symlinked parent directory: a parent swapped for the
+// duration of Git's read leaves the leaf's own identity untouched. The object Git names must
+// therefore equal the id of the bytes the validated descriptor delivers, or the file Git read was
+// not this file (`git-stage-file-changed`); the object it wrote is then an unreferenced loose object.
+function assertSameObject(actual: string, expected: string): void {
+  if (actual !== expected) throw new Error(GIT_STAGE_FILE_CHANGED);
+}
+// The streaming counterpart of `convertedChoice`: the LF form's blob id is hashed while the file is
+// streamed, so a large all-CRLF text file is admitted exactly when the in-memory one would be.
+async function convertedLargeChoice(
+  ctx: GitStageEffectContext,
+  file: GitStageLargeFile,
+  plan: Extract<StagePlan, { kind: "convert" }>,
+  converted: string,
+  indexClass: string | undefined,
+  analysis: LargeFileAnalysis,
+): Promise<StagedChoice | undefined> {
+  if (plan.auto && indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
+  if (plan.auto && indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
+  if (plan.checkout !== "crlf" || analysis.crlfBreaks === undefined) return undefined;
+  const lfForm = await lfFormBlobIdOfLargeFile(
+    ctx.workspaceRoot,
+    file,
+    converted.length,
+    analysis.crlfBreaks,
+    streamOptions(ctx),
+  );
+  return lfForm === converted ? "converted" : undefined;
+}
+async function stagedLargeObjectId(
+  ctx: GitStageEffectContext,
+  file: GitStageLargeFile,
+  stage: FileStage,
+  write: boolean,
+): Promise<string | undefined> {
+  const { plan, lineEndings, indexClass } = stage;
+  if (plan.kind === "none") {
+    const id = await hashLargeObject(ctx, file, write);
+    if (write) {
+      const analysis = await analyzeLargeFile(
+        ctx.workspaceRoot,
+        file,
+        id.length,
+        streamOptions(ctx),
+      );
+      assertSameObject(id, analysis.objectId);
+    }
+    return id;
+  }
+  const raw = await hashLargeObject(ctx, file, false);
+  const conversion: StageConversion = { autocrlf: AUTOCRLF_OF[lineEndings], path: file.path };
+  const converted = await hashLargeObject(ctx, file, false, conversion);
+  const analysis = await analyzeLargeFile(ctx.workspaceRoot, file, raw.length, streamOptions(ctx));
+  assertSameObject(raw, analysis.objectId);
+  const chosen =
+    converted === raw
+      ? "raw"
+      : await convertedLargeChoice(ctx, file, plan, converted, indexClass, analysis);
+  const choice = checkedChoice(chosen, plan, analysis);
+  if (choice === undefined) return undefined;
+  if (!write) return choice === "raw" ? raw : converted;
+  const written = await hashLargeObject(ctx, file, true, choice === "raw" ? undefined : conversion);
+  // `converted` was proven equal to the streamed LF form by `convertedLargeChoice`.
+  assertSameObject(written, choice === "raw" ? analysis.objectId : converted);
+  return written;
+}
+// Git read the file by path: its object is accepted only if it is the object of the streamed bytes
+// and the file is exactly the one that was inspected, so a swap or an edit meanwhile fails closed.
+async function stagedContentObjectId(
+  ctx: GitStageEffectContext,
+  file: GitStageContent,
+  stage: FileStage,
+  write: boolean,
+): Promise<string | undefined> {
+  if (!isGitStageLargeFile(file)) return stagedObjectId(ctx, file, stage, write);
+  const id = await stagedLargeObjectId(ctx, file, stage, write);
+  assertGitStageFileUnchanged(ctx.workspaceRoot, file, { fs: ctx.fs });
+  return id;
+}
+interface FileStage {
+  readonly plan: StagePlan;
+  readonly lineEndings: GitStageLineEndings;
+  readonly indexClass: string | undefined;
+}
+// `git check-attr -z` answers one `path NUL attribute NUL value NUL` record per path and attribute,
+// in the order asked. A failed, cut-short or misordered answer proves nothing: `undefined`. Git on
+// macOS prints a decomposed (NFD) path precomposed (`core.precomposeunicode`), so paths are compared
+// in NFC.
+// One run is bounded on both sides: its output is capped (`DEFAULT_SANDBOX_POLICY.maxOutputBytes`,
+// 256 KiB; a longer answer is cut short and proves nothing) and so is its stdin (a string input at
+// 16 KiB, bytes at 64 KiB). `check-attr -z` answers `path NUL attribute NUL value NUL` for every path
+// and attribute, so the paths are read in parts whose estimated answer and whose stdin both stay well
+// below the caps, and the input travels as bytes.
+const ATTRIBUTE_ANSWER_BUDGET_BYTES = 128 * 1024;
+export const STDIN_BUDGET_BYTES = 48 * 1024;
+const ATTRIBUTE_VALUE_ESTIMATE_BYTES = 16;
+const utf8 = new TextEncoder();
+// Splits `paths` so that no part's estimated answer or stdin (one `separator` byte per path) exceeds
+// its budget; a path that alone exceeds a budget still forms its own part.
+function boundedChunks(
+  paths: readonly string[],
+  answerBytes: (path: string) => number,
+  maxPaths: number,
+): readonly (readonly string[])[] {
+  const chunks: string[][] = [];
+  let answer = Infinity;
+  let stdin = Infinity;
+  for (const path of paths) {
+    const pathBytes = Buffer.byteLength(path) + 1;
+    answer += answerBytes(path);
+    stdin += pathBytes;
+    const full =
+      answer > ATTRIBUTE_ANSWER_BUDGET_BYTES ||
+      stdin > STDIN_BUDGET_BYTES ||
+      (chunks.at(-1)?.length ?? 0) >= maxPaths;
+    if (full) {
+      chunks.push([]);
+      answer = answerBytes(path);
+      stdin = pathBytes;
+    }
+    chunks.at(-1)?.push(path);
+  }
+  return chunks;
+}
+function attributeChunks(
+  attributes: readonly string[],
+  paths: readonly string[],
+): readonly (readonly string[])[] {
+  const perPathFixed = attributes.reduce(
+    (sum, attribute) => sum + Buffer.byteLength(attribute) + ATTRIBUTE_VALUE_ESTIMATE_BYTES + 3,
+    0,
+  );
+  return boundedChunks(
+    paths,
+    (path) => attributes.length * Buffer.byteLength(path) + perPathFixed,
+    Infinity,
+  );
+}
+type AttributeReadFailure = "attributes-unreadable" | "attributes-truncated";
+async function readAttributeValuesOrReason(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+  stats?: GitStagedConversionStats,
+): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
+  const rows: (readonly string[])[] = [];
+  const splits: AttributeSplits = { remaining: ATTRIBUTE_SPLIT_BUDGET };
+  let failure: AttributeReadFailure | undefined;
+  for (const chunk of attributeChunks(attributes, paths)) {
+    const part = await readAttributeChunkHalving(ctx, attributes, chunk, splits); // NOSONAR typescript:S9382 -- sequential parts keep each answer under the output cap
+    if (typeof part === "string") {
+      failure = part;
+      break;
+    }
+    rows.push(...part);
+  }
+  if (stats !== undefined) stats.attributeSplitCount += ATTRIBUTE_SPLIT_BUDGET - splits.remaining;
+  return failure ?? rows;
+}
+// A value is estimated at a few bytes, but a `.gitattributes` may give a `filter` or an encoding a
+// value of kilobytes: an answer cut short at the output cap is read again in halves, within a bounded
+// number of splits per read, before the chunk is given up.
+export const ATTRIBUTE_SPLIT_BUDGET = 64;
+interface AttributeSplits {
+  remaining: number;
+}
+async function readAttributeChunkHalving(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+  splits: AttributeSplits,
+): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
+  const answer = await readAttributeChunk(ctx, attributes, paths);
+  if (answer !== "attributes-truncated" || paths.length < 2 || splits.remaining <= 0) return answer;
+  splits.remaining -= 1;
+  const middle = Math.ceil(paths.length / 2);
+  const rows: (readonly string[])[] = [];
+  for (const half of [paths.slice(0, middle), paths.slice(middle)]) {
+    const part = await readAttributeChunkHalving(ctx, attributes, half, splits); // NOSONAR typescript:S9382 -- halves are read one after the other inside the split budget
+    if (typeof part === "string") return part;
+    rows.push(...part);
+  }
+  return rows;
+}
+async function readAttributeValues(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+): Promise<readonly (readonly string[])[] | undefined> {
+  const rows = await readAttributeValuesOrReason(ctx, attributes, paths);
+  return typeof rows === "string" ? undefined : rows;
+}
+async function readAttributeChunk(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
+  // The paths travel on stdin (NUL separated), so a selection never meets the command-line limit.
+  const result = await ctx.run(
+    ["check-attr", "-z", ...attributes, "--stdin"],
+    utf8.encode(paths.map((path) => `${path}\0`).join("")),
+  );
+  if (result.truncated) return "attributes-truncated";
+  if (result.exitCode !== 0 || !result.stdout.endsWith("\0")) return "attributes-unreadable";
+  const fields = result.stdout.slice(0, -1).split("\0");
+  if (fields.length !== paths.length * attributes.length * 3) return "attributes-unreadable";
+  const rows: string[][] = [];
+  for (const [pathIndex, path] of paths.entries()) {
+    const row: string[] = [];
+    for (const [attributeIndex, attribute] of attributes.entries()) {
+      const at = (pathIndex * attributes.length + attributeIndex) * 3;
+      const value = recordValue(fields.slice(at, at + 3), path, attribute);
+      if (value === undefined) return "attributes-unreadable";
+      row.push(value);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+// The value of one `path NUL attribute NUL value` record, when it answers for this path (compared in
+// NFC) and this attribute.
+function recordValue(
+  record: readonly string[],
+  path: string,
+  attribute: string,
+): string | undefined {
+  const [recordPath, recordAttribute, value] = record;
+  if (recordPath?.normalize("NFC") !== path.normalize("NFC") || recordAttribute !== attribute)
+    return undefined;
+  return value;
+}
+// Each path's conversion under `lineEndings` and its `text`/`eol` attributes, plus the index
+// line-break class an `auto` conversion depends on; `undefined` when the attributes cannot be read.
+async function fileStages(
+  ctx: GitStageEffectContext,
+  files: readonly Pick<GitStageContent, "path">[],
   lineEndings: GitStageLineEndings,
-): Promise<ReadonlyMap<string, string>> {
-  if (lineEndings === "exact") return Promise.resolve(new Map());
-  return ctx.indexLineBreaks(files.map((file) => file.path));
+): Promise<ReadonlyMap<string, FileStage> | undefined> {
+  const paths = files.map((file) => file.path);
+  const values = paths.length === 0 ? [] : await readAttributeValues(ctx, ["text", "eol"], paths);
+  return values === undefined ? undefined : stagesOfValues(ctx, paths, lineEndings, values);
+}
+// `values` are the `text` and `eol` attribute values of each path, in order.
+async function stagesOfValues(
+  ctx: GitStageEffectContext,
+  paths: readonly string[],
+  lineEndings: GitStageLineEndings,
+  values: readonly (readonly string[])[],
+): Promise<ReadonlyMap<string, FileStage>> {
+  const plans = paths.map((path, index) => {
+    const [text = "unspecified", eol = "unspecified"] = values[index] ?? [];
+    return [path, stagePlan(lineEndings, { text, eol })] as const;
+  });
+  const indexed = plans.some(([, plan]) => plan.kind === "convert" && plan.auto);
+  const classes = indexed ? await ctx.indexLineBreaks(paths) : new Map<string, string>();
+  return new Map(
+    plans.map(([path, plan]) => [path, { plan, lineEndings, indexClass: classes.get(path) }]),
+  );
 }
 async function indexEntries(
   ctx: GitStageEffectContext,
-  files: readonly GitStageFile[],
+  files: readonly GitStageContent[],
   hashLength: number,
   lineEndings: GitStageLineEndings,
-): Promise<string | undefined> {
-  const classes = await stageIndexClasses(ctx, files, lineEndings);
+): Promise<readonly Uint8Array[] | undefined> {
+  const stages = await fileStages(ctx, files, lineEndings);
+  if (stages === undefined) return undefined;
   const lines: string[] = [];
+  const written = await writeUnconvertedObjects(ctx, files, stages, hashLength);
   for (const file of files) {
+    const stage = stages.get(file.path);
     const sha =
       file.mode === "0"
         ? "0".repeat(hashLength)
-        : await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
+        : (written.get(file.path) ??
+          (stage === undefined ? undefined : await stagedContentObjectId(ctx, file, stage, true))); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
     if (sha === undefined) return undefined;
     lines.push(`${file.mode} ${sha}\t${file.path}\0`);
   }
-  return lines.join("");
+  return indexInfoParts(lines);
+}
+// One `update-index --index-info` run's stdin is bounded (the exec contract caps bytes input at
+// 64 KiB), so a selection of hundreds of files (U-28) is fed in parts. Each part is a complete run
+// on the transaction's private index copy, which replaces the live index only after every part
+// succeeded.
+function indexInfoParts(lines: readonly string[]): readonly Uint8Array[] {
+  const parts: string[][] = [];
+  let bytes = Infinity;
+  for (const line of lines) {
+    const size = Buffer.byteLength(line);
+    if (bytes + size > STDIN_BUDGET_BYTES) {
+      parts.push([]);
+      bytes = 0;
+    }
+    parts.at(-1)?.push(line);
+    bytes += size;
+  }
+  return parts.map((part) => utf8.encode(part.join("")));
+}
+// A regular file Git stores byte for byte: no conversion applies and its bytes are in memory.
+function storedAsIs(file: GitStageContent, stage: FileStage | undefined): file is GitStageFile {
+  return (
+    !isGitStageLargeFile(file) &&
+    file.mode !== "0" &&
+    file.mode !== "120000" &&
+    stage?.plan.kind === "none"
+  );
+}
+/**
+ * Writes the objects of the files Git stores unchanged with ONE `hash-object -w --stdin-paths` run
+ * per batch, where each file used to cost a process of its own (Windows pays 70 to 130 ms for every
+ * one). The verified bytes stay the authority: Git reads the files by path, and an object is accepted
+ * only when its id is the id of the verified bytes, so a file changed since it was verified is never
+ * staged. A batch that fails or disagrees answers nothing and its files are written one by one.
+ */
+async function writeUnconvertedObjects(
+  ctx: GitStageEffectContext,
+  files: readonly GitStageContent[],
+  stages: ReadonlyMap<string, FileStage>,
+  hashLength: number,
+): Promise<ReadonlyMap<string, string>> {
+  const eligible = files.filter(
+    (file): file is GitStageFile =>
+      storedAsIs(file, stages.get(file.path)) && stdinPathSafe(file.path),
+  );
+  const written = new Map<string, string>();
+  const byPath = new Map(eligible.map((file) => [file.path, file]));
+  // Batches run one after the other.
+  await eachInSequence(
+    boundedChunks([...byPath.keys()], () => 0, HASH_BATCH_PATHS),
+    async (paths) => {
+      const batch = paths.flatMap((path) => byPath.get(path) ?? []);
+      const result = await ctx.run(
+        ["hash-object", "--no-filters", "-w", "--stdin-paths"],
+        utf8.encode(`${batch.map((file) => file.path).join("\n")}\n`),
+      );
+      const ids = result.stdout.split("\n").filter((line) => line !== "");
+      const expected = batch.map((file) => gitBlobObjectId(file.bytes, hashLength));
+      if (
+        result.exitCode === 0 &&
+        !result.truncated &&
+        ids.length === batch.length &&
+        ids.every((id, at) => id === expected[at])
+      )
+        batch.forEach((file, at) => written.set(file.path, expected[at] ?? ""));
+    },
+  );
+  return written;
 }
 /** Whether every named file can be staged under `lineEndings` (the proposal's admission check). */
 export async function gitStageFilesSupported(
@@ -235,36 +768,312 @@ export async function gitStageFilesSupported(
   lineEndings: GitStageLineEndings,
 ): Promise<boolean> {
   const files = await readFiles(ctx.workspaceRoot, paths, ctx.fs);
-  const classes = await stageIndexClasses(ctx, files, lineEndings);
+  const stages = await fileStages(ctx, files, lineEndings);
+  if (stages === undefined) return false;
   for (const file of files) {
+    const stage = stages.get(file.path);
     if (file.mode === "0") continue;
-    const sha = await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
+    if (stage === undefined) return false;
+    // A file Git stores unchanged hashes to its own bytes; no process is needed to know that.
+    if (storedAsIs(file, stage)) continue;
+    const sha = await stagedContentObjectId(ctx, file, stage, false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
     if (sha === undefined) return false;
   }
   return true;
+}
+// Attribute values a verified staging admits: a filter driver, `ident`, a working-tree encoding and
+// the legacy `crlf` attribute stay refused; `text` and `eol` may take any value Git's built-in
+// conversion knows, because `stagedObjectId` admits a converted file only when it round-trips.
+const STAGE_ATTRIBUTES = ["filter", "working-tree-encoding", "ident", "crlf", "text", "eol"];
+const UNSET_VALUES: ReadonlySet<string> = new Set(["unspecified", "unset"]);
+const ADMITTED_VALUES: readonly ReadonlySet<string>[] = [
+  UNSET_VALUES,
+  UNSET_VALUES,
+  UNSET_VALUES,
+  UNSET_VALUES,
+  new Set(["unspecified", "unset", "set", "auto"]),
+  new Set(["unspecified", "unset", "lf", "crlf"]),
+];
+function attributeRowAdmitted(row: readonly string[]): boolean {
+  return row.every((value, index) => ADMITTED_VALUES[index]?.has(value) === true);
+}
+/** The attribute class a verified staging refuses (closed; the value itself is never carried). */
+export type GitStageAttributeRefusal = Exclude<
+  CodingRuntimeGitStageCause,
+  "config-unsupported" | "filter-driver" | "content-conversion"
+>;
+// Row order is STAGE_ATTRIBUTES: filter, working-tree-encoding, ident, crlf, text, eol.
+const ATTRIBUTE_REFUSALS: readonly GitStageAttributeRefusal[] = [
+  "attribute-filter",
+  "attribute-encoding",
+  "attribute-ident",
+  "attribute-line-ending",
+  "attribute-line-ending",
+  "attribute-line-ending",
+];
+function attributeRowRefusal(row: readonly string[]): GitStageAttributeRefusal | undefined {
+  const at = row.findIndex((value, index) => ADMITTED_VALUES[index]?.has(value) !== true);
+  return at < 0 ? undefined : (ATTRIBUTE_REFUSALS[at] ?? "attribute-unreadable");
+}
+/**
+ * The first attribute class that makes a verified staging refuse one of `paths`, or `undefined` when
+ * every rule is admitted. An answer that cannot be read refuses as `attribute-unreadable`.
+ */
+export async function gitStageAttributeRefusal(
+  ctx: GitStageEffectContext,
+  paths: readonly string[],
+): Promise<GitStageAttributeRefusal | undefined> {
+  const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
+  if (values === undefined) return "attribute-unreadable";
+  for (const row of values) {
+    const refusal = attributeRowRefusal(row);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
 }
 export async function gitStageAttributesSupported(
   ctx: GitStageEffectContext,
   paths: readonly string[],
 ): Promise<boolean> {
-  const result = await ctx.run([
-    "check-attr",
-    "-z",
-    "filter",
-    "working-tree-encoding",
-    "ident",
-    "text",
-    "eol",
-    "crlf",
-    "--",
-    ...paths,
-  ]);
-  if (result.exitCode !== 0 || result.truncated || !result.stdout.endsWith("\0")) return false;
-  const fields = result.stdout.slice(0, -1).split("\0");
+  return (await gitStageAttributeRefusal(ctx, paths)) === undefined;
+}
+// The only Git runs the read-only staged-object port may make: the attribute lookup and the object
+// hash from stdin paths (never `-w`), after leading `-c` overrides that are exactly the filter-driver
+// neutralisation and the line-ending pins. Only the arguments before a `--` are inspected: operands
+// after it are paths, and a tracked file named `-w` is not an option.
+const PORT_CONFIG_OVERRIDES: readonly RegExp[] = [
+  /^filter\.[^=\n\r\0]+\.(?:clean|smudge|process)=$/u,
+  /^filter\.[^=\n\r\0]+\.required=false$/u,
+  /^core\.autocrlf=(?:true|input|false)$/u,
+  /^core\.safecrlf=false$/u,
+];
+export function gitStagedObjectPortArgvAllowed(argv: readonly string[]): boolean {
+  const separator = argv.indexOf("--");
+  const options = separator < 0 ? argv : argv.slice(0, separator);
+  let at = 0;
+  while (options[at] === "-c") {
+    if (!PORT_CONFIG_OVERRIDES.some((pattern) => pattern.test(options[at + 1] ?? ""))) return false;
+    at += 2;
+  }
+  const command = options.slice(at).join("\0");
   return (
-    fields.length === paths.length * 18 &&
-    fields.every((value, index) => index % 3 !== 2 || value === "unspecified" || value === "unset")
+    command === ["hash-object", "--stdin-paths"].join("\0") ||
+    command === ["check-attr", "-z", ...STAGE_ATTRIBUTES, "--stdin"].join("\0")
   );
+}
+
+// A path the reader can hand to `hash-object --stdin-paths`: one line, not C-quoted.
+function stdinPathSafe(path: string): boolean {
+  return !/[\n\r]/u.test(path) && !path.startsWith('"');
+}
+export const HASH_RUN_BUDGET = 32;
+const HASH_BATCH_PATHS = 1000;
+// The bytes Git reads by path in one run: it is given time in proportion, like a staging hash.
+function runTimeoutMs(
+  paths: readonly string[],
+  sizes: ReadonlyMap<string, number>,
+): number | undefined {
+  const total = paths.reduce((sum, path) => sum + (sizes.get(path) ?? 0), 0);
+  return total === 0 ? undefined : largeHashTimeoutMs(total);
+}
+async function hashPathRun(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  paths: readonly string[],
+  sizes: ReadonlyMap<string, number>,
+): Promise<readonly string[] | undefined> {
+  const result = await ctx.run(
+    [
+      ...(await filterNeutralizingArgs(ctx)),
+      "-c",
+      `core.autocrlf=${AUTOCRLF_OF[lineEndings]}`,
+      "-c",
+      "core.safecrlf=false",
+      "hash-object",
+      "--stdin-paths",
+    ],
+    utf8.encode(`${paths.join("\n")}\n`),
+    undefined,
+    runTimeoutMs(paths, sizes),
+  );
+  if (result.exitCode !== 0 || result.truncated) return undefined;
+  const ids = result.stdout.split("\n").filter((line) => line !== "");
+  return ids.length === paths.length &&
+    ids.every((id) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(id))
+    ? ids
+    : undefined;
+}
+interface HashRuns {
+  remaining: number;
+  // Paths left unanswered because the budget ran out (not because their own run failed).
+  skipped: number;
+  // The size of each path that is read by Git whole, for the run's deadline.
+  readonly sizes: ReadonlyMap<string, number>;
+}
+// One unreadable path (deleted, replaced by a directory, denied) fails the whole `hash-object` run.
+// The failed run is halved until the offending path stands alone, within a bounded number of runs;
+// that path, and anything the budget leaves unresolved, gets no answer and stays modified. The
+// budget is shared by one call (one batch of the reader's scan); each part keeps its first run.
+function unanswered(paths: readonly string[]): ReadonlyMap<string, string | undefined> {
+  return new Map(paths.map((path) => [path, undefined]));
+}
+// The first run of every part is reserved: unreadable files in earlier parts cannot starve a later,
+// healthy part. Only the halving that follows a failure draws from the shared budget.
+function takeHashRun(runs: HashRuns, reserved: boolean): boolean {
+  if (reserved) return true;
+  if (runs.remaining <= 0) return false;
+  runs.remaining -= 1;
+  return true;
+}
+async function hashPathsBisecting(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  paths: readonly string[],
+  runs: HashRuns,
+  reserved = false,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  if (paths.length === 0) return unanswered(paths);
+  if (!takeHashRun(runs, reserved)) {
+    runs.skipped += paths.length;
+    return unanswered(paths);
+  }
+  const ids = await hashPathRun(ctx, lineEndings, paths, runs.sizes);
+  if (ids !== undefined) return new Map(paths.map((path, at) => [path, ids[at]]));
+  if (paths.length === 1) return unanswered(paths);
+  const answers = new Map<string, string | undefined>();
+  const middle = Math.ceil(paths.length / 2);
+  // The halves run one after the other inside the run budget.
+  await eachInSequence([paths.slice(0, middle), paths.slice(middle)], async (half) => {
+    for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, half, runs))
+      answers.set(path, id);
+  });
+  return answers;
+}
+async function hashPathsUnderConversion(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  paths: readonly string[],
+  sizes: ReadonlyMap<string, number>,
+  stats?: GitStagedConversionStats,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  const answers = new Map<string, string | undefined>();
+  const runs: HashRuns = { remaining: HASH_RUN_BUDGET, skipped: 0, sizes };
+  // The answer is one short line per path, so the stdin bound decides the part size.
+  // Sequential parts keep each run under the stdin and output caps.
+  await eachInSequence(
+    boundedChunks(paths, () => 0, HASH_BATCH_PATHS),
+    async (part) => {
+      for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs, true))
+        answers.set(path, id);
+    },
+  );
+  if (stats !== undefined) stats.hashBudgetExhaustedCount += runs.skipped;
+  return answers;
+}
+// Whether Git's conversion of this file's bytes can equal an index object it did not already match
+// raw: a regular file whose attributes staging admits, converted under `text`/`eol` or an `auto`
+// path whose index entry holds no CR (Git keeps the bytes of one that does, so its raw hash already
+// decided). Unlike staging, a conversion that does not check out byte for byte is still judged: the
+// question is only whether Git would store the index object, as `git status` asks it.
+function conversionCanSettle(
+  file: Pick<GitStageFile, "path" | "mode">,
+  row: readonly string[] | undefined,
+  stage: FileStage | undefined,
+): boolean {
+  if (row === undefined || !attributeRowAdmitted(row) || stage?.plan.kind !== "convert")
+    return false;
+  if (file.mode === "0" || file.mode === "120000" || !stdinPathSafe(file.path)) return false;
+  return (
+    !stage.plan.auto || stage.indexClass === undefined || INDEX_WITHOUT_CR.has(stage.indexClass)
+  );
+}
+// Why a file the settlement left unanswered has no object id: Git stores its bytes as they are
+// (`none`: no conversion applies, or the index entry already holds a CR), or the settlement could
+// not judge it (`cannot-judge`: an unadmitted attribute, an unknown index class, a path form
+// `hash-object --stdin-paths` cannot carry, or a hash that failed).
+function unsettledVerdict(
+  file: Pick<GitStageFile, "path" | "mode">,
+  row: readonly string[] | undefined,
+  stage: FileStage | undefined,
+): "none" | "cannot-judge" {
+  if (file.mode === "0") return "none";
+  if (row === undefined || !attributeRowAdmitted(row) || stage === undefined) return "cannot-judge";
+  if (file.mode === "120000" || stage.plan.kind === "none") return "none";
+  return stage.plan.auto && indexKeepsBytes(stage.indexClass) ? "none" : "cannot-judge";
+}
+// An `auto` path whose index entry already holds a CR keeps its bytes as they are.
+function indexKeepsBytes(indexClass: string | undefined): boolean {
+  return indexClass !== undefined && INDEX_WITH_CR.has(indexClass);
+}
+/**
+ * The object Git's own staging would store for each file's current bytes, without writing anything:
+ * the raw reader's judgement of a regular file whose raw bytes differ from its index object while
+ * the index carries no usable stat data (#4491). Git's `git status` asks the same question: does
+ * its conversion of the working file equal the index object. One configuration read, one attribute
+ * read, one line-break listing (in the reader's chunks) and one `hash-object --stdin-paths` serve the
+ * whole batch, whatever its size. Every hash runs with all configured filter drivers overridden, so
+ * no driver can run. An entry is `undefined` when conversion cannot settle the file (no conversion
+ * applies, a filter, `ident` or encoding attribute, an unreadable class), so the caller keeps it
+ * modified; the whole result is `undefined` when the attributes or the configuration cannot be read.
+ */
+export async function gitStagedObjectIdOf(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  files: readonly (Pick<GitStageFile, "path" | "mode"> & { readonly size?: number })[],
+  stats?: GitStagedConversionStats,
+): Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason> {
+  if (files.length === 0) return new Map();
+  const names = await ctx.filterDriverNames();
+  if (names === undefined || !filterDriversOverridable(names)) return "config-unreadable";
+  const paths = files.map((file) => file.path);
+  const values = await readAttributeValuesOrReason(ctx, STAGE_ATTRIBUTES, paths, stats);
+  if (typeof values === "string") return values;
+  const stages = await stagesOfValues(
+    ctx,
+    paths,
+    lineEndings,
+    values.map((row) => [row[4] ?? "unspecified", row[5] ?? "unspecified"]),
+  );
+  const settle = files.filter((file, at) =>
+    conversionCanSettle(file, values[at], stages.get(file.path)),
+  );
+  const answers = await hashPathsUnderConversion(
+    ctx,
+    lineEndings,
+    settle.map((file) => file.path),
+    new Map(files.map((file) => [file.path, "size" in file ? file.size : 0])),
+    stats,
+  );
+  // Nothing could be hashed at all: the reason is the hash, not the files.
+  if (settle.length > 0 && [...answers.values()].every((id) => id === undefined))
+    return "hash-failed";
+  files.forEach((file, at) => {
+    if (
+      answers.get(file.path) === undefined &&
+      unsettledVerdict(file, values[at], stages.get(file.path)) === "cannot-judge"
+    )
+      stats?.cannotJudge?.add(file.path);
+  });
+  return new Map(paths.map((path) => [path, answers.get(path)]));
+}
+async function updatePrivateIndex(
+  ctx: GitStageEffectContext,
+  temporaryIndexPath: string,
+  entries: readonly Uint8Array[],
+): Promise<boolean> {
+  for (const part of entries) {
+    const result = await ctx.run(
+      // NOSONAR typescript:S9382 -- the parts are fed one after the other to one private index
+      ["update-index", "-z", "--index-info"],
+      part,
+      temporaryIndexPath,
+      undefined,
+      // Git reads the unpublished objects through the quarantine while it names them in the index.
+      ctx.objectQuarantine,
+    );
+    if (result.exitCode !== 0 || result.truncated) return false;
+  }
+  return true;
 }
 /**
  * Objects are created from the verified bytes without any filter driver; the only conversion is
@@ -281,7 +1090,7 @@ export async function stageExactFiles(
     expected === undefined ||
     !ctx.authorized() ||
     request.pathspecs.length === 0 ||
-    request.pathspecs.length > 50 ||
+    request.pathspecs.length > CODING_RUNTIME_GIT_MAX_STAGE_PATHS ||
     new Set(request.pathspecs).size !== request.pathspecs.length
   )
     return false;
@@ -291,24 +1100,28 @@ export async function stageExactFiles(
       if (!(await ctx.check()) || !(await gitStageAttributesSupported(ctx, request.pathspecs)))
         return false;
       const files = await readFiles(ctx.workspaceRoot, request.pathspecs, ctx.fs);
-      if (request.worktreeDigest !== undefined && contentDigest(files) !== request.worktreeDigest)
+      if (
+        request.worktreeDigest !== undefined &&
+        (await contentDigest(ctx.workspaceRoot, files, streamOptions(ctx))) !==
+          request.worktreeDigest
+      )
         return false;
-      const entries = await indexEntries(ctx, files, expected.headSha.length, lineEndings);
+      // Objects Git writes by path stay private until every identity and content check passed.
+      // The transaction publishes them itself, right before the index is promoted.
+      const hashLength = gitHeadObjectIdLength(expected.head);
+      const scoped = { ...ctx, objectQuarantine: transaction.openObjectQuarantine(hashLength) };
+      const entries = await indexEntries(scoped, files, hashLength, lineEndings);
       if (entries === undefined) return false;
-      const result = await ctx.run(
-        ["update-index", "-z", "--index-info"],
-        entries,
-        transaction.temporaryIndexPath,
-      );
-      return (
-        result.exitCode === 0 && !result.truncated && transaction.check() && (await ctx.check())
-      );
+      if (!(await updatePrivateIndex(scoped, transaction.temporaryIndexPath, entries)))
+        return false;
+      return transaction.check() && (await ctx.check());
     },
     (result) => {
       if (result && !ctx.authorized()) throw new Error("git-stage-authority-denied");
       return result;
     },
     ctx.fs,
+    { onCleanupFailure: ctx.onIndexCleanupFailure },
   );
 }
 
@@ -322,21 +1135,23 @@ export async function unstageExactFiles(
   ctx: GitStageEffectContext,
   plan: GitMutationArgvPlan,
 ): Promise<boolean> {
-  const [argv] = plan;
-  if (argv === undefined || plan.length !== 1 || !ctx.authorized()) return false;
+  if (plan.length === 0 || plan.some((argv) => argv[0] !== "restore") || !ctx.authorized())
+    return false;
   return await withGitIndexTransaction(
     ctx.workspaceRoot,
     async (transaction): Promise<boolean> => {
       if (!(await ctx.check())) return false;
-      const result = await ctx.run(argv, undefined, transaction.temporaryIndexPath);
-      return (
-        result.exitCode === 0 && !result.truncated && transaction.check() && (await ctx.check())
-      );
+      for (const argv of plan) {
+        const result = await ctx.run(argv, undefined, transaction.temporaryIndexPath); // NOSONAR typescript:S9382 -- the runs are sequential on one private index copy
+        if (result.exitCode !== 0 || result.truncated) return false;
+      }
+      return transaction.check() && (await ctx.check());
     },
     (result) => {
       if (result && !ctx.authorized()) throw new Error("git-unstage-authority-denied");
       return result;
     },
     ctx.fs,
+    { onCleanupFailure: ctx.onIndexCleanupFailure },
   );
 }

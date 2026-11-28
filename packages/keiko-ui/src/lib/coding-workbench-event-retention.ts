@@ -9,7 +9,12 @@ import {
   createCodingWorkbenchRuntimeEventSource,
   parseCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-runtime-api";
-import { reserveInteractiveBrowserStreamCapacity } from "./browser-stream-capacity";
+import {
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
+  type DirectStreamOptions,
+  reserveInteractiveBrowserStreamCapacity,
+} from "./browser-stream-capacity";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
 
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
@@ -77,6 +82,11 @@ export interface CodingWorkbenchRuntimeStreamHandlers {
    * the stream silent, and an unreadable frame.
    */
   readonly onReconnecting?: () => void;
+  /**
+   * The stream waits for a free browser connection another Keiko tab holds (true), or no longer
+   * does (false). A status, never a failure.
+   */
+  readonly onCapacityWaiting?: (waiting: boolean, heldElsewhere?: boolean) => void;
   readonly onReset: () => Promise<void>;
 }
 
@@ -135,7 +145,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     this.source = source;
     source.onopen = (): void => {
       if (this.source !== source) return;
-      this.silentReconnects = 0;
+      // A transport open is not activity: only a runtime frame or a heartbeat ends a silent streak.
       this.armWatchdog();
       this.handlers.onOpen();
     };
@@ -287,6 +297,30 @@ export function createCodingWorkbenchRuntimeStreamSession(
   );
 }
 
+// Highest rank among the replayable streams: the run stream carries the run state and pending
+// approvals, so it is the last to give a slot up and the first to be given one.
+function runStreamAdmissionOptions(
+  handlersRef: { readonly current: CodingWorkbenchRuntimeStreamHandlers },
+  closeSession: () => void,
+): DirectStreamOptions {
+  return {
+    replayRank: 2,
+    onYield: (): void => {
+      closeSession();
+      // At once, not after the wait threshold: the run is not live while the stream is closed.
+      handlersRef.current.onReconnecting?.();
+    },
+    onWaiting: (waiting, elsewhere) =>
+      handlersRef.current.onCapacityWaiting?.(waiting, elsewhere === true),
+  };
+}
+
+function reportRuntimeStreamUnavailable(): void {
+  reportClientDiagnostic("[keiko] coding workbench runtime stream could not be created", {
+    errorKind: "unavailable",
+  });
+}
+
 export function useCodingWorkbenchRuntimeEventStream(
   runId: string | undefined,
   epoch: number,
@@ -297,29 +331,44 @@ export function useCodingWorkbenchRuntimeEventStream(
   handlersRef.current = handlers;
   useEffect(() => {
     if (runId === undefined) return;
-    const releaseCapacity = reserveInteractiveBrowserStreamCapacity();
-    let session: CodingWorkbenchRuntimeStreamSession;
-    try {
-      session = createCodingWorkbenchRuntimeStreamSession(
-        runId,
-        {
-          onOpen: () => handlersRef.current.onOpen(),
-          onEvents: (events, cursor, resnapshot) =>
-            handlersRef.current.onEvents(events, cursor, resnapshot),
-          onError: (error) => handlersRef.current.onError(error),
-          onReconnecting: () => handlersRef.current.onReconnecting?.(),
-          onReset: () => handlersRef.current.onReset(),
-        },
-        { staleAfterMs },
-      );
-    } catch (error) {
-      releaseCapacity();
-      handlersRef.current.onError(error);
-      return;
-    }
+    const releaseInteractive = reserveInteractiveBrowserStreamCapacity();
+    let session: CodingWorkbenchRuntimeStreamSession | undefined;
+    let admission: DirectStreamAdmission | undefined;
+    const openSession = (): void => {
+      if (session !== undefined) return;
+      try {
+        session = createCodingWorkbenchRuntimeStreamSession(
+          runId,
+          {
+            onOpen: () => handlersRef.current.onOpen(),
+            onEvents: (events, cursor, resnapshot) =>
+              handlersRef.current.onEvents(events, cursor, resnapshot),
+            onError: (error) => handlersRef.current.onError(error),
+            onReconnecting: () => handlersRef.current.onReconnecting?.(),
+            onReset: () => handlersRef.current.onReset(),
+          },
+          { staleAfterMs },
+        );
+      } catch (error) {
+        reportRuntimeStreamUnavailable();
+        queueMicrotask(() => admission?.release());
+        handlersRef.current.onError(error);
+      }
+    };
+    // The stream opens only once an origin-wide connection slot admits it. While this document is
+    // hidden it gives the slot to a visible tab's essential stream; it reopens (a fresh session
+    // snapshots the run) when the slot is granted again.
+    admission = admitDirectBrowserStream(
+      openSession,
+      runStreamAdmissionOptions(handlersRef, () => {
+        session?.close();
+        session = undefined;
+      }),
+    );
     return (): void => {
-      session.close();
-      releaseCapacity();
+      session?.close();
+      admission?.release();
+      releaseInteractive();
     };
   }, [epoch, runId, staleAfterMs]);
 }

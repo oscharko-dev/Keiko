@@ -1,3 +1,4 @@
+import { runNativeWorkspaceWrite } from "../coding-runtime/nativeWriteGate.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -4181,6 +4182,50 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect((await postActionResult(proposed, "succeeded")).status).toBe(200);
     for (const file of files) expect(readWorkspaceFile(workspaceRoot, file)).toBe("after\n");
     expect(auditRecords().map((record) => record.outcome)).toEqual(["queued", "succeeded"]);
+  });
+
+  it("refuses the approved commit while a runtime revert write of the workspace runs, and commits once it ended", async () => {
+    const files = ["src/a.txt", "src/b.txt"];
+    const arranged = arrangeTwoFiles();
+    const action = { ...arranged.action, actionId: "changeset-gate-busy-0001" };
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", files);
+    expect((await handleEditorAgentActions(context(action))).status).toBe(202);
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(workspaceRoot, async () => {
+      enter();
+      await released;
+    });
+    await entered;
+
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    let refused: Awaited<ReturnType<typeof postActionResult>>;
+    try {
+      refused = await postActionResult(action, "succeeded");
+    } finally {
+      resetServerLogger();
+    }
+
+    expect(sink.events.map((event) => event.op)).toContain("coding-runtime.revert.refused");
+    expect(sink.events.find((event) => event.op === "coding-runtime.revert.refused")).toMatchObject(
+      {
+        // The run named by the action's authority wins over its own id.
+        correlationId: "run-2121",
+        extra: { operation: "write", reason: "write-gate-busy" },
+      },
+    );
+    expect(actionResultStatus(refused.body)).toBe("failed");
+    expect(JSON.stringify(refused.body)).toContain("A Coding run is still writing these files");
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    release();
+    await native;
   });
 
   it("preserves chat origin through a queued applyChangeset and its audit record (#2119)", async () => {

@@ -83,6 +83,11 @@ interface TestSession {
   readonly activeChat: Chat | undefined;
   readonly activeProject:
     { readonly name: string; readonly path: string; readonly available: boolean } | undefined;
+  readonly projects?: readonly {
+    readonly name: string;
+    readonly path: string;
+    readonly available: boolean;
+  }[];
   readonly models: readonly unknown[];
   readonly loading: boolean;
   readonly error: string | undefined;
@@ -419,6 +424,7 @@ import {
   GatewaySetupLoading,
   mutationWithTimeout,
   openOrFocusSearchWindow,
+  openShellTool,
   resolveSearchRoot,
 } from "./AppShell";
 
@@ -523,6 +529,7 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     add: vi.fn(() => null),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
+    setToolOpen: vi.fn(),
     activateWindow: vi.fn(),
     focus: vi.fn(),
     currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
@@ -815,6 +822,10 @@ describe("AppShell grounding connections", () => {
       chats: [activeChat],
       activeChat,
       activeProject: { name: "Keiko", path: "/repo", available: true },
+      projects: [
+        { name: "Keiko", path: "/repo", available: true },
+        { name: "Other", path: "/repo-b", available: true },
+      ],
       models: [{ id: "example-chat-model" }],
       loading: false,
       error: undefined,
@@ -3034,6 +3045,77 @@ describe("AppShell grounding connections", () => {
     });
   });
 
+  async function closeAndReopenGit(
+    cfg: AppWindow["cfg"],
+    patchSession?: Partial<TestSession>,
+  ): Promise<WorkspaceApi> {
+    const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValue("governedGit");
+    mocks.state.workspaceResult = workspaceResult([win("governedGit", cfg)], [], api);
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor(() => expect(mocks.state.workspaceOptions).toBeDefined());
+    // The person closes the Git window; the shell re-renders without it.
+    mocks.state.workspaceResult = workspaceResult([], [], api);
+    if (patchSession !== undefined) {
+      mocks.state.session = { ...(mocks.state.session as TestSession), ...patchSession };
+    }
+    view.rerender(<AppShell />);
+    vi.mocked(api.add).mockClear();
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("governedGit");
+    });
+    return api;
+  }
+
+  it("reopens Git on the repository the person chose in it, not the session project (W-4)", async () => {
+    const api = await closeAndReopenGit({
+      projectPath: "/repo-b",
+      rootBinding: "coding-repository",
+    });
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo-b",
+      rootBinding: "coding-repository",
+    });
+  });
+
+  it("reopens Git on the active repository when a chosen repository is no longer available", async () => {
+    const api = await closeAndReopenGit(
+      { projectPath: "/repo-b", rootBinding: "coding-repository" },
+      {
+        projects: [
+          { name: "Keiko", path: "/repo", available: true },
+          { name: "Other", path: "/repo-b", available: false },
+        ],
+      },
+    );
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      rootBinding: "coding-repository",
+    });
+    expect(reportedDiagnostics).toContainEqual({
+      message: "Git window reopened on the active repository (remembered-unavailable).",
+    });
+  });
+
+  it("never reopens Git on a managed task worktree a hand-off put in it, and reports why", async () => {
+    const worktree = "/repo/.keiko/dev/ui/task-workspaces/repo/ws-1";
+    const api = await closeAndReopenGit({ projectPath: worktree });
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      rootBinding: "coding-repository",
+    });
+    // The window never showed the worktree, so nothing was remembered and no fallback is reported.
+    expect(JSON.stringify(reportedDiagnostics)).not.toContain(worktree);
+  });
+
+  it("reports no fallback and no path when the chosen repository is reopened", async () => {
+    await closeAndReopenGit({ projectPath: "/repo-b", rootBinding: "coding-repository" });
+    expect(
+      reportedDiagnostics.some((entry) => entry.message.startsWith("Git window reopened")),
+    ).toBe(false);
+  });
+
   it("opens Git from the rail with the selected project while a task workspace is active", async () => {
     const api = workspaceApi();
     mocks.state.activeWorkspaceRoot = "/repo/.keiko/dev/ui/task-workspaces/repo/ws-active";
@@ -3721,6 +3803,18 @@ describe("AppShell grounding connections", () => {
     expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalled();
     rafSpy.mockRestore();
+  });
+
+  // Review #4573 finding 37: a refused open at the window limit changed nothing, so it is blocked
+  // and writes no undo entry.
+  it("reports a Search or Git open the window limit refused as blocked, and an accepted one as open", (): void => {
+    const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValue(null);
+    expect(openShellTool(api, "search", true, false, "/repo", undefined)).toBe("blocked");
+    expect(openShellTool(api, "governedGit", false, true, undefined, "/repo")).toBe("blocked");
+    vi.mocked(api.add).mockReturnValue("window-1");
+    expect(openShellTool(api, "search", true, false, "/repo", undefined)).toBe("open");
+    expect(openShellTool(api, "governedGit", false, true, undefined, "/repo")).toBe("open");
   });
 
   it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", (): void => {

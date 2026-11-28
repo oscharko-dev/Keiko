@@ -18,6 +18,7 @@ import {
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  GOVERNED_GIT_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { VERIFICATION_TOOL_MAX_DURATION_MS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -425,23 +426,28 @@ function changesetEditSpec(): OpenCodeToolSpec {
   };
 }
 
+const VERIFICATION_TOOL_DESCRIPTION =
+  "Run one named verification gate (test, targeted-test, typecheck, lint or build). " +
+  "Ordinary working-tree checks use an empty targetPath; targeted-test requires one " +
+  "workspace-relative test path. verification.status passed and verification.completed " +
+  "confirm which checks ran successfully. The optional verification.commit describes " +
+  "commit eligibility separately: candidate-not-staged never means checks did not run. " +
+  "Only when the accepted task requests a commit, stage the intended changes and rerun " +
+  'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
+  "only, until its checks ran and failed: that also admits the commit, recorded as " +
+  'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
+  "untracked paths under commit.blocking stay outside it. For that workflow, " +
+  "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
+  "the intended paths or ignore generated output deliberately before verifying again. " +
+  "An unavailable commit proof names its nextAction: resolve-then-verify means the cause " +
+  "it names (an unborn HEAD, a denied path or link, an unreadable entry) must change " +
+  "first, because verifying again unchanged repeats the same answer.";
+
 function verificationSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.verification.run",
     alias: "keiko_verification",
-    description:
-      "Run one named verification gate (test, targeted-test, typecheck, lint or build). " +
-      "Ordinary working-tree checks use an empty targetPath; targeted-test requires one " +
-      "workspace-relative test path. verification.status passed and verification.completed " +
-      "confirm which checks ran successfully. The optional verification.commit describes " +
-      "commit eligibility separately: candidate-not-staged never means checks did not run. " +
-      "Only when the accepted task requests a commit, stage the intended changes and rerun " +
-      'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
-      "only, until its checks ran and failed: that also admits the commit, recorded as " +
-      'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
-      "untracked paths under commit.blocking stay outside it. For that workflow, " +
-      "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
-      "the intended paths or ignore generated output deliberately before verifying again.",
+    description: VERIFICATION_TOOL_DESCRIPTION,
     inputSchema: managedObjectSchema(
       {
         verifierId: {
@@ -567,11 +573,14 @@ function gitStatusSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.status",
     alias: "keiko_git_status",
-    description: "Read the workspace's current Git status.",
+    description:
+      "Read the workspace's current Git status. It lists at most 50 changed files; when " +
+      'truncated is true, keiko_git_stage with a directory (or ".") stages every change below it.',
     inputSchema: managedObjectSchema({}, []),
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-git-status-port",
+    maxDurationMs: GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -595,6 +604,7 @@ function gitDiffSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-git-diff-port",
+    maxDurationMs: GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -611,7 +621,9 @@ function gitStageSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
     description:
-      "Create a non-mutating proposal to stage one or more workspace-relative paths, or with " +
+      "Create a non-mutating proposal to stage one or more workspace-relative paths (a file or a " +
+      'directory: a directory selects every change below it and "." every change in the ' +
+      "workspace; one request takes at most 50 entries), or with " +
       "unstage: true to give their staged changes back to the worktree, which keeps its bytes " +
       "(request only paths keiko_git_status lists as staged). This call does not mutate the Git " +
       "index. Execute staging before rerunning verification for commit proof." +
@@ -713,6 +725,8 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     effects: ["workspace-write", "delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-execute-port",
+    // Many bounded git subprocesses: the budget is a runaway backstop, not a 30 s cut (ADR-0175).
+    maxDurationMs: GOVERNED_GIT_TOOL_MAX_DURATION_MS,
   };
 }
 

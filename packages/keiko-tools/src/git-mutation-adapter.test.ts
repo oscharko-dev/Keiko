@@ -3,6 +3,7 @@ import {
   buildAbortArgv,
   buildBranchCreateArgv,
   buildBranchSwitchArgv,
+  buildUnbornBranchArgv,
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
@@ -26,6 +27,9 @@ describe("argv builders — fixed, governed argument vectors", () => {
 
   it("branch-switch builds `git switch <name>` (branch-only, no path checkout)", () => {
     expect(buildBranchSwitchArgv({ branchName: "feature/x" })).toEqual([["switch", "feature/x"]]);
+    expect(
+      buildUnbornBranchArgv({ branchName: "feature/x", startPointRefHash: "0".repeat(40) }),
+    ).toEqual([["symbolic-ref", "HEAD", "refs/heads/feature/x"]]);
   });
 
   it("branch-switch rejects a flag-injecting branch name", () => {
@@ -45,6 +49,25 @@ describe("argv builders — fixed, governed argument vectors", () => {
     ]);
   });
 
+  // U-28: a directory unstage names thousands of files; one command line cannot carry them on
+  // Windows (about 32 K characters), so the plan is several restores that together name each
+  // pathspec exactly once, in order.
+  it("splits a long unstage selection into bounded restores covering every pathspec once", () => {
+    const pathspecs = Array.from(
+      { length: 2000 },
+      (_unused, at) => `src/dir/file-${String(at)}.ts`,
+    );
+    const plan = buildUnstageArgv({ pathspecs });
+    expect(plan.length).toBeGreaterThan(1);
+    for (const argv of plan) {
+      expect(argv.slice(0, 3)).toEqual(["restore", "--staged", "--"]);
+      expect(argv.join(" ").length).toBeLessThan(9_000);
+    }
+    expect(plan.flatMap((argv) => argv.slice(3))).toEqual(
+      pathspecs.map((pathspec) => `:(literal)${pathspec}`),
+    );
+  });
+
   it("literalizes Git pathspec-magic filenames", () => {
     expect(buildStageArgv({ pathspecs: [":(top)*", ":(glob)**"] })).toEqual([
       ["add", "--", ":(literal):(top)*", ":(literal):(glob)**"],
@@ -52,13 +75,19 @@ describe("argv builders — fixed, governed argument vectors", () => {
   });
 
   it("commit passes the message as a single `--message` token", () => {
-    expect(buildCommitArgv({ message: "fix: thing", allowEmpty: false })).toEqual([
+    expect(buildCommitArgv({ message: "fix: thing", allowEmpty: false }, true)).toEqual([
       ["commit", "--gpg-sign", "--message", "fix: thing"],
     ]);
   });
 
+  it("commit passes neither --gpg-sign nor --no-gpg-sign when signing is not configured", () => {
+    expect(buildCommitArgv({ message: "fix: thing", allowEmpty: true }, false)).toEqual([
+      ["commit", "--allow-empty", "--message", "fix: thing"],
+    ]);
+  });
+
   it("commit adds --allow-empty only when requested", () => {
-    expect(buildCommitArgv({ message: "empty", allowEmpty: true })).toEqual([
+    expect(buildCommitArgv({ message: "empty", allowEmpty: true }, true)).toEqual([
       ["commit", "--gpg-sign", "--allow-empty", "--message", "empty"],
     ]);
   });
@@ -131,13 +160,15 @@ describe("operand validation — flag injection and malformed operands", () => {
     expect(() =>
       buildBranchCreateArgv({ branchName: `a${NUL}b`, startPointRefHash: "abc" }),
     ).toThrow(GitMutationArgvError);
-    expect(() => buildCommitArgv({ message: "", allowEmpty: false })).toThrow(GitMutationArgvError);
+    expect(() => buildCommitArgv({ message: "", allowEmpty: false }, true)).toThrow(
+      GitMutationArgvError,
+    );
     expect(() => buildStageArgv({ pathspecs: [] })).toThrow(GitMutationArgvError);
     expect(() => buildStageArgv({ pathspecs: ["ok", NUL] })).toThrow(GitMutationArgvError);
   });
 
   it("allows a commit message that begins with `-` (it is a flag value, not a flag)", () => {
-    expect(buildCommitArgv({ message: "-not-a-flag", allowEmpty: false })).toEqual([
+    expect(buildCommitArgv({ message: "-not-a-flag", allowEmpty: false }, true)).toEqual([
       ["commit", "--gpg-sign", "--message", "-not-a-flag"],
     ]);
   });
@@ -149,7 +180,7 @@ describe("no-generic-fallback property (AC3)", () => {
       buildBranchCreateArgv({ branchName: "b", startPointRefHash: "h" }),
       buildStageArgv({ pathspecs: ["a"] }),
       buildUnstageArgv({ pathspecs: ["a"] }),
-      buildCommitArgv({ message: "m", allowEmpty: false }),
+      buildCommitArgv({ message: "m", allowEmpty: false }, true),
       buildAbortArgv({ operationToAbort: "merge" }),
       buildRecoveryArgv({
         recoveryStrategyHint: "stash-and-reset",
@@ -197,7 +228,7 @@ describe("boundary complementarity with the read-only terminal policy", () => {
       ...buildBranchSwitchArgv({ branchName: "feature/x" }),
       ...buildStageArgv({ pathspecs: ["a.ts"] }),
       ...buildUnstageArgv({ pathspecs: ["a.ts"] }),
-      ...buildCommitArgv({ message: "m", allowEmpty: false }),
+      ...buildCommitArgv({ message: "m", allowEmpty: false }, true),
       ...buildAbortArgv({ operationToAbort: "merge" }),
       ...buildAbortArgv({ operationToAbort: "rebase" }),
       ...buildRecoveryArgv({

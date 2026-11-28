@@ -73,6 +73,19 @@ describe("native permission requests (#3897)", () => {
     ).toBe(true);
   });
 
+  it("admits the opaque id of the tool call an ask holds back and refuses a malformed one", () => {
+    for (const callId of ["call_1", "toolu_01A.b:c-d", "x".repeat(128)]) {
+      expect(
+        validateCodingWorkbenchRuntimeEvent(nativeEvent({ nativePermission: "shell", callId })).ok,
+      ).toBe(true);
+    }
+    for (const callId of ["", "has space", "../path", "x".repeat(129), 7]) {
+      expect(
+        validateCodingWorkbenchRuntimeEvent(nativeEvent({ nativePermission: "shell", callId })).ok,
+      ).toBe(false);
+    }
+  });
+
   it("refuses a malformed permission name and a native permission beside a supervised kind", () => {
     for (const nativePermission of ["", "Edit", "edit now", "x".repeat(40), 42]) {
       expect(validateCodingWorkbenchRuntimeEvent(nativeEvent({ nativePermission })).ok).toBe(false);

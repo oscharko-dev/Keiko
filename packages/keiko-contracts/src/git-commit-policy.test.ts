@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   GIT_COMMIT_MESSAGE_POLICY_MODES,
+  GIT_COMMIT_MESSAGE_MAX_BYTES,
   GIT_COMMIT_MESSAGE_VIOLATION_CODES,
   GIT_COMMIT_POLICY_SCHEMA_VERSION,
   KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
@@ -33,7 +34,7 @@ function violationsOf(
 describe("git-commit-policy schema + vocabulary", () => {
   it("pins the schema version and the violation-code cardinality", () => {
     expect(GIT_COMMIT_POLICY_SCHEMA_VERSION).toBe("1");
-    expect(GIT_COMMIT_MESSAGE_VIOLATION_CODES).toHaveLength(6);
+    expect(GIT_COMMIT_MESSAGE_VIOLATION_CODES).toHaveLength(7);
     expect(new Set(GIT_COMMIT_MESSAGE_VIOLATION_CODES).size).toBe(
       GIT_COMMIT_MESSAGE_VIOLATION_CODES.length,
     );
@@ -44,6 +45,7 @@ describe("git-commit-policy schema + vocabulary", () => {
       "subject-too-long",
       "missing-issue-key",
       "missing-signoff",
+      "message-too-large",
     ];
     expect([...GIT_COMMIT_MESSAGE_VIOLATION_CODES]).toEqual([...expected]);
   });
@@ -93,6 +95,17 @@ describe("validateGitCommitMessage per-violation cases", () => {
     const v = violationsOf("wip(ui): work in progress");
     expect(v).toContain("disallowed-type");
     expect(v).not.toContain("missing-conventional-prefix");
+  });
+
+  it("message-too-large when the whole message exceeds the bounded commit input", () => {
+    const atLimit = `feat: x\n\n${"y".repeat(GIT_COMMIT_MESSAGE_MAX_BYTES - 9)}`;
+    expect(new TextEncoder().encode(atLimit)).toHaveLength(GIT_COMMIT_MESSAGE_MAX_BYTES);
+    expect(violationsOf(atLimit)).not.toContain("message-too-large");
+    expect(violationsOf(`${atLimit}y`)).toContain("message-too-large");
+    // Multi-byte text counts in bytes, as the commit input is bounded in bytes.
+    expect(violationsOf(`feat: x\n\n${"ä".repeat(GIT_COMMIT_MESSAGE_MAX_BYTES / 2)}`)).toContain(
+      "message-too-large",
+    );
   });
 
   it("subject-too-long when the subject exceeds the ceiling", () => {

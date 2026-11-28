@@ -269,6 +269,8 @@ export type CodingWorkbenchRuntimeEventKind =
   | "task-submitted"
   | "observation-streamed"
   | "native-retry-changed"
+  | "native-subagents-changed"
+  | "native-agent-models-refused"
   | "permission-requested"
   | "diff-summarized"
   | "verification-summarized"
@@ -288,6 +290,8 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "task-submitted",
     "observation-streamed",
     "native-retry-changed",
+    "native-subagents-changed",
+    "native-agent-models-refused",
     "permission-requested",
     "diff-summarized",
     "verification-summarized",
@@ -671,6 +675,13 @@ export interface CodingWorkbenchAuthorityEnvelope {
   readonly approvalProofDigest: string;
 }
 
+/**
+ * The shape of the opaque id of one model tool call: a bounded token that carries no content. The
+ * permission request's `callId`, the native policy's call id and the governed ask's bound action
+ * id all share it.
+ */
+export const CODING_WORKBENCH_TOOL_CALL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
 export interface CodingWorkbenchPermissionRequest {
   readonly requestId: string;
   readonly kind: CodingWorkbenchPermissionRequestKind;
@@ -687,6 +698,12 @@ export interface CodingWorkbenchPermissionRequest {
    * explicit discriminator of a native ask, present for every native action, not only commands.
    */
   readonly nativePermission?: string | undefined;
+  /**
+   * The opaque id of the model's tool call this ask holds back, the `callId` of that call's row in
+   * the safe activity feed. It lets the Workbench show exactly that row as waiting for the
+   * person's decision instead of running. Absent when the ask belongs to no tool call.
+   */
+  readonly callId?: string | undefined;
   readonly expiresAt: string;
 }
 
@@ -773,6 +790,17 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly kind: CodingWorkbenchRuntimeEventKind;
   /** Required only on native-retry-changed; null is the native history's explicit clear. */
   readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
+  /**
+   * Required only on native-subagents-changed: how many of the run's subagent sessions work while
+   * the run's own session is idle (U-52). A count, never a name or text; 0 clears.
+   */
+  readonly activeSubagentCount?: number | undefined;
+  /**
+   * Required only on native-agent-models-refused (U-53): how many per-agent model settings of the
+   * repository the run did not use because the Model Gateway does not serve the model. A count,
+   * never a model or agent name (the repository file is untrusted).
+   */
+  readonly refusedAgentModelCount?: number | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly requestedMode?: CodingWorkbenchMode | undefined;

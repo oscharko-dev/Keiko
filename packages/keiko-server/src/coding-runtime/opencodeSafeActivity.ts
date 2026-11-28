@@ -161,6 +161,7 @@ function assistantMessageSignal(
       role: "assistant",
       occurredAt: base.occurredAt,
       parentMessageId,
+      ...(record(data.info)?.finish === "length" ? { outputLimit: true as const } : {}),
     },
   };
 }

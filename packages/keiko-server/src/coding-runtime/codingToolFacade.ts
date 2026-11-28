@@ -12,14 +12,21 @@ import { emitToolHandlerFailure } from "./codingToolFacadeFailure.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   isCodingRuntimeGitResult,
+  normalizePersistedCodingRuntimeGitResult,
+  isSafeTaskBranchName,
+  type CodingRuntimeGitBranch,
   type CodingRuntimeGitResult,
+  type CodingRuntimeGitStageCause,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
+import {
+  boundedCodingRepositoryResult,
+  isCodingRepositoryResult,
+} from "./codingRepositorySearchHandler.js";
 import {
   WORKSPACE_READ_REFUSAL_CODES,
   WORKSPACE_DISCOVERY_REFUSAL_CODES,
@@ -40,6 +47,7 @@ import type {
 import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityGitAction,
   type CodingSafeActivityGitOutcome,
   type CodingSafeActivityToolPresentation,
   type CodingSafeActivityVerificationOutcome,
@@ -76,8 +84,12 @@ import {
   type CodingToolVerificationResult,
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
+  VERIFICATION_RESOURCE_LIMIT_WORDS,
   GOVERNED_ASK_DECLINED_REASON_CODE,
+  GOVERNED_ASK_EXPIRED_REASON_CODE,
+  COMMIT_PROOF_UNAVAILABLE_CAUSES,
 } from "./codingToolIpc.js";
+import { isPermanentCommitProofCause } from "./codingCommitProofCause.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import {
   EDIT_PREPARE_CAUSES,
@@ -118,6 +130,7 @@ export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>(
 const GOVERNED_VERIFICATION_REASON_CODES = [
   "verification-authority-revoked",
   "verification-verifier-unsupported",
+  "verification-plan-changed",
   "VERIFICATION_FAILED",
   "VERIFICATION_TIMED_OUT",
   "VERIFICATION_RESOURCE_EXCEEDED",
@@ -471,6 +484,19 @@ const COMMIT_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome
   ["buffers-dirty", "unsaved-changes"],
 ]);
 
+// A refused task branch names its one cause on the card (lab U-24: a branch step refused as
+// not-on-base read the generic policy sentence). authority-denied and policy-block stay `blocked`,
+// which says exactly that; every other reason falls back to it too, never to a success word.
+const BRANCH_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["invalid-name", "branch-invalid-name"],
+  ["protected-name", "branch-protected-name"],
+  ["branch-exists", "branch-exists"],
+  ["not-on-base", "branch-not-on-base"],
+  ["not-local-checkout", "branch-not-local-checkout"],
+  ["executable-filters", "branch-executable-filters"],
+  ["preflight-block", "branch-preflight"],
+]);
+
 const GIT_SYNC_COMPLETED_STATUSES: ReadonlySet<string> = new Set(["succeeded", "up-to-date"]);
 
 function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
@@ -478,14 +504,27 @@ function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
 }
 
 function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome {
+  // The run sits on a protected branch (lab U-48): the same `blocked` status as any policy refusal,
+  // but the closed block reason names the cause, so the card can say why. The decision is unchanged.
+  if (commit.status === "blocked" && commit.blockReason === "protected-branch")
+    return "commit-protected-branch";
   return COMMIT_OUTCOME_BY_REASON.get(commit.reason) ?? gitStepOutcome(commit.status);
+}
+
+function branchOutcome(
+  git: Extract<CodingRuntimeGitResult, { readonly kind: "branch" }>,
+): CodingSafeActivityGitOutcome {
+  return git.status === "blocked"
+    ? (BRANCH_OUTCOME_BY_REASON.get(git.reason) ?? "blocked")
+    : gitStepOutcome(git.status);
 }
 
 // `ready` is a stage or unstage proposal prepared but not yet carried out: it claims no outcome.
 function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
   if (git.kind === "fetch" || git.kind === "pull")
     return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
-  if (git.kind !== "stage" && git.kind !== "unstage" && git.kind !== "branch") return undefined;
+  if (git.kind === "branch") return branchOutcome(git);
+  if (git.kind !== "stage" && git.kind !== "unstage") return undefined;
   return git.status === "ready" ? undefined : gitStepOutcome(git.status);
 }
 
@@ -500,10 +539,72 @@ export function codingToolGitPresentation(
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (result.status !== "completed") return {};
-  let gitOutcome: CodingSafeActivityGitOutcome | undefined;
-  if ("verifiedCommit" in result) gitOutcome = commitOutcome(result.verifiedCommit);
-  else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
-  return gitOutcome === undefined ? {} : Object.freeze({ gitOutcome });
+  const gitOutcome = gitStepOutcomeOf(result);
+  // Stage and unstage share the `keiko_git_stage` tool name: the row names which one it was (U-49).
+  const gitAction = "git" in result ? gitIndexAction(result.git) : undefined;
+  if (gitOutcome === undefined && gitAction === undefined) return {};
+  return Object.freeze({
+    ...(gitOutcome === undefined ? {} : { gitOutcome }),
+    ...(gitAction === undefined ? {} : { gitAction }),
+  });
+}
+
+/** The opaque reference a proposal and the execute that redeems it share (a digest of the id). */
+export function codingGitProposalRef(proposalId: string): string {
+  return createHash("sha256")
+    .update(`keiko-git-proposal-ref\u0000${proposalId}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function resultProposalId(result: CodingToolResult): string | undefined {
+  if ("verifiedCommit" in result) return result.verifiedCommit.proposalId;
+  if ("draftDelivery" in result)
+    return result.draftDelivery.status === "recorded"
+      ? result.draftDelivery.record.proposalId
+      : undefined;
+  if ("git" in result)
+    return result.git.kind === "stage" || result.git.kind === "unstage"
+      ? result.git.proposalId
+      : undefined;
+  return undefined;
+}
+
+function requestProposalId(request: CodingToolActionRequest): string | undefined {
+  if (request.action === "git" && "phase" in request && request.phase === "execute")
+    return request.proposalId;
+  if (request.action === "delivery" && request.phase === "execute") return request.proposalId;
+  return undefined;
+}
+
+/**
+ * Server-private live presentation tying a Git proposal to the `keiko_git_execute` that redeemed
+ * it: both rows carry the same opaque reference, so the Workbench names exactly which proposal an
+ * execute carried out instead of guessing from order. Absent when the call names no proposal.
+ */
+export function codingToolGitProposalPresentation(
+  request: CodingToolActionRequest,
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  const proposalId = requestProposalId(request) ?? resultProposalId(result);
+  return proposalId === undefined ? {} : { gitProposalRef: codingGitProposalRef(proposalId) };
+}
+
+function gitStepOutcomeOf(result: CodingToolResult): CodingSafeActivityGitOutcome | undefined {
+  if ("verifiedCommit" in result) {
+    const outcome = commitOutcome(result.verifiedCommit);
+    // A proposal answered with `approvalDisposition: "ready"` needs no decision: policy authorized
+    // it or the person already approved it, and only its execute step is left. It must not claim
+    // to wait for a human (lab 2026-11-27, Full access).
+    return outcome === "waiting-for-approval" && result.approvalDisposition === "ready"
+      ? "prepared"
+      : outcome;
+  }
+  return "git" in result ? gitResultOutcome(result.git) : undefined;
+}
+
+function gitIndexAction(git: CodingRuntimeGitResult): CodingSafeActivityGitAction | undefined {
+  return git.kind === "stage" || git.kind === "unstage" ? git.kind : undefined;
 }
 
 async function executeAdmitted(
@@ -719,12 +820,25 @@ function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommi
 }
 
 function isUnavailableCommitProof(value: Record<string, unknown>): boolean {
+  if (value.reasonCode === "proof-unavailable" && value.cause !== undefined)
+    return isCausedUnavailableProof(value);
   const nextAction = COMMIT_PROOF_NEXT_ACTIONS.get(value.reasonCode);
   if (nextAction === undefined || value.nextAction !== nextAction) return false;
   if (value.reasonCode !== "candidate-not-staged" || value.blocking === undefined) {
     return Object.keys(value).length === 3;
   }
   return Object.keys(value).length === 4 && isVerifiedCommitBlockingPaths(value.blocking);
+}
+
+// A failed worktree read names its closed cause; the next action follows from whether reading
+// again can ever help.
+function isCausedUnavailableProof(value: Record<string, unknown>): boolean {
+  const cause = COMMIT_PROOF_UNAVAILABLE_CAUSES.find((candidate) => candidate === value.cause);
+  if (cause === undefined || Object.keys(value).length !== 4) return false;
+  return (
+    value.nextAction ===
+    (isPermanentCommitProofCause(cause) ? "resolve-then-verify" : "verify-again")
+  );
 }
 
 // Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary. A
@@ -801,6 +915,18 @@ function projectSkillDiscovery(
     : projected("failed");
 }
 
+function projectGitResult(git: unknown): CodingToolResult {
+  return isCodingRuntimeGitResult(git)
+    ? {
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        git,
+        ...stageGuidance(git),
+        ...branchGuidance(git),
+      }
+    : projected("failed");
+}
+
 function projectRuntimeGit(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
@@ -814,15 +940,7 @@ function projectRuntimeGit(
         }
       : projected("failed");
   if (request.action === "git" && request.operation !== "read" && request.operation !== "write")
-    return isCodingRuntimeGitResult(value.git)
-      ? {
-          status: "completed",
-          evidence: [{ kind: "governed-delegate", code: "completed" }],
-          git: value.git,
-          ...stageGuidance(value.git),
-          ...branchGuidance(value.git),
-        }
-      : projected("failed");
+    return projectGitResult(normalizePersistedCodingRuntimeGitResult(value.git));
   return undefined;
 }
 
@@ -884,7 +1002,7 @@ function projectVerifiedCommit(
 // too (a managed worktree, an existing name, ...), the operator report stays the fallback; the
 // other policy blocks keep their bare codes.
 const PROTECTED_BRANCH_COMMIT_GUIDANCE =
-  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
+  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over) (this also holds in a repository with no commit yet: the new branch takes the first commit and the protected branch stays unborn), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
 
 // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier could
 // not run on the host and named the shell instead, and the model, seeing only `verification-missing`
@@ -915,15 +1033,16 @@ function projectSearch(
   value: Record<string, unknown>,
 ): CodingToolResult | undefined {
   if (request.action !== "search") return undefined;
-  return isCodingRepositoryResult(value.search)
-    ? {
+  const search = isCodingRepositoryResult(value.search)
+    ? boundedCodingRepositoryResult(value.search)
+    : undefined;
+  return search === undefined
+    ? projected("failed")
+    : {
         status: "completed",
-        evidence: [
-          { kind: "governed-delegate", code: value.search.ok ? "completed" : value.search.reason },
-        ],
-        search: value.search,
-      }
-    : projected("failed");
+        evidence: [{ kind: "governed-delegate", code: search.ok ? "completed" : search.reason }],
+        search,
+      };
 }
 
 function projectGovernedFailure(
@@ -934,6 +1053,7 @@ function projectGovernedFailure(
   // The operator declined a server-raised ask (a Git stage, commit, push or pull-request proposal):
   // the same decision as a declined step, so the model reads why and goes on (ADR-0124 D6).
   if (reasonCode === GOVERNED_ASK_DECLINED_REASON_CODE) return humanDecisionToolResult("denied");
+  if (reasonCode === GOVERNED_ASK_EXPIRED_REASON_CODE) return humanDecisionToolResult("expired");
   if (typeof reasonCode !== "string" || !forwardsReasonCode(request, reasonCode)) {
     return projected("failed");
   }
@@ -942,6 +1062,7 @@ function projectGovernedFailure(
     ...governedFailureCoaching(request, reasonCode),
     ...verificationNotRunDetail(request, reasonCode, value.notRun, value.shellDependencies),
     ...verificationPackageDetail(request, reasonCode, value.packageCandidates),
+    ...verificationResourceLimitDetail(request, reasonCode, value.resourceLimit),
   };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
@@ -1036,6 +1157,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
       "This discovery ran out of time before it finished. Narrow it with a directory or a more specific query instead of retrying the same call.",
   },
   verification: {
+    // ADR-0124 D6: the person approved the command lines the card showed; the project planned
+    // something else when the call ran, so nothing ran.
+    "verification-plan-changed":
+      "The project changed after the person approved this verification, so the commands it would run are no longer the ones they saw, and nothing ran. Call the same verifier again so the person can approve the current commands; do not work around it or run the check another way.",
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
     // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the
@@ -1051,6 +1176,12 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
       "Verification could not run because this computer has no isolation Keiko can run project commands in safely: no running container runtime (Docker or Podman), and on Windows no verified Keiko runtime supervisor. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime (or, on Windows, repair the Keiko installation) and verify again, or check the change themselves.",
     // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
     // and the model gave up instead of running the build tool the repository already uses.
+    // A step that ran into a limit settled neither red nor green: its result says what to do next.
+    // The runaway ceiling is the only output bound, so a verbose but healthy suite never lands here.
+    VERIFICATION_RESOURCE_EXCEEDED:
+      "A verification step was ended because it reached a resource limit before it finished; the detail names the closed limit. This is not a failing test and nothing was verified. Do not retry the same verifier unchanged: for output-limit the command wrote an endless stream of output (a runaway loop, not an ordinary verbose test log), so find and stop what prints without end; for memory-limit narrow the check to the changed code. Where you have a shell of your own, the repository's own command run there counts as the verification.",
+    VERIFICATION_TIMED_OUT:
+      "A verification step ran out of its wall-time limit before it finished; the detail names the closed limit. This is not a failing test and nothing was verified. Do not retry the same verifier unchanged: narrow the check to the changed code (the targeted-test verifier), or look for a test that hangs.",
     NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
   },
   // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
@@ -1162,6 +1293,26 @@ function notRunWords(reason: VerificationNotRunReason, shell: boolean): string {
     : NOT_RUN_WORDS[reason];
 }
 
+const RESOURCE_LIMIT_WORDS: ReadonlySet<string> = new Set(VERIFICATION_RESOURCE_LIMIT_WORDS);
+
+// The closed word for the limit a step reached. Anything outside the vocabulary is withheld, like
+// every value the facade forwards to the model.
+function verificationResourceLimitDetail(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+  resourceLimit: unknown,
+): { readonly detail?: string } {
+  if (
+    request.action !== "verification" ||
+    (reasonCode !== "VERIFICATION_RESOURCE_EXCEEDED" && reasonCode !== "VERIFICATION_TIMED_OUT") ||
+    typeof resourceLimit !== "string" ||
+    !RESOURCE_LIMIT_WORDS.has(resourceLimit)
+  ) {
+    return {};
+  }
+  return { detail: `Limit reached: ${resourceLimit}.` };
+}
+
 // A workspace with several packages: the runner names the workspace-relative folders so the model can
 // pass one as `packageDir`. Each is a bounded path the tool schema would accept itself; anything else
 // is withheld, like every value the facade forwards to the model.
@@ -1190,24 +1341,48 @@ function verificationPackageDetail(
 // keep their own findings and need none.
 const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "selection-unreviewed":
-    "At least one requested path is not a pending change Git lists for this worktree: it is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as changed and not conflicted.",
+    'At least one requested path names no pending change Git lists for this worktree: a file that is unchanged, absent or in conflict, a directory with no pending change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every pending change below it ("." the whole workspace). Read keiko_git_status and request changed files, or a directory that holds changes.',
   "buffers-dirty":
     "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
   "proposal-limit":
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
-  // #4068: Git for Windows sets core.autocrlf=true for the whole system, so every stage there was
-  // refused and the model guessed at file locks and hooks. Since #4491 a file whose conversion
-  // checks out its verified bytes again is staged; this names what is still refused.
+  // #4068, #4491: a refused staging names its closed cause (`STAGE_CAUSE_GUIDANCE`); this text only
+  // covers a refusal that carries none (an older record). It never asks the model to run
+  // `git config`: the sandbox refuses it and the setting is the operator's.
   "unsupported-transformation":
-    "Git would change these files' bytes while staging them, and the stored form would not check out as the bytes Keiko verified: a file mixes CRLF and LF line breaks while core.autocrlf is true and its staged version holds no CRLF, has CRLF line breaks while core.autocrlf is input, the effective core.safecrlf is not false, or a .gitattributes text, eol, crlf, filter, ident or working-tree-encoding rule applies. Do not retry with the same bytes. If a file you wrote mixes line breaks, rewrite it with the line breaks the file already uses (CRLF in a CRLF checkout) and propose again; otherwise report to the operator that this repository must opt out locally, for example with `git config core.autocrlf false`, before Keiko can stage and commit here.",
+    "Git would change these files' bytes while staging them, and the stored form would not check out as the bytes Keiko verified. Do not retry with the same bytes. If a file you wrote mixes CRLF and LF line breaks, rewrite it with the line breaks the file already uses and propose again; otherwise report to the operator that this repository's Git configuration or attribute rules must change before Keiko can stage here.",
+};
+
+// The closed cause of an `unsupported-transformation` stage refusal (#4491), each with the one step
+// that fits it. A setting or an attribute rule is the operator's to change; Keiko's sandbox refuses
+// `git config`, so a model is never told to run it. No path or value is echoed.
+const STAGE_CAUSE_GUIDANCE: Readonly<Record<CodingRuntimeGitStageCause, string>> = {
+  "config-unsupported":
+    "Keiko could not read this repository's line-ending configuration, or it holds a value verified staging does not admit (core.safecrlf is not false, an unknown core.autocrlf value, or the read itself failed). Other bytes will not help. Report it to the operator: only they can change that Git setting, and you cannot change it from here.",
+  "filter-driver":
+    "A configured Git filter driver (filter.<name>.clean, smudge or process) cannot be neutralised for staging. Other bytes will not help. Report it to the operator: the driver configuration is theirs to change.",
+  "attribute-filter":
+    "A Git attribute rule applies a filter to at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files, such as one extension. Stage the files the rule does not match, and report to the operator that the rule must change before the others can be staged.",
+  "attribute-encoding":
+    "A Git attribute rule applies a working-tree-encoding to at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files. Stage the other files, and report to the operator that the rule must change before these can be staged.",
+  "attribute-ident":
+    "A Git attribute rule applies ident expansion to at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files. Stage the other files, and report to the operator that the rule must change before these can be staged.",
+  "attribute-line-ending":
+    "A Git attribute rule sets a line-ending conversion (crlf, or a text or eol value Keiko does not admit) for at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files, such as one extension. Stage the other files, and report to the operator that the rule must change before these can be staged.",
+  "attribute-unreadable":
+    "Git could not report the attribute rules for the requested files, so staging cannot be verified. Propose again once; if it repeats, report it to the operator.",
+  "content-conversion":
+    "At least one requested file would not round-trip under the effective line-ending mode: it mixes CRLF and LF line breaks, or its line breaks differ from what Git would store. Rewrite the file with the line breaks it already uses (CRLF in a CRLF file, LF in an LF file) and propose again.",
 };
 
 // An unstage proposal is refused for its own reasons (#3902 AC2).
 const UNSTAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "selection-unreviewed":
-    "At least one requested path has no staged change Git lists for this worktree: it is unstaged only, unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as staged and not conflicted.",
+    'At least one requested path names no staged change Git lists for this worktree: a file that is unstaged only, unchanged, absent or in conflict, a directory with no staged change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every staged change below it ("." the whole workspace). Read keiko_git_status and request staged files, or a directory that holds staged changes.',
   "proposal-limit":
     "Too many stage and unstage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+  "unsupported-transformation":
+    "A file below a requested directory cannot be read as a regular file (a submodule, a file without read permission, or a directory where a file was). Unstage the other files by exact path, or request directories that do not hold it, and report the blocker.",
 };
 
 // A task branch Keiko refused, with the one step that is the model's to take (#3907).
@@ -1238,13 +1413,28 @@ function branchGuidance(result: CodingRuntimeGitResult): { readonly guidance?: s
   return guidance === undefined ? {} : { guidance };
 }
 
+// The status answer lists at most 50 changed files (a context-window bound); a longer list says how
+// to proceed, since a model that cannot read every path must not loop on shell output (U-28).
+const STATUS_TRUNCATED_GUIDANCE =
+  'This list shows only the first 50 changed files of a longer one. Staging a directory stages every change below it: pass a directory such as "src", or "." for every change in the workspace, to keiko_git_stage instead of listing each file.';
+
 function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
-  const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
+  if (result.kind === "status" && result.truncated) return { guidance: STATUS_TRUNCATED_GUIDANCE };
   const guidance =
     (result.kind === "stage" || result.kind === "unstage") && result.status === "blocked"
-      ? table[result.reason]
+      ? blockedGuidance(result)
       : undefined;
   return guidance === undefined ? {} : { guidance };
+}
+
+// A closed cause names the one step that fits it; without one the refusal reason's text applies.
+function blockedGuidance(
+  result: Extract<CodingRuntimeGitResult, { readonly kind: "stage" | "unstage" }>,
+): string | undefined {
+  if (result.kind === "stage" && result.cause !== undefined)
+    return STAGE_CAUSE_GUIDANCE[result.cause];
+  const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
+  return table[result.reason];
 }
 
 const VERIFICATION_FAILURE_KEYS: ReadonlySet<string> = new Set([
@@ -1449,6 +1639,39 @@ const HUMAN_DECISION_GUIDANCE = {
     "Nobody decided this approval in time, so the step was not performed. Continue with the rest of the task without it, or ask the user before trying it again.",
 } as const;
 
+/**
+ * What a task-branch ask answers when Keiko would refuse the name at execution anyway: the same
+ * blocked `invalid-name` result and guidance the branch tool itself gives, so no human is asked and
+ * the model can tell a bad name from a human denial (U-27).
+ */
+export function invalidBranchNameToolResult(): CodingToolResult {
+  return blockedBranchToolResult("invalid-name");
+}
+
+/**
+ * The blocked result of a task branch Keiko refuses, shared by the step that runs after a decision
+ * and the ask that is refused before one (U-32): one result and one guidance for either, so the
+ * model cannot tell an early refusal from a late one. The name is echoed only when it is a safe,
+ * option-free ref name, exactly as the step does.
+ */
+export function blockedBranchToolResult(
+  reason: CodingRuntimeGitBranch["reason"],
+  branchName?: string,
+): CodingToolResult {
+  const git: CodingRuntimeGitBranch = {
+    kind: "branch",
+    status: "blocked",
+    reason,
+    ...(branchName !== undefined && isSafeTaskBranchName(branchName) ? { branch: branchName } : {}),
+  };
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    git,
+    ...branchGuidance(git),
+  };
+}
+
 /** The feedback a declined or expired step gives the model in place of the call (ADR-0124 D6). */
 export function humanDecisionFeedback(outcome: "denied" | "expired"): string {
   return HUMAN_DECISION_GUIDANCE[outcome];
@@ -1461,6 +1684,30 @@ export function humanDecisionToolResult(outcome: "denied" | "expired"): CodingTo
     evidence: [],
     guidance: HUMAN_DECISION_GUIDANCE[outcome],
   };
+}
+
+/**
+ * Server-private live presentation of a step a person declined or nobody decided in time. Both
+ * approval sources (the runtime permission ask and the server-raised proposal ask) answer with the
+ * same human-decision result, so both name the same closed refusal cause on the row; a refusal
+ * Keiko's own policy made carries none.
+ */
+export function codingToolHumanDecisionPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  const cause = humanDecisionCause(result);
+  return cause === undefined ? {} : { failureOrigin: "keiko-refused", refusalCause: cause };
+}
+
+function humanDecisionCause(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation["refusalCause"] {
+  if (!("guidance" in result)) return undefined;
+  if (result.status === "denied" && result.guidance === HUMAN_DECISION_GUIDANCE.denied)
+    return "approval-declined";
+  if (result.status === "cancelled" && result.guidance === HUMAN_DECISION_GUIDANCE.expired)
+    return "approval-expired";
+  return undefined;
 }
 
 function projectAuxiliary(

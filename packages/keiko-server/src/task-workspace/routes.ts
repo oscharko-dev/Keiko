@@ -21,6 +21,7 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { FilesError, resolveRoot } from "../files.js";
 import {
+  logWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
   type WorkspaceLifecycleFailureInput,
 } from "./activity-log.js";
@@ -288,7 +289,7 @@ async function resolveProvisionBody(
     );
   }
   const root = requireSafeField(body.root, "root");
-  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  const resolved = await resolveRoot(deps.store, root, deps.redactor, correlationId);
   const baseBranch = await issueProvisioningBase(
     deps,
     resolved.realRoot,
@@ -296,6 +297,21 @@ async function resolveProvisionBody(
     correlationId,
   );
   return parseProvisionBody({ ...body, root, baseBranch });
+}
+
+async function provisionRequestFor(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: ReturnType<typeof parseProvisionBody>,
+): Promise<WorkspaceProvisionRequest> {
+  const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor, ctx.correlationId);
+  return {
+    repositoryRequestPath: resolvedRoot.realRoot,
+    taskId: parsed.taskId,
+    baseBranch: parsed.baseBranch,
+    requestedBy: parsed.requestedBy,
+    correlationId: ctx.correlationId,
+  };
 }
 
 // POST /api/task-workspaces — provision (create or resume) a managed task workspace.
@@ -328,14 +344,7 @@ export async function handleProvisionTaskWorkspace(
         };
       }
       const parsed = await resolveProvisionBody(deps, body, ctx.correlationId);
-      const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor);
-      const request: WorkspaceProvisionRequest = {
-        repositoryRequestPath: resolvedRoot.realRoot,
-        taskId: parsed.taskId,
-        baseBranch: parsed.baseBranch,
-        requestedBy: parsed.requestedBy,
-        correlationId: ctx.correlationId,
-      };
+      const request = await provisionRequestFor(ctx, deps, parsed);
       const result = await guard.provision(request);
       return {
         status: result.created ? 201 : 200,
@@ -389,7 +398,7 @@ export async function handleListTaskWorkspaces(
     if (rootInput === null || rootInput.trim().length === 0) {
       return { status: 200, body: redacted(deps, { instances: guard.listAll() }) };
     }
-    const resolvedRoot = await resolveRoot(deps.store, rootInput, deps.redactor);
+    const resolvedRoot = await resolveRoot(deps.store, rootInput, deps.redactor, ctx.correlationId);
     const instances = guard.list(resolvedRoot.realRoot);
     return { status: 200, body: redacted(deps, { instances }) };
   });
@@ -443,6 +452,8 @@ export async function handleSetActiveTaskWorkspace(
       if (!selectableWorkspace(guard, workspaceId)) {
         throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
       }
+      const unchanged = alreadyActiveWorkspace(deps, guard, ctx, workspaceId, body.acquireLock);
+      if (unchanged !== undefined) return unchanged;
       await admitWorkspaceSelection(deps);
       const result = await guard.setActive({
         workspaceId,
@@ -473,6 +484,80 @@ interface InPlaceSelection {
   readonly body: Record<string, unknown>;
   readonly realRoot: string;
   readonly requestedBy: string;
+  /** The selection names the workspace that is already active: nothing is admitted or changed. */
+  readonly current?: ActiveWorkspaceView;
+}
+
+/**
+ * The active view when the selection names the workspace that already is the active one: same
+ * root and kind and, for a Local checkout, the branch the live checkout stands on (the active read
+ * re-proves the checkout identity and branch). Selecting it again changes nothing, so it must not
+ * end the settled run's undo window or purge its activity (U-3).
+ */
+function alreadyActiveSelection(
+  active: ActiveWorkspaceView | undefined,
+  realRoot: string,
+  branch: string | undefined,
+): ActiveWorkspaceView | undefined {
+  if (active?.instance.repositoryRoot !== realRoot) return undefined;
+  // A managed worktree of the same root and branch is another workspace: only an in-place
+  // (Local or folder) workspace in state `active` counts, and `getActive` has re-proved its
+  // registration, canonical root, branch and Git directory identity just before.
+  if (active.instance.executionLocation !== "local" || active.instance.lifecycleState !== "active")
+    return undefined;
+  const folder = active.instance.workspaceKind === "folder";
+  if (folder !== (branch === undefined)) return undefined;
+  return folder || active.instance.taskBranch === branch ? active : undefined;
+}
+
+/** The timeline shows the repeat as an `activate` line with the closed outcome `unchanged`. */
+function recordUnchangedSelection(
+  deps: UiHandlerDeps,
+  active: ActiveWorkspaceView,
+  correlationId: string | undefined,
+): void {
+  logWorkspaceLifecycle(
+    { activityLog: deps.activityLog },
+    {
+      operation: "activate",
+      outcome: "unchanged",
+      workspaceId: active.instance.workspaceId,
+      taskId: active.instance.taskId,
+      correlationId,
+      attempt: 1,
+      durationMs: 0,
+      worktreeCount: 0,
+      workspaceKind: active.instance.workspaceKind === "folder" ? "folder" : undefined,
+    },
+  );
+}
+
+/**
+ * The active view when a switch names the in-place (Local or folder) workspace that already is the
+ * active, running one; a managed worktree always goes through its own activation:
+ * nothing changes, so no undo window ends and no activity is purged (U-3). A request that takes
+ * the workspace lock is never a repeat.
+ */
+function alreadyActiveWorkspace(
+  deps: UiHandlerDeps,
+  guard: WorkspaceLifecycleService,
+  ctx: RouteContext,
+  workspaceId: string,
+  acquireLock: unknown,
+): RouteResult | undefined {
+  if (acquireLock === true) return undefined;
+  const current = guard.getActive(ctx.correlationId);
+  if (
+    current?.instance.workspaceId !== workspaceId ||
+    current.instance.executionLocation !== "local" ||
+    current.instance.lifecycleState !== "active"
+  )
+    return undefined;
+  recordUnchangedSelection(deps, current, ctx.correlationId);
+  return {
+    status: 200,
+    body: redacted(deps, { instance: current.instance, binding: current.binding }),
+  };
 }
 
 // Reads an in-place selection (Local checkout, folder) and admits it against the coding runtime.
@@ -481,11 +566,23 @@ interface InPlaceSelection {
 async function readInPlaceSelection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  guard: WorkspaceLifecycleService,
+  withBranch: boolean,
 ): Promise<InPlaceSelection> {
   const body = await readJsonObject(ctx.req);
   const root = requireSafeField(body.root, "root");
   const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  const resolved = await resolveRoot(deps.store, root, deps.redactor, ctx.correlationId);
+  const branch = withBranch ? requireSafeField(body.branch, "branch") : undefined;
+  const current = alreadyActiveSelection(
+    guard.getActive(ctx.correlationId),
+    resolved.realRoot,
+    branch,
+  );
+  if (current !== undefined) {
+    recordUnchangedSelection(deps, current, ctx.correlationId);
+    return { body, realRoot: resolved.realRoot, requestedBy, current };
+  }
   await admitWorkspaceSelection(deps);
   if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
@@ -511,7 +608,10 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      const { body, realRoot, requestedBy } = await readInPlaceSelection(ctx, deps);
+      const selection = await readInPlaceSelection(ctx, deps, guard, true);
+      if (selection.current !== undefined)
+        return { status: 200, body: redacted(deps, { active: selection.current }) };
+      const { body, realRoot, requestedBy } = selection;
       const branch = requireSafeField(body.branch, "branch");
       let active: ActiveWorkspaceView;
       try {
@@ -554,7 +654,10 @@ export async function handleSelectFolderWorkspace(
       correlationId: ctx.correlationId,
     },
     async () => {
-      const { realRoot, requestedBy } = await readInPlaceSelection(ctx, deps);
+      const selection = await readInPlaceSelection(ctx, deps, guard, false);
+      if (selection.current !== undefined)
+        return { status: 200, body: redacted(deps, { active: selection.current }) };
+      const { realRoot, requestedBy } = selection;
       const active = selectFolder({
         root: realRoot,
         requestedBy,
@@ -639,9 +742,10 @@ export function handleHandoffTaskWorkspace(
 async function resolveOptionalRoot(
   deps: UiHandlerDeps,
   rootInput: string | null | undefined,
+  correlationId: string | undefined,
 ): Promise<string | undefined> {
   if (rootInput === null || rootInput === undefined || rootInput.length === 0) return undefined;
-  const resolved = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const resolved = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
   return resolved.realRoot;
 }
 
@@ -654,7 +758,11 @@ export async function handleGetTaskWorkspaceReconciliation(
   const guard = requireReconciliation(deps);
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
-    const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
+    const root = await resolveOptionalRoot(
+      deps,
+      ctx.url.searchParams.get("root"),
+      ctx.correlationId,
+    );
     const report = guard.report(root);
     return { status: 200, body: redacted(deps, { report }) };
   });
@@ -677,7 +785,11 @@ export async function handleReconcileTaskWorkspaces(
     },
     async () => {
       const body = await readJsonObject(ctx.req);
-      const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
+      const root = await resolveOptionalRoot(
+        deps,
+        optionalSafeField(body.root, "root"),
+        ctx.correlationId,
+      );
       const report = await guard.reconcile(root, ctx.correlationId);
       return { status: 200, body: redacted(deps, { report }) };
     },
@@ -747,7 +859,11 @@ export async function handleGetTaskWorkspaceHealth(
   const guard = requireHealth(deps);
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
-    const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
+    const root = await resolveOptionalRoot(
+      deps,
+      ctx.url.searchParams.get("root"),
+      ctx.correlationId,
+    );
     // The route's own correlation id, so the health probe's git spawns and any termination
     // evidence they emit land on this request's timeline (AGENTS.md §8).
     const report = await guard.report(root, ctx.correlationId);
@@ -820,7 +936,11 @@ export async function handleCleanupOrphanTaskWorkspaces(
     async () => {
       const body = await readJsonObject(ctx.req);
       const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-      const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
+      const root = await resolveOptionalRoot(
+        deps,
+        optionalSafeField(body.root, "root"),
+        ctx.correlationId,
+      );
       const result = await guard.cleanupOrphans({
         ...(root !== undefined ? { repositoryRoot: root } : {}),
         requestedBy,

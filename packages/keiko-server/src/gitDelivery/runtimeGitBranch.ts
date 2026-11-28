@@ -7,7 +7,8 @@ import type {
   GitMutationOutcome,
 } from "@oscharko-dev/keiko-tools";
 import {
-  readGitRevision,
+  isGitZeroObjectId,
+  readGitLocalBranchTip,
   readGitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
@@ -92,13 +93,31 @@ function branchResult(
   };
 }
 
-function scopeRefusal(input: RuntimeGitBranchInput): Refusal | undefined {
+function scopeRefusal(
+  input: Pick<RuntimeGitBranchInput, "port"> & {
+    readonly context: Pick<VerifiedCommitRunContext, "headRef" | "baseRef">;
+  },
+): Refusal | undefined {
   // Only a run standing on its own base branch can have a task branch made for it; a run that
   // already works on a task branch keeps it.
   if (input.context.headRef !== input.context.baseRef) return "not-on-base";
   if (input.port === undefined) return "not-local-checkout";
   const admission = input.port.admit();
   return admission === "admitted" ? undefined : admission;
+}
+
+/**
+ * Every refusal of a task-branch step that needs no Git read: the name and the run's scope. The
+ * step itself checks exactly these first, and a task-branch ask asks them again BEFORE a person is
+ * shown a card (U-32), so a refusal Keiko is certain of is never put to a human to approve. The
+ * live Git checks (an existing branch, the kernel's preflight) stay with the step.
+ */
+export function taskBranchAskRefusal(
+  input: Pick<RuntimeGitBranchInput, "port" | "branchName"> & {
+    readonly context: Pick<VerifiedCommitRunContext, "headRef" | "baseRef">;
+  },
+): Refusal | undefined {
+  return taskBranchNameRefusal(input.branchName) ?? scopeRefusal(input);
 }
 
 function governedDeps(input: RuntimeGitBranchInput): Parameters<typeof readGitWorktreeSnapshot>[0] {
@@ -137,6 +156,9 @@ function mutate(
       ...input.execution,
       signal: input.context.signal,
       snapshotReader: guardedSnapshotReader(input),
+      ...(input.context.readSession === undefined
+        ? {}
+        : { readSession: input.context.readSession }),
     },
     input.context.correlationId,
   );
@@ -184,10 +206,14 @@ type Existing = "absent" | "at-head" | "elsewhere";
 // an earlier, interrupted step and is only switched to; one anywhere else is somebody's work and
 // is refused. The current branch counts as existing, so the base branch can never be "created".
 async function existingBranch(input: RuntimeGitBranchInput): Promise<Existing> {
-  const snapshot = await readGuardedSnapshot(input);
-  if (input.branchName === snapshot.currentBranchName) return "elsewhere";
-  if (!snapshot.existingLocalBranchNames.includes(input.branchName)) return "absent";
-  const tip = await readGitRevision(governedDeps(input), `refs/heads/${input.branchName}`);
+  if (!input.context.stillAuthorized()) throw new Error("git-branch-authority-unavailable");
+  // The run's own branch is the current branch: the facts read that fronts this step verified it
+  // against Git's own answer. The kernel judges each effect against a fresh snapshot of its own.
+  if (input.branchName === input.context.headRef) return "elsewhere";
+  // One `rev-parse --verify` answers "is there such a branch, and where": a full worktree snapshot
+  // (about six processes, `status` among them) was read for it, and Windows pays for every process.
+  const tip = await readGitLocalBranchTip(governedDeps(input), input.branchName);
+  if (tip === undefined) return "absent";
   return tip === input.headSha ? "at-head" : "elsewhere";
 }
 
@@ -207,6 +233,9 @@ async function createAndSwitch(
       name,
     );
     if (!created.done) return created;
+    // From an unborn HEAD the creation already re-pointed HEAD at the new branch (there is no commit
+    // to switch away from or to), so there is no second step (#4491).
+    if (isGitZeroObjectId(input.headSha)) return created;
   }
   return stepOf(await mutate(input, { kind: "branch-switch", branchName: name }), name);
 }
@@ -216,7 +245,19 @@ async function createAndSwitch(
 // switch back: the checkout then stays off its base and no longer matches the run's record, which
 // leaves the run unauthorized (fail closed) and is reported as such, never as a restored checkout.
 async function switchBack(input: RuntimeGitBranchInput): Promise<boolean> {
-  const back = await mutate(input, { kind: "branch-switch", branchName: input.context.baseRef });
+  // An unborn base is not a branch `switch` can name: HEAD is re-pointed at it the way it was
+  // re-pointed away from it, under the same policy.
+  const back = await mutate(
+    input,
+    isGitZeroObjectId(input.headSha)
+      ? {
+          kind: "branch-create",
+          branchName: input.context.baseRef,
+          baseBranchName: input.branchName,
+          startPointRefHash: input.headSha,
+        }
+      : { kind: "branch-switch", branchName: input.context.baseRef },
+  );
   return back.outcome.status === "succeeded";
 }
 
@@ -291,7 +332,7 @@ async function adoptOrRestore(input: RuntimeGitBranchInput): Promise<CodingRunti
  */
 export async function runTaskBranch(input: RuntimeGitBranchInput): Promise<CodingRuntimeGitBranch> {
   const name = input.branchName;
-  const refusal = taskBranchNameRefusal(name) ?? scopeRefusal(input);
+  const refusal = taskBranchAskRefusal(input);
   if (refusal !== undefined) return branchResult("blocked", refusal, name);
   const existing = await existingBranch(input);
   if (existing === "elsewhere") return branchResult("blocked", "branch-exists", name);

@@ -30,6 +30,12 @@ export interface CodingWorkbenchStartOptions {
   readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
   readonly projectMemoryEnabled: boolean;
   /**
+   * The repository root the Workbench shows when the person starts. The request states it and the
+   * server refuses the start when its active workspace is another folder, so a run never starts in
+   * a repository the person is not looking at.
+   */
+  readonly expectedWorkspaceRoot: string;
+  /**
    * Workspace files the first prompt references with `@`, by path relative to the workspace the run
    * starts in (ADR-0137 D10). The server resolves them when the first turn is dispatched.
    */
@@ -66,6 +72,12 @@ export interface CodingWorkbenchRuntimeActions extends RuntimeMutationActions {
   readonly adoptModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
   readonly prepareCodexSetup?: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
+  /**
+   * Ends the alert of a refused or failed action that belongs to the task the person leaves (New
+   * task, another task or repository): the next task starts without it (U-42). It never touches a
+   * pending action or a live failure of the run.
+   */
+  readonly dismissRefusal: () => void;
   readonly refreshProfile: () => Promise<void>;
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
@@ -299,6 +311,10 @@ function createCodingWorkbenchRuntimeActions({
       dispatch({ kind: "select-model", modelId });
     },
     setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
+    dismissRefusal: (): void => {
+      dispatch({ kind: "refusal-dismissed" });
+      dispatch({ kind: "pending-start-left" });
+    },
     prepareCodexSetup,
     refreshProfile,
     refreshSource,

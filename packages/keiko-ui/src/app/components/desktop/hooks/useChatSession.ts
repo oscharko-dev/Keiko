@@ -89,6 +89,8 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+  attachGatewayModelCatalogRefreshConsumer,
+  detachGatewayModelCatalogRefreshConsumer,
   gatewayModelCatalogCheckRequested,
   notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
@@ -2107,16 +2109,28 @@ function refreshGatewayModels(event?: Event): void {
 function subscribeGatewayModelRefresh(
   subscriber: (result: GatewayModelRefreshResult) => void,
 ): () => void {
+  let unserved: { readonly check: boolean } | undefined;
   if (gatewayModelRefreshSubscribers.size === 0) {
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
+    unserved = attachGatewayModelCatalogRefreshConsumer();
   }
   gatewayModelRefreshSubscribers.add(subscriber);
+  // A refresh requested before this consumer existed (a window mounted in the same commit) is
+  // served now, with this subscriber already listening for its outcome (U-45).
+  if (unserved !== undefined) {
+    refreshGatewayModels(
+      new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
+        detail: { check: unserved.check },
+      }),
+    );
+  }
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
       gatewayModelRefreshGeneration += 1;
+      detachGatewayModelCatalogRefreshConsumer();
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
       window.removeEventListener(
         GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
@@ -2720,7 +2734,8 @@ function selectSessionModel(
   };
 }
 
-function sessionCatalogState(
+/** The state a catalog read produces; exported so a test derives its fixtures from the producer. */
+export function sessionCatalogState(
   capabilities: readonly ModelCapability[],
   source: ClientModelCatalogEvidence["source"],
   correlationId: string,

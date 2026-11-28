@@ -27,6 +27,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
+  CODING_WORKBENCH_TOOL_CALL_ID_PATTERN,
   permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuthorityEnvelope,
@@ -586,6 +587,20 @@ function validateNativePermission(
   }
 }
 
+function validatePermissionCallId(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (value.callId === undefined) return;
+  if (
+    typeof value.callId !== "string" ||
+    !CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(value.callId)
+  ) {
+    errors.push(`${path}.callId is invalid`);
+  }
+}
+
 function validatePermissionRequestSupervisedFields(
   value: Record<string, unknown>,
   path: string,
@@ -630,6 +645,7 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
       "connectorScopes",
       "commandLabel",
       "nativePermission",
+      "callId",
       "expiresAt",
     ],
     path,
@@ -643,6 +659,7 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
     errors.push(`${path}.actionClass is invalid`);
   }
   validatePermissionRequestOptionalFields(value, path, errors);
+  validatePermissionCallId(value, path, errors);
   if (value.kind === "command-execution" && value.commandLabel === undefined) {
     errors.push(`${path}.commandLabel is required`);
   }
@@ -695,6 +712,8 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
   "task-submitted": runtimeEventAllowedKeys("taskRef", "requestedMode", "effectiveMode"),
   "observation-streamed": runtimeEventAllowedKeys("channel", "sequence", "byteCount", "truncated"),
   "native-retry-changed": runtimeEventAllowedKeys("nativeRetry"),
+  "native-subagents-changed": runtimeEventAllowedKeys("activeSubagentCount"),
+  "native-agent-models-refused": runtimeEventAllowedKeys("refusedAgentModelCount"),
   "permission-requested": runtimeEventAllowedKeys("permissionRequest"),
   "diff-summarized": runtimeEventAllowedKeys("fileCount", "addedLines", "deletedLines"),
   "verification-summarized": runtimeEventAllowedKeys(
@@ -1310,6 +1329,20 @@ function validateNativeRetryEventFields(value: Record<string, unknown>, errors: 
   }
 }
 
+function validateNativeSubagentsEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  validateRequiredSafeIntegerField(value, "activeSubagentCount", "event", errors);
+}
+
+function validateNativeAgentModelsEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  validateRequiredSafeIntegerField(value, "refusedAgentModelCount", "event", errors);
+}
+
 const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   Record<
     CodingWorkbenchRuntimeEventKind,
@@ -1322,6 +1355,8 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "task-submitted": validateTaskSubmittedEventFields,
   "observation-streamed": validateObservationEventFields,
   "native-retry-changed": validateNativeRetryEventFields,
+  "native-subagents-changed": validateNativeSubagentsEventFields,
+  "native-agent-models-refused": validateNativeAgentModelsEventFields,
   "permission-requested": validatePermissionRequestedEventFields,
   "diff-summarized": validateDiffSummarizedEventFields,
   "verification-summarized": validateVerificationSummarizedEventFields,

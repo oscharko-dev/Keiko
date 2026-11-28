@@ -453,6 +453,17 @@ describe("coding tool approval bridge records declined proposals", () => {
     expect(bridge.proposalDeclined?.("run-other", "commit-1")).toBe(false);
   });
 
+  it("records a system refusal apart from a person's decline", () => {
+    const bridge = createCodingToolApprovalBridge();
+
+    bridge.refuseProposal?.(RUN_ID, "commit-1");
+
+    expect(bridge.proposalRefused?.(RUN_ID, "commit-1")).toBe(true);
+    expect(bridge.proposalDeclined?.(RUN_ID, "commit-1")).toBe(false);
+    bridge.invalidateRun(RUN_ID);
+    expect(bridge.proposalRefused?.(RUN_ID, "commit-1")).toBe(false);
+  });
+
   it("forgets a run's declines with the run", () => {
     const bridge = createCodingToolApprovalBridge();
     bridge.declineProposal?.(RUN_ID, "commit-1");
@@ -473,5 +484,143 @@ describe("coding tool approval bridge records declined proposals", () => {
     expect(bridge.proposalDeclined?.(RUN_ID, "stage-0")).toBe(false);
     expect(bridge.proposalDeclined?.(RUN_ID, "stage-1")).toBe(true);
     expect(bridge.proposalDeclined?.(RUN_ID, "stage-64")).toBe(true);
+  });
+});
+
+describe("verification plan bound to the approval that is spent (ADR-0124 D6)", () => {
+  const request = (
+    actionId: string,
+  ): {
+    readonly action: "verification";
+    readonly actionId: string;
+    readonly idempotencyKey: string;
+    readonly verifierId: string;
+  } => ({
+    action: "verification",
+    actionId,
+    idempotencyKey: `key-${actionId}`,
+    verifierId: "test",
+  });
+
+  /** Observes and activates an ask made under `askedAs` that showed (or did not show) a plan. */
+  function approve(
+    bridge: ReturnType<typeof createCodingToolApprovalBridge>,
+    askedAs: string,
+    plan: { readonly planShown?: boolean; readonly planDigest?: string },
+    time: { readonly nowMs: number; readonly expiresAt: string } = {
+      nowMs: NOW_MS,
+      expiresAt: EXPIRES_AT,
+    },
+  ): boolean {
+    const requestId = `permission-${askedAs}-${String(time.nowMs)}`;
+    const asked = request(askedAs);
+    const observed = bridge.observePermission({
+      runId: RUN_ID,
+      requestId,
+      action: "verification",
+      actionId: asked.actionId,
+      idempotencyKey: asked.idempotencyKey,
+      targetId: "test",
+      proof: {
+        approvalId: asked.actionId,
+        approvalDigest: codingToolApprovalBindingDigest(RUN_ID, asked),
+      },
+      expiresAt: time.expiresAt,
+      nowMs: time.nowMs,
+      ...plan,
+    });
+    return (
+      observed &&
+      bridge.activatePermission({
+        runId: RUN_ID,
+        requestId,
+        approvalAuthorityDigest: "a".repeat(64),
+        expiresAtMs: Date.parse(time.expiresAt),
+        nowMs: time.nowMs,
+      })
+    );
+  }
+
+  const call = (
+    actionId: string,
+  ): ReturnType<typeof request> & {
+    readonly approvalProof: { readonly approvalId: string; readonly approvalDigest: string };
+  } => ({
+    ...request(actionId),
+    approvalProof: {
+      approvalId: actionId,
+      approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request(actionId)),
+    },
+  });
+
+  it("hands the shown plan's digest to the call that spends the approval, once", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-1", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: NOW_MS })).toBe(true);
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBe(
+      "d".repeat(64),
+    );
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBeUndefined();
+  });
+
+  it("does not carry a spent approval's digest over to a later approval without a plan", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-1", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
+    // The first approval is spent but its digest is never taken (the call died before the check).
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: NOW_MS })).toBe(true);
+    // The spent binding is remembered only until it expires; the same ask is then approved anew.
+    const later = { nowMs: NOW_MS + 600_000, expiresAt: "2026-08-03T12:15:00.000Z" };
+    expect(approve(bridge, "call-1", {}, later)).toBe(true);
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: later.nowMs })).toBe(
+      true,
+    );
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBeUndefined();
+  });
+
+  it("an ask under another actionId cannot get a call past the check: no approval, no digest", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "asked-as", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
+    // The call that actually runs has a different identity: it spends nothing and receives nothing.
+    expect(bridge.consume({ runId: RUN_ID, request: call("runs-as"), nowMs: NOW_MS })).toBe(false);
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("runs-as") })).toBeUndefined();
+  });
+
+  it("fails closed when an approval showed commands but holds no digest", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-2", { planShown: true })).toBe(true);
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-2"), nowMs: NOW_MS })).toBe(false);
+  });
+
+  it("an approval that showed no commands carries no digest and still spends", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-3", {})).toBe(true);
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-3"), nowMs: NOW_MS })).toBe(true);
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-3") })).toBeUndefined();
+  });
+
+  it("refuses a digest that is not a digest", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-4", { planShown: true, planDigest: "not-a-digest" })).toBe(false);
+  });
+
+  it("never fails open at capacity: past the bounded records the approval cannot be spent", () => {
+    const bridge = createCodingToolApprovalBridge();
+    for (let index = 0; index < 64; index += 1) {
+      const id = `fill-${String(index)}`;
+      expect(approve(bridge, id, { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
+      expect(bridge.consume({ runId: RUN_ID, request: call(id), nowMs: NOW_MS })).toBe(true);
+    }
+    const overflow = approve(bridge, "overflow", { planShown: true, planDigest: "d".repeat(64) });
+    expect(
+      overflow && bridge.consume({ runId: RUN_ID, request: call("overflow"), nowMs: NOW_MS }),
+    ).toBe(false);
+  });
+
+  it("forgets a run's hand-overs with the run", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-5", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-5"), nowMs: NOW_MS })).toBe(true);
+    bridge.invalidateRun(RUN_ID);
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-5") })).toBeUndefined();
   });
 });

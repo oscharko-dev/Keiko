@@ -1,7 +1,11 @@
 import {
+  type CodingSafeActivityOutputShortened,
   CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOL_OUTPUT_PART_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS,
   CODING_SAFE_ACTIVITY_TOOL_OUTPUT_HEAD_LINES,
   CODING_SAFE_ACTIVITY_TOOL_OUTPUT_TAIL_LINES,
   type CodingSafeActivityToolFailureOrigin,
@@ -21,7 +25,15 @@ import { redactContent } from "@oscharko-dev/keiko-security";
 
 type ToolDetail = Pick<
   CodingSafeActivityToolPresentation,
-  "failureOrigin" | "durationMs" | "command" | "output" | "errorText"
+  | "failureOrigin"
+  | "durationMs"
+  | "command"
+  | "output"
+  | "errorText"
+  | "outputShortened"
+  | "agentName"
+  | "taskDescription"
+  | "taskPrompt"
 >;
 
 /** What one finished or running OpenCode tool part shows beside its state. */
@@ -39,13 +51,43 @@ export function openCodeToolDetail(
   const errorText = state.status === "error" ? toolErrorText(state.error) : undefined;
   const origin = failureOrigin(name, state, displayState);
   const durationMs = partDuration(part);
+  const shortened = shortenedOutput(state);
+  // A Code Mode `execute` row carries no program kind: the program's source text names what it
+  // mentions, not what ran, so no label is read from it (#4491, Code Mode rows keep the neutral label).
   return {
+    ...(shortened === undefined ? {} : { outputShortened: shortened }),
     ...(origin === undefined ? {} : { failureOrigin: origin }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(command === undefined ? {} : { command }),
     ...(output === undefined ? {} : { output }),
     ...(errorText === undefined ? {} : { errorText }),
+    ...subagentDetail(name, state),
   };
+}
+
+// A subagent call says which agent it started, for what and with which prompt: the model's own
+// arguments, with the credential floor applied and each bounded like every other tool text.
+function subagentDetail(
+  name: string,
+  state: Readonly<Record<string, unknown>>,
+): Pick<ToolDetail, "agentName" | "taskDescription" | "taskPrompt"> {
+  if (name !== "subagent") return {};
+  const input = record(state.input);
+  const agentName = inputText(input?.agent, CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS);
+  const taskDescription = inputText(
+    input?.description,
+    CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS,
+  );
+  const taskPrompt = inputText(input?.prompt, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS);
+  return {
+    ...(agentName === undefined ? {} : { agentName }),
+    ...(taskDescription === undefined ? {} : { taskDescription }),
+    ...(taskPrompt === undefined ? {} : { taskPrompt }),
+  };
+}
+
+function inputText(value: unknown, maxChars: number): CodingSafeActivityToolText | undefined {
+  return typeof value === "string" ? boundedToolText(value, maxChars) : undefined;
 }
 
 /**
@@ -105,18 +147,48 @@ function toolErrorText(error: unknown): CodingSafeActivityToolText | undefined {
     : undefined;
 }
 
-function toolOutput(
-  state: Readonly<Record<string, unknown>>,
-): CodingSafeActivityToolOutput | undefined {
+function contentText(state: Readonly<Record<string, unknown>>): string | undefined {
   const content = state.content;
   if (!Array.isArray(content)) return undefined;
-  const text = content
+  return content
     .map((item) => {
       const entry = record(item);
       return entry?.type === "text" && typeof entry.text === "string" ? entry.text : "";
     })
     .join("");
-  return toolOutputPreview(text);
+}
+
+// A finished call's result is its `content`. A running shell has no content yet: the runtime streams
+// what the command printed so far into `metadata.output`, and keeps it when a Stop or an error ends
+// the call, so the same text is the row's output until (and unless) a content result replaces it.
+function toolOutput(
+  state: Readonly<Record<string, unknown>>,
+): CodingSafeActivityToolOutput | undefined {
+  const text = contentText(state);
+  const streamed = record(state.metadata)?.output;
+  const shown = text === undefined || text.trim() === "" ? streamed : text;
+  return typeof shown === "string" ? toolOutputPreview(shown) : undefined;
+}
+
+// The runtime ends a result it shortened with `[showing lines 1-N of M; full output saved to
+// <path>]` and reports `metadata.truncated`. Only the counts are read; the path stays out.
+const SHORTENING_MARKER =
+  /\n?\[showing (?:lines 1-(\d+)|0 lines) of (\d+); full output saved to [^\]\n]*\]\s*$/u;
+
+/** What the runtime kept of a result it shortened for the model, as counts alone. */
+export function shortenedOutput(
+  state: Readonly<Record<string, unknown>>,
+): CodingSafeActivityOutputShortened | undefined {
+  if (record(state.metadata)?.truncated !== true) return undefined;
+  const text = contentText(state) ?? "";
+  const marker = SHORTENING_MARKER.exec(text);
+  const keptBytes = Buffer.byteLength(marker === null ? text : text.slice(0, marker.index), "utf8");
+  if (marker === null) return { keptBytes };
+  const totalLines = Number(marker[2]);
+  const keptLines = Number(marker[1] ?? 0);
+  return Number.isSafeInteger(totalLines) && keptLines < totalLines
+    ? { keptBytes, keptLines, totalLines }
+    : { keptBytes };
 }
 
 /**
@@ -277,18 +349,34 @@ export function redactToolTexts(
   secrets: readonly string[],
 ): CodingSafeActivityToolPresentation {
   if (secrets.length === 0) return presentation;
-  const { command, output, errorText } = presentation;
-  if (command === undefined && output === undefined && errorText === undefined) return presentation;
+  const { command, output, errorText, agentName, taskDescription, taskPrompt } = presentation;
+  const texts = [command, output, errorText, agentName, taskDescription, taskPrompt];
+  if (texts.every((text) => text === undefined)) return presentation;
   return {
     ...presentation,
-    ...(command === undefined
-      ? {}
-      : { command: secretFree(command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS, secrets) }),
-    ...(errorText === undefined
-      ? {}
-      : { errorText: secretFree(errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS, secrets) }),
+    ...redacted("command", command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS, secrets),
+    ...redacted("errorText", errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS, secrets),
+    ...redacted("agentName", agentName, CODING_SAFE_ACTIVITY_MAX_TOOL_AGENT_NAME_CHARS, secrets),
+    ...redacted(
+      "taskDescription",
+      taskDescription,
+      CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_DESCRIPTION_CHARS,
+      secrets,
+    ),
+    ...redacted("taskPrompt", taskPrompt, CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS, secrets),
     ...(output === undefined ? {} : { output: secretFreeOutput(output, secrets) }),
   };
+}
+
+function redacted<K extends string>(
+  key: K,
+  value: CodingSafeActivityToolText | undefined,
+  maxChars: number,
+  secrets: readonly string[],
+): Partial<Record<K, CodingSafeActivityToolText>> {
+  return (value === undefined ? {} : { [key]: secretFree(value, maxChars, secrets) }) as Partial<
+    Record<K, CodingSafeActivityToolText>
+  >;
 }
 
 function secretFree(

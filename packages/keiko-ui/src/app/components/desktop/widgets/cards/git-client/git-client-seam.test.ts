@@ -254,6 +254,10 @@ describe("violationLabel", () => {
     expect(violationLabel("disallowed-type")).toBeTruthy();
   });
 
+  it("maps message-too-large", () => {
+    expect(violationLabel("message-too-large")).toContain("too large");
+  });
+
   it("maps subject-too-long", () => {
     expect(violationLabel("subject-too-long")).toContain("too long");
   });

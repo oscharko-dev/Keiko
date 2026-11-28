@@ -62,7 +62,7 @@ function applyBoundPanelOpen(
   return false;
 }
 
-// Audit — this used to call `api.toggleTool(panel)` unconditionally: a STATE-DEPENDENT flip that
+// Audit — this used to call the launcher toggle unconditionally: a STATE-DEPENDENT flip that
 // reverses whatever the panel happens to be right now instead of applying what the action recorded.
 // Toggle a panel open, close it by hand, then press Cmd+Z: the recorded state to restore is
 // "closed", but the flip re-OPENED it. The dispatcher now applies the RECORDED state — the action's
@@ -76,5 +76,8 @@ export function applyShellUndoAction(target: ShellUndoTarget, action: WorkspaceU
   const recordedOpen = action.after;
   if (target.isPanelOpen(panel) === recordedOpen) return;
   if (recordedOpen && applyBoundPanelOpen(target, panel, action)) return;
-  target.api.toggleTool(panel);
+  // Explicit target state, never the launcher toggle: with raise-if-behind a toggle can leave the
+  // panel open. Undoing an "open" minimizes the window instead of removing it, so nothing typed
+  // into it since is destroyed; `shellPanelIsOpen` counts a minimized window as closed.
+  target.api.setToolOpen(panel, recordedOpen);
 }

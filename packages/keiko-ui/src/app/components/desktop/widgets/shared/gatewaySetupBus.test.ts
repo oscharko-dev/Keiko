@@ -15,6 +15,8 @@ import {
   gatewayModelCatalogCheckRequested,
   requestGatewayModelCatalogRefresh,
   requestGatewaySetup,
+  attachGatewayModelCatalogRefreshConsumer,
+  detachGatewayModelCatalogRefreshConsumer,
 } from "./gatewaySetupBus";
 
 afterEach(() => {
@@ -115,4 +117,44 @@ it("carries the actual catalog correlation and refuses malformed or accessor par
   } finally {
     window.removeEventListener("keiko:gateway-model-catalog-updated", observer);
   }
+});
+
+describe("catalog refresh requests without a consumer (U-45)", () => {
+  it("keeps a request made before any consumer and hands it to the first one once", () => {
+    requestGatewayModelCatalogRefresh({ check: true });
+    requestGatewayModelCatalogRefresh();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toEqual({ check: true });
+    detachGatewayModelCatalogRefreshConsumer();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
+    // With a consumer attached a request is its own to serve and is not kept.
+    requestGatewayModelCatalogRefresh();
+    detachGatewayModelCatalogRefreshConsumer();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
+    detachGatewayModelCatalogRefreshConsumer();
+  });
+
+  it("serves a check only while a requester that asked for it is still mounted", () => {
+    const plain = requestGatewayModelCatalogRefresh();
+    const asked = requestGatewayModelCatalogRefresh({ check: true });
+    asked();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toEqual({ check: false });
+    detachGatewayModelCatalogRefreshConsumer();
+    plain();
+  });
+
+  it("drops a kept request when its requester unmounts and when it has gone stale", () => {
+    const drop = requestGatewayModelCatalogRefresh({ check: true });
+    drop();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
+    detachGatewayModelCatalogRefreshConsumer();
+    vi.useFakeTimers();
+    try {
+      requestGatewayModelCatalogRefresh();
+      vi.advanceTimersByTime(60_000);
+      expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
+      detachGatewayModelCatalogRefreshConsumer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -768,9 +768,13 @@ describe("wb-run.mjs: the lab copy is registered and selected before a run start
 
   it("registers, selects, then starts the run, in that order, and follows it to its end", async () => {
     const print = silent();
-    const { alias } = labRepository();
+    const { alias, real } = labRepository();
     const session = runSession(devServer());
     await expect(operateApiRun(session, run(alias))).resolves.toBe(0);
+    // The start states the repository the checkout selection registered, or the server refuses it.
+    expect(session.calls.find(startsRun)?.body).toMatchObject({
+      expectedWorkspace: { root: real },
+    });
     expect(session.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       "POST /api/projects",
       "POST /api/task-workspaces/local",

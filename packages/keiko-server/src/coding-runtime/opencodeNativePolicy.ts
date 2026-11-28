@@ -12,6 +12,7 @@ import type {
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  CODING_WORKBENCH_TOOL_CALL_ID_PATTERN,
   codingWorkbenchPolicyEffectFor,
   isCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -195,10 +196,68 @@ function permissionLogValue(permission: string): PermissionLogValue {
   const known = PERMISSION_LOG_VALUES.find((value) => value === permission);
   return known ?? "other";
 }
+/**
+ * The native tool a decision was about, in one closed vocabulary (O-13): `permission` names the
+ * class the runtime asked about, so an `edit` is one of edit, write or patch and a `shell` is the
+ * command tool, while `toolKind` is what a support reader needs to tell the calls apart. Derived
+ * here from the permission the policy already evaluated (an MCP tool by its classification), never
+ * from a path, command or tool argument.
+ */
+export const NATIVE_POLICY_TOOL_KINDS = [
+  "read",
+  "glob",
+  "grep",
+  "list",
+  "edit",
+  "bash",
+  "webfetch",
+  "websearch",
+  "skill",
+  "task",
+  "question",
+  "todo",
+  "program",
+  "schedule",
+  "session",
+  "worktree",
+  "mcp",
+  "other",
+] as const;
+type NativePolicyToolKind = (typeof NATIVE_POLICY_TOOL_KINDS)[number];
+
+const TOOL_KIND_BY_PERMISSION: Readonly<Record<string, NativePolicyToolKind>> = Object.freeze({
+  read: "read",
+  glob: "glob",
+  grep: "grep",
+  list: "list",
+  edit: "edit",
+  shell: "bash",
+  webfetch: "webfetch",
+  websearch: "websearch",
+  skill: "skill",
+  subagent: "task",
+  question: "question",
+  todowrite: "todo",
+  execute: "program",
+  opencode_schedule: "schedule",
+  opencode_session_move: "session",
+  opencode_session_rename: "session",
+  opencode_worktree_create: "worktree",
+});
+
+function nativePolicyToolKind(
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+): NativePolicyToolKind {
+  if (decision.classification?.label === "native-mcp") return "mcp";
+  return Object.hasOwn(TOOL_KIND_BY_PERMISSION, request.permission)
+    ? (TOOL_KIND_BY_PERMISSION[request.permission] ?? "other")
+    : "other";
+}
+
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
-const CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 /**
  * Git operations Keiko owns as product actions (signed commits, bounded refs, human-controlled
@@ -703,7 +762,7 @@ function parseSource(
     messageID.length > 0 &&
     messageID.length <= 128 &&
     typeof id === "string" &&
-    CALL_ID.test(id)
+    CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(id)
     ? { messageID, id }
     : null;
 }
@@ -717,6 +776,12 @@ export interface OpenCodeNativePolicyInput {
    * admitted like workspace paths; absent, only the workspace is admitted.
    */
   readonly planRoot?: string | undefined;
+  /**
+   * The run-private directory where the runtime saves the full output of a tool result it
+   * shortened for the model, derived by the server. It is admitted for reads and searches only,
+   * with the sensitive-path and link refusals of every other read root; an edit there is refused.
+   */
+  readonly toolOutputRoot?: string | undefined;
   /**
    * The operator's accepted external references for this run (#3900 AC5,
    * `opencodeNativeExternalRoots.ts`), the same roots the kernel allowlist reads. Absent, nothing
@@ -895,6 +960,7 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
   return {
     workspaceRoot: input.workspaceRoot,
     planRoot: input.planRoot,
+    toolOutputRoot: input.toolOutputRoot,
     externalRoots: input.externalRoots ?? [],
     webSearch: input.webSearch === true,
     codeModeNestedEffectsDecided: input.codeModeNestedEffectsDecided === true,
@@ -922,6 +988,7 @@ type Classified =
 interface AdmittedRoots {
   readonly workspaceRoot: string;
   readonly planRoot?: string | undefined;
+  readonly toolOutputRoot?: string | undefined;
   readonly externalRoots?: readonly string[] | undefined;
   /** The operator admitted a web search integration. */
   readonly webSearch?: boolean | undefined;
@@ -969,7 +1036,11 @@ function classifyNativeAction(
   const pathAction = classifyPathAction(request, roots);
   if (pathAction !== undefined) return pathAction;
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
-  if (permission === "shell") return classifyShell(resources, roots.workspaceRoot);
+  if (permission === "shell")
+    return (
+      savedOutputWrite(resources, roots.toolOutputRoot) ??
+      classifyShell(resources, roots.workspaceRoot)
+    );
   return EXECUTE;
 }
 
@@ -1398,11 +1469,11 @@ function classifyPathAction(
   // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
   if (SEARCH_ACTIONS.has(permission)) {
     const searched = request.searchPath === undefined ? [] : [request.searchPath];
-    return externalRead(searched, roots) ?? guardedPaths(searched, roots, READ);
+    return outsideWorkspaceRead(searched, roots) ?? guardedPaths(searched, roots, READ);
   }
   if (READ_ACTIONS.has(permission))
     return (
-      externalRead(resources, roots) ??
+      outsideWorkspaceRead(resources, roots) ??
       guardedPaths(resources, roots, READ, permission === "read" || permission === "list")
     );
   // The plan agent's notes live in the run's private plan directory, not in the workspace: writing
@@ -1466,7 +1537,7 @@ function admittedRelative(resource: string, roots: AdmittedRoots): string | unde
  * (#3900 AC5); every other external directory stays a hard denial.
  */
 function externalDirectory(resources: readonly string[], roots: AdmittedRoots): Classified {
-  const directories = resources.map((resource) => resource.trim().replace(/\/\*$/u, ""));
+  const directories = resources.map((resource) => resource.trim().replace(/[\\/]\*$/u, ""));
   const within = (root: string | undefined): boolean =>
     root !== undefined &&
     directories.length > 0 &&
@@ -1474,6 +1545,8 @@ function externalDirectory(resources: readonly string[], roots: AdmittedRoots): 
       (directory) => isAbsolute(directory) && workspaceRelative(directory, root) !== undefined,
     );
   if (within(roots.planRoot)) return READ;
+  if (within(roots.toolOutputRoot))
+    return toolOutputRootLinkFree(roots.toolOutputRoot ?? "") ? READ : PATH_LINK_ESCAPE;
   if ((roots.externalRoots ?? []).some((root) => within(root))) return EXTERNAL_READ;
   return {
     reason: "workspace-escape",
@@ -1487,7 +1560,57 @@ function externalDirectory(resources: readonly string[], roots: AdmittedRoots): 
  * `undefined` when a path is not inside one, so the workspace rules decide it.
  */
 function externalRead(paths: readonly string[], roots: AdmittedRoots): Classified | undefined {
-  const root = (roots.externalRoots ?? []).find(
+  return readWithinRoots(paths, roots.externalRoots ?? [], EXTERNAL_READ);
+}
+
+/** A read inside a root outside the workspace the run admits: the saved output or a reference. */
+function outsideWorkspaceRead(
+  paths: readonly string[],
+  roots: AdmittedRoots,
+): Classified | undefined {
+  return toolOutputRead(paths, roots) ?? externalRead(paths, roots);
+}
+
+/**
+ * A read or search inside the directory the runtime saves a shortened result's full output in: an
+ * ordinary read (the model's own output, not an external file), with the same refusals as an
+ * accepted external reference.
+ */
+function toolOutputRead(paths: readonly string[], roots: AdmittedRoots): Classified | undefined {
+  const root = roots.toolOutputRoot;
+  if (root === undefined) return undefined;
+  const inside = readWithinRoots(paths, [root], READ);
+  return inside !== undefined && !toolOutputRootLinkFree(root) ? PATH_LINK_ESCAPE : inside;
+}
+
+/**
+ * The saved-output directory is the model's own data, but its parents are inside the run's private
+ * state, which a shell may write. It is admitted only while no component between the run's private
+ * root and the directory is a link: a replaced directory would otherwise name any place its target
+ * does (the physical check resolves the root itself). A missing directory has nothing to read.
+ *
+ * Defense in depth, not a security boundary: the lstat walk is check-then-use. That is acceptable
+ * because the private state belongs to the same user and the kernel's read boundary still applies
+ * to whatever the directory is replaced with after the check.
+ */
+function toolOutputRootLinkFree(root: string): boolean {
+  const target = resolve(root);
+  let current = resolve(target, "..", "..", "..", "..", "..");
+  for (const part of relative(current, target).split(sep)) {
+    current = join(current, part);
+    const stat = lstatIfPresent(current);
+    if (stat === undefined) return true;
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+  }
+  return true;
+}
+
+function readWithinRoots(
+  paths: readonly string[],
+  candidates: readonly string[],
+  admitted: OpenCodeNativeActionClassification,
+): Classified | undefined {
+  const root = candidates.find(
     (candidate) =>
       paths.length > 0 &&
       paths.every(
@@ -1507,7 +1630,7 @@ function externalRead(paths: readonly string[], roots: AdmittedRoots): Classifie
           "Keiko refused this action: the file is a hard link that can name a file outside the accepted reference.",
       };
   }
-  return EXTERNAL_READ;
+  return admitted;
 }
 
 /**
@@ -1686,6 +1809,56 @@ function reservedSegment(segment: string): boolean {
   return words !== undefined && reservedInvocation(invocationTokens(words));
 }
 
+// Viewers a shell may point at the saved output of a shortened result: they only read.
+const SAVED_OUTPUT_VIEWERS: ReadonlySet<string> = new Set([
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "grep",
+  "rg",
+  "nl",
+  "less",
+]);
+// Redirections, pipes, newlines, command chaining and substitution turn a viewer into something that can write.
+const SHELL_WRITE_SYNTAX = /[<>;&|\n\r`]|\$\(|\btee\b/u;
+
+/**
+ * A shell command that names the saved-output directory by its absolute path may only read there:
+ * the directory is the model's own data, readable by design, never a place to write or delete. A
+ * viewer command without redirection or chaining is left to the ordinary shell rules; anything else
+ * naming the directory is refused in every mode. A command that only changes into the directory and
+ * writes a relative path names no absolute path and stays with the ordinary shell rules and the
+ * kernel boundary (the run's private state is writable by design).
+ *
+ * This is defense in depth, not a security boundary: Full access may write its private state by
+ * design, and the kernel's read boundary, not this guard, is what keeps the run inside its grants.
+ */
+function savedOutputWrite(
+  resources: readonly string[],
+  toolOutputRoot: string | undefined,
+): Classified | undefined {
+  if (toolOutputRoot === undefined) return undefined;
+  const root = toolOutputRoot.replaceAll("\\", "/").toLowerCase();
+  const names = (command: string): boolean =>
+    command.replaceAll("\\", "/").toLowerCase().includes(root);
+  const writes = resources.some(
+    (command) =>
+      names(command) &&
+      !(
+        SAVED_OUTPUT_VIEWERS.has(commandTokens(command)[0] ?? "") &&
+        !SHELL_WRITE_SYNTAX.test(command)
+      ),
+  );
+  return writes
+    ? {
+        reason: "workspace-escape",
+        message:
+          "Keiko refused this action: the saved output of a shortened result is read-only; use read, grep, head or tail on it.",
+      }
+    : undefined;
+}
+
 /**
  * OpenCode reports one resource per simple command of a shell line (`npm test && git push` arrives
  * as two), so every resource is classified on its own: any reserved delivery command refuses the
@@ -1735,6 +1908,7 @@ function askEvent(
       ? { commandLabel: classification.label }
       : {}),
     nativeAction: { permission: request.permission, resources: request.resources },
+    ...(request.source === undefined ? {} : { callId: request.source.id }),
   };
 }
 
@@ -1822,6 +1996,13 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "authority-refused",
         "template-refused",
       ],
+    },
+    // O-13: which native tool the decision was about, so a log tells a bash call from an edit.
+    toolKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...NATIVE_POLICY_TOOL_KINDS],
     },
     sessionRelation: {
       type: "string",
@@ -1988,6 +2169,7 @@ export function recordOpenCodeNativePolicyDecision(
       {
         mode: isCodingWorkbenchMode(input.mode) ? input.mode : "unknown",
         permission: loggedPermission(request, decision),
+        toolKind: nativePolicyToolKind(request, decision),
         effect: decision.effect,
         outcome: input.outcome,
         ...(input.sessionRelation === undefined ? {} : { sessionRelation: input.sessionRelation }),

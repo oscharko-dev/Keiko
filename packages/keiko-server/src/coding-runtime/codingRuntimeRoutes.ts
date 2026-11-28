@@ -59,7 +59,7 @@ import {
   type RouteDefinition,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
+import { startSseHeartbeat, openSseResponse } from "../sse.js";
 import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type {
@@ -123,6 +123,8 @@ const RUNTIME_REFUSAL_REASONS = [
   "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
+  "workspace-selection-mismatch",
+  "expected-workspace-missing",
   "workspace-location-unsupported",
   "workspace-volume-unsupported",
   "start-abandoned",
@@ -191,6 +193,8 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   "issue-context-unavailable": "unavailable",
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
+  "workspace-selection-mismatch": "conflict",
+  "expected-workspace-missing": "conflict",
   "workspace-location-unsupported": "conflict",
   "workspace-volume-unsupported": "conflict",
   "active-run-conflict": "conflict",
@@ -285,6 +289,8 @@ function failureStatus(failureCode: CodingWorkbenchRuntimeStartFailureCode): num
   if (
     failureCode === "model-unavailable" ||
     failureCode === "workspace-unqualified" ||
+    failureCode === "workspace-selection-mismatch" ||
+    failureCode === "expected-workspace-missing" ||
     failureCode === "workspace-location-unsupported" ||
     failureCode === "workspace-volume-unsupported"
   )
@@ -304,7 +310,10 @@ function failureResult(
     body: {
       ...errorBody(
         `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
-        "Runtime request was rejected.",
+        // A window opened before an upgrade shows only this sentence: it must name the next step.
+        failureCode === "expected-workspace-missing"
+          ? "This window is out of date. Reload this window, then start again."
+          : "Runtime request was rejected.",
         correlationId,
       ),
       ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
@@ -639,6 +648,7 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
+      ...(liveRunHoldsAuthority(deps) ? { liveRunAnchored: true as const } : {}),
       ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
     },
@@ -669,16 +679,20 @@ const RUN_STATES_HOLDING_MINTED_AUTHORITY: ReadonlySet<CodingWorkbenchRuntimeSta
  * confirming it understated the authority the tool facade actually enforces). Once no envelope is
  * held, the next start or retry mints from the request, so the clamped request is the truth.
  */
+function liveRunHoldsAuthority(deps: UiHandlerDeps): boolean {
+  const current = deps.codingRuntimeOrchestrator?.status();
+  return (
+    current?.requestedMode !== undefined && RUN_STATES_HOLDING_MINTED_AUTHORITY.has(current.state)
+  );
+}
+
 function confirmedEffectiveMode(
   deps: UiHandlerDeps,
   requestedMode: CodingWorkbenchMode,
   deploymentCeiling: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
   const current = deps.codingRuntimeOrchestrator?.status();
-  if (
-    current?.requestedMode === undefined ||
-    !RUN_STATES_HOLDING_MINTED_AUTHORITY.has(current.state)
-  ) {
+  if (current?.requestedMode === undefined || !liveRunHoldsAuthority(deps)) {
     return resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
   }
   return resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
@@ -1204,7 +1218,7 @@ export function openCodingRuntimeSse(
   runId: string,
   lastEventId: string | undefined,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res);
   const stopHeartbeat = startSseHeartbeat(res, undefined, "heartbeat");
   let detach = (): void => undefined;
   let closed = false;

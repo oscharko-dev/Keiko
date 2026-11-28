@@ -91,17 +91,24 @@ interface ApprovalBinding {
 interface PendingApproval extends ApprovalBinding {
   readonly requestId: string;
   readonly expiresAtMs: number;
+  readonly planShown?: boolean | undefined;
+  readonly planDigest?: string | undefined;
 }
 
 interface ApprovedAction extends ApprovalBinding {
   readonly approvalAuthorityDigest: string;
   readonly expiresAtMs: number;
+  readonly planShown?: boolean | undefined;
+  readonly planDigest?: string | undefined;
 }
 
 export interface CodingToolApprovalObservation extends ApprovalBinding {
   readonly requestId: string;
   readonly expiresAt: string;
   readonly nowMs: number;
+  /** The ask showed the person command lines; its approval is then bound to `planDigest`. */
+  readonly planShown?: boolean | undefined;
+  readonly planDigest?: string | undefined;
 }
 
 export interface CodingToolApprovalActivation {
@@ -114,6 +121,15 @@ export interface CodingToolApprovalActivation {
 
 export type CommitToolRequest = Extract<CodingToolActionRequest, { readonly action: "delivery" }>;
 export interface CodingToolApprovalProofVerifier {
+  /**
+   * Hands out, once, the digest of the command lines the person was shown when they approved THIS
+   * call (ADR-0124 D6); absent when the approval showed none. The digest lives on the approved
+   * record the call's own consumption spent, so it cannot be bound under another call's identity.
+   */
+  readonly takeApprovedPlan: (input: {
+    readonly runId: string;
+    readonly request: ApprovableToolRequest;
+  }) => string | undefined;
   readonly matchesDelivery?: (runId: string, request: CommitToolRequest) => boolean;
   readonly consumeDelivery?: (runId: string, request: CommitToolRequest) => object | undefined;
   readonly matchesStage?: (runId: string, proposalId: string) => boolean;
@@ -122,6 +138,8 @@ export interface CodingToolApprovalProofVerifier {
   readonly consumeCommit?: (runId: string, request: CommitToolRequest) => object | undefined;
   /** Whether the operator declined this run's Git stage, commit, push or pull-request proposal. */
   readonly proposalDeclined?: (runId: string, proposalId: string) => boolean;
+  /** Whether the system refused this run's proposal (a full approval queue): never a person's "no". */
+  readonly proposalRefused?: (runId: string, proposalId: string) => boolean;
   readonly matches: (input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -155,6 +173,8 @@ export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifie
    * wait reads (ADR-0124 D6). A decline grants nothing: it only ends that run's wait for that id.
    */
   readonly declineProposal?: (runId: string, proposalId: string) => void;
+  /** Ends that run's wait for that id like a decline, without recording a person's "no". */
+  readonly refuseProposal?: (runId: string, proposalId: string) => void;
   readonly observePermission: (input: CodingToolApprovalObservation) => boolean;
   readonly activatePermission: (input: CodingToolApprovalActivation) => boolean;
   readonly invalidateRun: (runId: string) => void;
@@ -210,22 +230,36 @@ export function createCodingToolApprovalBridge(
   const approved = new Map<string, ApprovedAction>();
   const bindings = new Map<string, number>();
   const declined = new Set<string>();
+  const refused = new Set<string>();
+  const consumedPlans = new Map<string, string>();
   return {
+    takeApprovedPlan: ({ runId, request }): string | undefined => {
+      const key = requestBindingKey(runId, request);
+      const digest = consumedPlans.get(key);
+      consumedPlans.delete(key);
+      return digest;
+    },
     ...(commitService === undefined ? {} : commitApprovalMethods(commitService)),
     ...(gitService === undefined ? {} : stageApprovalMethods(gitService)),
     ...(deliveryService === undefined ? {} : deliveryApprovalMethods(deliveryService)),
     declineProposal: (runId, proposalId): void => {
       recordDecline(declined, runId, proposalId);
     },
+    refuseProposal: (runId, proposalId): void => {
+      recordDecline(refused, runId, proposalId);
+    },
     proposalDeclined: (runId, proposalId): boolean =>
       declined.has(permissionKey(runId, proposalId)),
+    proposalRefused: (runId, proposalId): boolean => refused.has(permissionKey(runId, proposalId)),
     observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),
-    consume: (input): boolean => consumeApprovedAction(approved, input),
+    consume: (input): boolean => consumeApprovedAction(approved, consumedPlans, input),
     invalidateRun: (runId): void => {
       invalidateRun(pending, approved, bindings, runId);
+      forgetRunPlans(consumedPlans, runId);
       forgetRunKeys(declined, runId);
+      forgetRunKeys(refused, runId);
       commitService?.invalidate();
       gitService?.invalidate();
       deliveryService?.invalidate();
@@ -350,6 +384,7 @@ function activatePermission(
 
 function consumeApprovedAction(
   approved: Map<string, ApprovedAction>,
+  consumedPlans: Map<string, string>,
   input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -357,7 +392,27 @@ function consumeApprovedAction(
   },
 ): boolean {
   if (!matchesApprovedAction(approved, input)) return false;
-  approved.delete(requestBindingKey(input.runId, input.request));
+  const key = requestBindingKey(input.runId, input.request);
+  // A digest an earlier spent approval left behind belongs to that approval, never to this one.
+  consumedPlans.delete(key);
+  if (!carryPlan(approved.get(key), consumedPlans, key)) return false;
+  approved.delete(key);
+  return true;
+}
+
+/**
+ * An approval that showed command lines hands their digest to the call that spends it. It fails
+ * closed: an approval that showed commands but holds no digest, or a full hand-over table, spends
+ * nothing, so the check at run time can never be skipped by an absent entry (ADR-0124 D6).
+ */
+function carryPlan(
+  record: ApprovedAction | undefined,
+  consumedPlans: Map<string, string>,
+  key: string,
+): boolean {
+  if (record?.planShown !== true) return true;
+  if (record.planDigest === undefined || consumedPlans.size >= MAX_APPROVED_RECORDS) return false;
+  consumedPlans.set(key, record.planDigest);
   return true;
 }
 
@@ -398,6 +453,10 @@ function approvedActionMatches(
   ].every(Boolean);
 }
 
+function validPlan(input: CodingToolApprovalObservation): boolean {
+  return input.planDigest === undefined || DIGEST_PATTERN.test(input.planDigest);
+}
+
 function validBinding(input: CodingToolApprovalObservation): boolean {
   return (
     input.runId.length > 0 &&
@@ -408,7 +467,8 @@ function validBinding(input: CodingToolApprovalObservation): boolean {
     input.actionId.length <= 512 &&
     input.idempotencyKey.length <= 512 &&
     input.targetId.length <= 512 &&
-    DIGEST_PATTERN.test(input.proof.approvalDigest)
+    DIGEST_PATTERN.test(input.proof.approvalDigest) &&
+    validPlan(input)
   );
 }
 
@@ -470,6 +530,13 @@ function forgetRunKeys(keys: Set<string>, runId: string): void {
   const prefix = `${runId}\u0000`;
   for (const key of keys) {
     if (key.startsWith(prefix)) keys.delete(key);
+  }
+}
+
+function forgetRunPlans(plans: Map<string, string>, runId: string): void {
+  const prefix = `${runId}\u0000`;
+  for (const key of plans.keys()) {
+    if (key.startsWith(prefix)) plans.delete(key);
   }
 }
 

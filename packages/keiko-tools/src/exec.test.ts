@@ -16,8 +16,15 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../tests/support/property-testing.js";
 import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 import {
+  appendWindow,
+  newStreamWindow,
   createWindowsTerminationCapacity,
   createWindowsTaskkillBudget,
   nodeSpawnFn,
@@ -1636,6 +1643,415 @@ describe("runCommand — output flood protection (F12)", () => {
   });
 });
 
+describe("runCommand — retain-head-tail output (output volume never ends healthy work)", () => {
+  function retainDeps(
+    spawn: ReturnType<typeof recordingSpawn>,
+    overrides: { readonly runawayOutputBytes?: number } = {},
+  ): RunCommandDeps {
+    return {
+      ...fakeDeps(spawn.fn),
+      policy: {
+        ...DEFAULT_SANDBOX_POLICY,
+        maxOutputBytes: 64,
+        outputOverflow: "retain-head-tail",
+        ...overrides,
+      },
+    };
+  }
+  const input = {
+    command: "node",
+    args: ["-e", "chatty"],
+    cwd: undefined,
+    timeoutMs: undefined,
+  } as const;
+
+  it("lets a command that writes far past maxOutputBytes run to its exit code 0", async () => {
+    const kills = captureKills();
+    try {
+      const spawn = recordingSpawn();
+      const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+      for (let line = 0; line < 100; line += 1) {
+        spawn.child.stdout.emit("data", Buffer.from(`line ${String(line).padStart(3, "0")}\n`));
+      }
+      expect(kills.groupSignals).toHaveLength(0); // never terminated for output volume
+      expect(spawn.child.killed).toEqual([]);
+      spawn.child.emit("close", 0, null);
+      const result = await promise;
+      expect(result.exitCode).toBe(0);
+      expect(result.truncated).toBe(false);
+      // Head and tail are kept; the middle is counted and dropped.
+      expect(result.stdout.startsWith("line 000")).toBe(true);
+      expect(result.stdout.trimEnd().endsWith("line 099")).toBe(true);
+      expect(result.stdout).toContain("bytes of output omitted");
+      expect(result.discardedByteCount).toBeGreaterThan(0);
+      expect(result.retainedByteCount).toBeLessThanOrEqual(64);
+      expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(100 * 9);
+    } finally {
+      kills.restore();
+    }
+  });
+
+  it("cuts on line boundaries so a secret split at a cut never survives as a prefix", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+    const secret = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const firstLine = `start ${secret} ${"y".repeat(200)}`;
+    // One long unterminated line starts the output: its head window ends mid-token, so the head is
+    // dropped whole rather than leaving a prefix of the credential behind.
+    spawn.child.stdout.emit("data", Buffer.from(firstLine));
+    spawn.child.stdout.emit("data", Buffer.from("\nlast line\n"));
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.stdout).not.toContain("sk-ant");
+    expect(result.stdout).not.toContain("start");
+    expect(result.stdout.endsWith("last line\n")).toBe(true);
+    expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(
+      `${firstLine}\nlast line\n`.length,
+    );
+  });
+
+  describe("an unconfigured private key cut by the retention", () => {
+    const body = (tag: string, count: number): string =>
+      Array.from(
+        { length: count },
+        (_unused, index) =>
+          `${tag}${String(index).padStart(2, "0")}${"QUJDREVGR0hJSktM".repeat(3)}`,
+      )
+        .map((line) => `${line}\n`)
+        .join("");
+    const begin = (kind: string): string => `-----BEGIN ${kind}PRIVATE KEY-----\n`;
+    const end = (kind: string): string => `-----END ${kind}PRIVATE KEY-----\n`;
+    const filler = "ordinary build output line\n".repeat(30);
+
+    async function retained(chunks: readonly string[]): Promise<string> {
+      const spawn = recordingSpawn();
+      const base = retainDeps(spawn);
+      const deps = { ...base, policy: { ...base.policy, maxOutputBytes: 400 } };
+      const promise = runCommand({ ...input, signal: controller().signal }, deps);
+      for (const chunk of chunks) spawn.child.stdout.emit("data", Buffer.from(chunk));
+      spawn.child.emit("close", 0, null);
+      return (await promise).stdout;
+    }
+
+    it("withholds the body when the BEGIN line was dropped and no END arrives", async () => {
+      const stdout = await retained([`prefix\n${filler}${begin("")}${body("KEYA", 10)}`]);
+      expect(stdout).toContain("bytes of output omitted");
+      expect(stdout).not.toContain("KEYA");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("keeps what follows the END line when the END arrives inside the tail", async () => {
+      const stdout = await retained([
+        `prefix\n${filler}${begin("RSA ")}${body("KEYB", 8)}${end("RSA ")}after-key line\n`,
+      ]);
+      expect(stdout).not.toContain("KEYB");
+      expect(stdout).toContain("after-key line");
+    });
+
+    it("withholds a body whose BEGIN is in the head and whose lines are cut", async () => {
+      const stdout = await retained([`${begin("EC ")}${body("KEYC", 10)}${filler}`]);
+      expect(stdout).not.toContain("KEYC");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("handles several blocks and the OPENSSH variant", async () => {
+      const stdout = await retained([
+        `${filler}${begin("")}${body("KEYD", 6)}${end("")}${filler}`,
+        `${begin("OPENSSH ")}${body("KEYE", 10)}`,
+      ]);
+      expect(stdout).not.toContain("KEYD");
+      expect(stdout).not.toContain("KEYE");
+    });
+
+    it("finds a BEGIN marker split across two stream chunks", async () => {
+      const text = `${filler}${begin("")}${body("KEYF", 10)}`;
+      const at = text.indexOf("-----BEGIN") + 9;
+      const stdout = await retained([text.slice(0, at), text.slice(at)]);
+      expect(stdout).not.toContain("KEYF");
+    });
+
+    it("withholds a CRLF-delimited body whose BEGIN line was dropped", async () => {
+      const crlf = (text: string): string => text.replaceAll("\n", "\r\n");
+      const stdout = await retained([crlf(`${filler}${begin("")}${body("KEYG", 10)}`)]);
+      expect(stdout).not.toContain("KEYG");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("withholds a body whose BEGIN marker is split exactly at the head budget", async () => {
+      // The head keeps 100 bytes: the marker starts at byte 95, so its first dashes close the head.
+      const stdout = await retained([`${"x".repeat(94)}\n${begin("")}${body("KEYH", 12)}`]);
+      expect(stdout).not.toContain("KEYH");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("withholds a body whose marker is split at any tail-drop cut", async () => {
+      for (let lead = 0; lead < 40; lead += 1) {
+        const text = `${"x".repeat(lead)}\n${filler}${begin("")}${body("KEYI", 10)}`;
+        const chunks = text.match(/[\s\S]{1,13}/gu) ?? [];
+        const stdout = await retained(chunks);
+        expect(stdout).not.toContain("KEYI");
+      }
+    });
+
+    it("withholds the tail that starts inside a second block after END and BEGIN were dropped", async () => {
+      const stdout = await retained([
+        `${filler}${begin("")}${body("KEYJ", 3)}${end("")}${begin("EC ")}${body("KEYK", 14)}`,
+      ]);
+      expect(stdout).not.toContain("KEYJ");
+      expect(stdout).not.toContain("KEYK");
+      expect(stdout).not.toContain("QUJDREVG");
+    });
+
+    it("finds a marker whose label outgrows any fixed carry when it is split across chunks", async () => {
+      const marker = `-----BEGIN ${"A".repeat(200)} PRIVATE KEY-----\n`;
+      const text = `${filler}${marker}${body("KEYL", 10)}`;
+      const at = text.indexOf("-----BEGIN") + 11 + 190;
+      const stdout = await retained([text.slice(0, at), text.slice(at)]);
+      expect(stdout).not.toContain("KEYL");
+    });
+
+    it("fails closed when a pending marker label outgrows the scan's bound", async () => {
+      const stdout = await retained([
+        `${filler}-----BEGIN ${"A".repeat(5_000)}`,
+        `\n${body("KEYM", 10)}`,
+      ]);
+      expect(stdout).not.toContain("KEYM");
+    });
+
+    it("leaves an output without a key byte for byte unchanged", async () => {
+      const lines = Array.from({ length: 60 }, (_unused, index) => `plain line ${String(index)}\n`);
+      const stdout = await retained([lines.join("")]);
+      expect(stdout.startsWith(lines[0] ?? "")).toBe(true);
+      expect(stdout.endsWith(lines[59] ?? "")).toBe(true);
+      expect(stdout).toContain("bytes of output omitted");
+    });
+  });
+
+  it("never leaves a prefix or suffix of a multi-line configured secret at a head or tail cut", async () => {
+    const secret = "alpha-secret-line-one\nbeta-secret-line-two\ngamma-secret-line-three";
+    for (let lead = 0; lead < 18; lead += 1) {
+      const spawn = recordingSpawn();
+      const base = retainDeps(spawn);
+      const deps = {
+        ...base,
+        policy: { ...base.policy, maxOutputBytes: 400 },
+        processEnv: { PATH: process.env.PATH ?? "", KEIKO_FIXTURE_MULTILINE: secret },
+      };
+      const promise = runCommand({ ...input, signal: controller().signal }, deps);
+      const filler = "f".repeat(5);
+      // As `lead` varies, the head window's end and the tail window's start fall between and
+      // inside the secret's lines.
+      spawn.child.stdout.emit(
+        "data",
+        Buffer.from(`${`${filler}\n`.repeat(lead)}${secret}\n${`${filler}\n`.repeat(40)}`),
+      );
+      spawn.child.stdout.emit(
+        "data",
+        Buffer.from(`${`${filler}\n`.repeat(40)}${secret}\n${`${filler}\n`.repeat(17 - lead)}`),
+      );
+      spawn.child.emit("close", 0, null);
+      const result = await promise;
+      expect(result.stdout).not.toContain("secret-line");
+    }
+  });
+
+  describe("a multi-line secret that the stream cuts or prints decorated", () => {
+    const secret = "alpha-secret-line-one\nbeta-secret-line-two\ngamma-secret-line-three";
+    const filler = `${"f".repeat(5)}\n`.repeat(60);
+
+    async function runWith(chunks: readonly string[]): Promise<string> {
+      const spawn = recordingSpawn();
+      const base = retainDeps(spawn);
+      const deps = {
+        ...base,
+        policy: { ...base.policy, maxOutputBytes: 400 },
+        processEnv: { PATH: process.env.PATH ?? "", KEIKO_FIXTURE_MULTILINE: secret },
+      };
+      const promise = runCommand({ ...input, signal: controller().signal }, deps);
+      for (const chunk of chunks) spawn.child.stdout.emit("data", Buffer.from(chunk));
+      spawn.child.emit("close", 0, null);
+      return (await promise).stdout;
+    }
+
+    describe("a PEM-shaped secret with a short last body line", () => {
+      const pem =
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nZg==\n-----END PRIVATE KEY-----";
+
+      async function runPem(chunks: readonly string[]): Promise<string> {
+        const spawn = recordingSpawn();
+        const base = retainDeps(spawn);
+        const deps = {
+          ...base,
+          policy: { ...base.policy, maxOutputBytes: 400 },
+          processEnv: { PATH: process.env.PATH ?? "", KEIKO_FIXTURE_PEM: pem },
+        };
+        const promise = runCommand({ ...input, signal: controller().signal }, deps);
+        for (const chunk of chunks) spawn.child.stdout.emit("data", Buffer.from(chunk));
+        spawn.child.emit("close", 0, null);
+        return (await promise).stdout;
+      }
+
+      it.each([
+        ["a decorated END header cut mid-word", "log: -----END PRIVATE K"],
+        ["a diff-prefixed body fragment", "+ MIIEvQIBADANBgkq"],
+        ["a fragment shorter than eight characters", "-----EN"],
+        ["a bare body fragment", "MIIEvQIB"],
+      ])("drops an unterminated last line that is %s", async (_n, last) => {
+        const stdout = await runPem([filler, `start\n${last}`]);
+        expect(stdout).not.toContain(last);
+        expect(stdout).toContain("start");
+      });
+
+      it.each([
+        ["bare", "Zg=="],
+        ["prefixed", "> Zg=="],
+        ["indented", "    Zg==  "],
+      ])("drops the short %s last body line in the head and in the tail", async (_n, line) => {
+        const stdout = await runPem([`${line}\n${filler}`, filler, `end\n${line}\n${filler}`]);
+        expect(stdout).not.toContain("Zg==");
+        const mid = await runPem([filler, `end\n${line}`]);
+        expect(mid).not.toContain("Zg==");
+      });
+
+      it("keeps ordinary text that merely resembles a short secret line", async () => {
+        const stdout = await runPem([`ok Zg==x\n${filler}`, filler, "done\n"]);
+        expect(stdout).toContain("ok Zg==x");
+      });
+    });
+
+    it("keeps no middle line when the stream ends inside the secret", async () => {
+      const stdout = await runWith([filler, "start\nbeta-secret-line-two\n"]);
+      expect(stdout).not.toContain("secret-line");
+      expect(stdout).toContain("start");
+      const unterminated = await runWith([
+        filler,
+        "start\nalpha-secret-line-one\nbeta-secret-line",
+      ]);
+      expect(unterminated).not.toContain("secret-line");
+    });
+
+    it.each([
+      ["an indent", "    beta-secret-line-two\n"],
+      ["trailing whitespace", "beta-secret-line-two \t\n"],
+      ["a prefix", "> beta-secret-line-two\n"],
+      ["a log prefix", "2026-11-28 out: beta-secret-line-two\r\n"],
+    ])(
+      "drops a retained secret line printed with %s, in the head and in the tail",
+      async (_n, line) => {
+        const stdout = await runWith([`${line}${filler}`, filler, `end\n${line}`]);
+        expect(stdout).not.toContain("secret-line");
+      },
+    );
+  });
+
+  // The retained window IS maxOutputBytes: stdout and stderr share it, so two flooded streams of
+  // whole lines keep exactly that many bytes (the value the old flood guard cut at stays asserted).
+  it("retains exactly maxOutputBytes across both streams when whole lines flood them", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+    for (let line = 0; line < 200; line += 1) {
+      spawn.child.stdout.emit("data", Buffer.from("a\n"));
+      spawn.child.stderr.emit("data", Buffer.from("b\n"));
+    }
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.retainedByteCount).toBe(64);
+    expect(result.stdout).toContain("bytes of output omitted");
+    expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(800);
+  });
+
+  it(
+    "drops the oldest tail chunk in constant time: one-byte writes scale linearly",
+    {
+      timeout: 60_000,
+    },
+    () => {
+      const chunk = Buffer.from("x");
+      const scaling = measureScaling({
+        build: (size) => size,
+        run: (size) => {
+          const stream = newStreamWindow(4_096);
+          for (let write = 0; write < size; write += 1) appendWindow(stream, chunk);
+          return stream.tailBytes;
+        },
+        size: 25_000,
+        maximumSize: 300_000,
+      });
+      expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+      expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+    },
+  );
+
+  it("releases every dropped tail chunk at once, so dead chunks are never pinned before compaction", () => {
+    const budget = 4_096;
+    const chunkSize = 1_024;
+    const stream = newStreamWindow(budget);
+    for (let write = 0; write < 200; write += 1) {
+      appendWindow(stream, Buffer.alloc(chunkSize, 97 + (write % 26)));
+    }
+    // Far fewer than the compaction threshold have been consumed, yet none may still hold bytes.
+    expect(stream.tailFirst).toBeGreaterThan(0);
+    expect(stream.tailFirst).toBeLessThan(1_024);
+    for (let slot = 0; slot < stream.tailFirst; slot += 1) {
+      expect(stream.tail[slot]?.length, `slot ${String(slot)}`).toBe(0);
+    }
+    const live = stream.tail.reduce((sum, chunk) => sum + chunk.length, 0);
+    expect(live).toBeLessThanOrEqual(budget + chunkSize);
+    expect(live).toBe(stream.tailBytes);
+  });
+
+  it("keeps the retained tail correct across compaction of 300k one-byte writes", () => {
+    const stream = newStreamWindow(4_096);
+    for (let write = 0; write < 300_000; write += 1) {
+      appendWindow(stream, Buffer.from(String.fromCharCode(97 + (write % 26))));
+    }
+    expect(stream.headBytes + stream.tailBytes + stream.dropped).toBe(300_000);
+    expect(stream.tailBytes).toBe(4_096);
+    expect(stream.tail.length - stream.tailFirst).toBeGreaterThan(0);
+    expect(stream.tail.length).toBeLessThan(2 * 4_096 + 2_048);
+  });
+
+  it("reports no retention counts when the output fits", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+    spawn.child.stdout.emit("data", Buffer.from("ok\n"));
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.stdout).toBe("ok\n");
+    expect(result.discardedByteCount).toBeUndefined();
+    expect(result.retainedByteCount).toBeUndefined();
+  });
+
+  it("terminates a real runaway past runawayOutputBytes with reason output-cap", async () => {
+    const kills = captureKills();
+    try {
+      const spawn = recordingSpawn();
+      const reasons: string[] = [];
+      const promise = runCommand(
+        {
+          ...input,
+          signal: controller().signal,
+          onTerminated: (evidence): void => {
+            reasons.push(evidence.reason);
+          },
+        },
+        retainDeps(spawn, { runawayOutputBytes: 64 }),
+      );
+      spawn.child.stdout.emit("data", Buffer.from("x".repeat(40)));
+      expect(kills.groupSignals).toHaveLength(0);
+      spawn.child.stdout.emit("data", Buffer.from("x".repeat(40)));
+      expectTerminated(kills, spawn.child);
+      spawn.child.emit("close", null, "SIGTERM");
+      const result = await promise;
+      expect(result.truncated).toBe(true);
+      expect(result.stdout).toBe("[TRUNCATED OUTPUT REDACTED]");
+      expect(reasons).toEqual(["output-cap"]);
+    } finally {
+      kills.restore();
+    }
+  });
+});
+
 describe("runCommand — omittedByteCount capture (ADR-0054 D5)", () => {
   it("sets a positive omittedByteCount on truncation, bounded by total emitted", async () => {
     const kills = captureKills();
@@ -2141,6 +2557,37 @@ describe("runCommand — outputScrub: credentials-only", () => {
 
     expect(result.stdout).not.toContain(token);
     expect(result.stdout).toContain("[REDACTED]");
+  });
+
+  // U-25: closed machine metadata must not meet the source-language projection. "machine-metadata"
+  // keeps a listing whose path reads as source byte for byte while still scrubbing a credential
+  // value and a credential-shaped token. The contrast is pinned on this mode, never on how the full
+  // redactor treats the listing, so fixing that redactor cannot turn this test red.
+  it("machine-metadata skips the source projection but keeps the credential scrub", async () => {
+    const listing = "class A {\n  mtime: 1795824484:748913727\n  size: 109\tflags: 0\nsrc/b.js\n";
+    const run = async (
+      text: string,
+      mode: "credentials-only" | "machine-metadata",
+    ): Promise<string> =>
+      (
+        await runCommand(
+          {
+            command: "node",
+            args: ["-e", echo(text)],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          {
+            ...echoDeps({ PATH: process.env.PATH ?? "", API_TOKEN: "deploy-tok3n-9" }, true),
+            policy: { ...echoDeps({}, true).policy, outputScrub: mode },
+          },
+        )
+      ).stdout;
+    expect(await run(listing, "machine-metadata")).toBe(listing);
+    expect(await run("a deploy-tok3n-9 b", "machine-metadata")).not.toContain("deploy-tok3n-9");
+    const shaped = `sk-${"a1".repeat(12)}`;
+    expect(await run(shaped, "machine-metadata")).not.toContain(shaped);
   });
 
   // The contrast that makes the mode necessary: the default policy scrubs the context value too.

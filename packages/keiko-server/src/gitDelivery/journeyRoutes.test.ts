@@ -906,7 +906,6 @@ async function seedJourneyWithAppliedReceipt(input: {
       authorityDigest: DIGEST,
       bindingDigest: DIGEST,
       provenanceDigest: DIGEST,
-      toolCallCount: 0,
       patchByteCount: 0,
       modelRequestCount: 0,
       issueBinding: {

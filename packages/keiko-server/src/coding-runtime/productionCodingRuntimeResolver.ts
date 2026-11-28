@@ -85,6 +85,7 @@ import type {
   CodingRuntimeManager,
   CodingRuntimeManagerDeps,
 } from "./codingRuntimeManager.js";
+import { createVerificationApprovalPreview } from "./verificationApprovalPreview.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type {
   CodingRuntimeEditOutcomeObserver,
@@ -185,6 +186,8 @@ export interface ProductionRuntimeBackendInput {
   readonly minted: MintedRuntime;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals: CodingToolApprovalBridge;
+  /** What a pending governed verification would run, for its approval card (ADR-0124 D6). */
+  readonly verificationPreview?: CodingRuntimeManagerDeps["verificationPreview"];
   readonly authorityLifecycle: Pick<
     CodingRuntimeManagerDeps,
     | "abortInFlightActions"
@@ -1512,6 +1515,21 @@ interface CreateBackendRunInput {
   readonly contextUsage: CodingRuntimeContextUsageRegistry;
 }
 
+function verificationPreviewFor(
+  input: ProductionCodingRuntimeResolverInput,
+  context: Pick<CodingRuntimeTrustedContext, "workspaceRoot">,
+): Pick<ProductionRuntimeBackendInput, "verificationPreview"> {
+  const previewCommands = input.verificationRunner.previewCommands;
+  if (previewCommands === undefined) return {};
+  return {
+    verificationPreview: createVerificationApprovalPreview({
+      workspaceRoot: context.workspaceRoot,
+      runner: { previewCommands },
+      diagnostics: input.diagnostics,
+    }),
+  };
+}
+
 function createBackendRun({
   input,
   request,
@@ -1534,6 +1552,7 @@ function createBackendRun({
     minted,
     toolFacade,
     codingToolApprovals,
+    ...verificationPreviewFor(input, context),
     authorityLifecycle: authorityLifecycle({
       authority,
       controller,
@@ -1713,14 +1732,14 @@ function runtimeGitFacadeOptions({
     ...(verifiedCommitService === undefined ? {} : { verifiedCommitService }),
     ...(runtimeGitService === undefined ? {} : { runtimeGitService }),
     ...(draftDeliveryService === undefined ? {} : { draftDeliveryService }),
-    requestDraftDeliveryApproval: (id): void => {
-      requestDraftDeliveryApproval(draftDeliveryService, id, onRuntimeEvent);
+    requestDraftDeliveryApproval: (id, callId): void => {
+      requestDraftDeliveryApproval(draftDeliveryService, id, onRuntimeEvent, callId);
     },
-    requestStageApproval: (proposalId): void => {
-      requestRuntimeStageApproval(runtimeGitService, proposalId, onRuntimeEvent);
+    requestStageApproval: (proposalId, callId): void => {
+      requestRuntimeStageApproval(runtimeGitService, proposalId, onRuntimeEvent, callId);
     },
-    requestCommitApproval: (proposalId): void => {
-      requestVerifiedCommitApproval(verifiedCommitService, proposalId, onRuntimeEvent);
+    requestCommitApproval: (proposalId, callId): void => {
+      requestVerifiedCommitApproval(verifiedCommitService, proposalId, onRuntimeEvent, callId);
     },
   };
 }

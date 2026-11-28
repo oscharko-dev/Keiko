@@ -25,8 +25,13 @@ import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
 } from "./coding-app-session-channel-api";
+import { admitDirectBrowserStreamAsync } from "./browser-stream-capacity";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
+import {
+  terminalRunState,
+  useCodingWorkbenchEarlierRunFeeds,
+} from "./useCodingWorkbenchEarlierRunFeeds";
 import {
   useCodingWorkbenchModelTexts,
   type CodingWorkbenchAnswers,
@@ -61,16 +66,32 @@ export interface CodingWorkbenchSafeActivityState {
   readonly status: CodingWorkbenchSafeActivityStatus;
   readonly feed: AvailableCodingSafeActivityFeed | null;
   readonly errorCode: string | null;
+  /**
+   * True only when `feed` was read after its run had settled, so no later tool call can be missing
+   * from it. A feed held from the live stream is relabelled `ended` when the run settles but stays
+   * unconfirmed until it is read again.
+   */
+  readonly finalConfirmed?: true;
 }
 
 export interface UseCodingWorkbenchSafeActivityInput {
   readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly runtimeEventSignal: number;
+  /** The task the run belongs to; the feeds of its earlier runs are kept for the timeline. */
+  readonly conversationId?: string | undefined;
 }
 
 export interface UseCodingWorkbenchSafeActivityResult extends CodingWorkbenchSafeActivityState {
   readonly retry: () => void;
+  /** The activity stream waits for a free browser connection (a status, never a failure). */
+  readonly connectionWaiting?: boolean;
+  /**
+   * The last feed of each earlier run of the same task, oldest first (U-11): its tool rows and
+   * messages stay in the timeline when a continuation starts, as in standalone OpenCode. Empty for
+   * the task's first run; `feed` is always the shown run's own.
+   */
+  readonly earlierFeeds?: readonly AvailableCodingSafeActivityFeed[];
   /**
    * The complete text of every answer the feed names as longer than it carries, by message id.
    * Absent or without an entry: the feed's segments are the whole answer.
@@ -91,9 +112,10 @@ const IDLE_STATE: CodingWorkbenchSafeActivityState = {
 export function useCodingWorkbenchSafeActivity(
   input: UseCodingWorkbenchSafeActivityInput,
 ): UseCodingWorkbenchSafeActivityResult {
-  const { runId, runState, runtimeEventSignal } = input;
+  const { runId, runState, runtimeEventSignal, conversationId } = input;
   const [state, setState] = useState<CodingWorkbenchSafeActivityState>(IDLE_STATE);
   const [epoch, setEpoch] = useState(0);
+  const [connectionWaiting, setConnectionWaiting] = useState(false);
   const runStateRef = useRef(runState);
   const batch = useSnapshotBatch(runId, runStateRef, setState);
   const retry = useCallback(() => setEpoch((value) => value + 1), []);
@@ -102,23 +124,40 @@ export function useCodingWorkbenchSafeActivity(
     runStateRef.current = runState;
     setState((current) => stateForLifecycle(current, runState));
   }, [runState]);
+  useSettledActivityConfirmation({ runId, runState, state, setState });
+  const earlierFeeds = useCodingWorkbenchEarlierRunFeeds({
+    runId,
+    runState,
+    conversationId,
+    feed: state.feed,
+  });
   const texts = useCodingWorkbenchModelTexts(runId, state.feed);
   const { ingestDeltas } = texts;
-  useActivityConnection({ runId, epoch, batch, runStateRef, setState, ingestDeltas });
+  useActivityConnection({
+    runId,
+    epoch,
+    batch,
+    runStateRef,
+    setState,
+    ingestDeltas,
+    setConnectionWaiting,
+  });
   useActivityResync({ runId, runtimeEventSignal, status: state.status, retry });
   useActivityAutoReconnect({ runId, status: state.status, retry });
   return {
     ...state,
+    earlierFeeds,
     answers: texts.answers,
     reasoning: texts.reasoning,
     readReasoning: texts.readReasoning,
     retryText: texts.retryText,
     retry,
+    connectionWaiting,
   };
 }
 
 interface SnapshotBatch {
-  readonly enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void;
+  readonly enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void;
   readonly flush: () => void;
   readonly cancel: () => void;
 }
@@ -129,24 +168,29 @@ function useSnapshotBatch(
   setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>,
 ): SnapshotBatch {
   const pendingRef = useRef<CodingAppSessionChannelSnapshot | null>(null);
+  const finalRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cancel = useCallback((): void => {
     if (timerRef.current !== undefined) clearTimeout(timerRef.current);
     timerRef.current = undefined;
     pendingRef.current = null;
+    finalRef.current = false;
   }, []);
   const flush = useCallback((): void => {
     if (timerRef.current !== undefined) clearTimeout(timerRef.current);
     timerRef.current = undefined;
     const pending = pendingRef.current;
+    const final = finalRef.current;
     pendingRef.current = null;
+    finalRef.current = false;
     if (pending !== null && runId !== undefined) {
-      setState(stateFromSnapshot(pending, runId, runStateRef.current));
+      setState(stateFromSnapshot(pending, runId, runStateRef.current, final));
     }
   }, [runId, runStateRef, setState]);
   const enqueue = useCallback(
-    (snapshot: CodingAppSessionChannelSnapshot): void => {
+    (snapshot: CodingAppSessionChannelSnapshot, final = false): void => {
       pendingRef.current = snapshot;
+      finalRef.current = final;
       timerRef.current ??= setTimeout(flush, STREAM_BATCH_MS);
     },
     [flush],
@@ -162,10 +206,35 @@ interface ActivityConnectionInput {
   readonly runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>;
   readonly ingestDeltas: UseCodingWorkbenchModelTextsResult["ingestDeltas"];
+  readonly setConnectionWaiting: (waiting: boolean) => void;
+}
+
+function snapshotPublisher(
+  controller: AbortController,
+  ingestDeltas: UseCodingWorkbenchModelTextsResult["ingestDeltas"],
+  enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void,
+): (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void {
+  return (snapshot, final) => {
+    if (controller.signal.aborted) return;
+    // Deltas are appended as they arrive: the batch keeps only the newest snapshot.
+    const content = snapshot.content;
+    if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
+    enqueue(snapshot, final);
+  };
+}
+
+// A wait reported after its connection ended must not touch a state that moved on.
+function guardedWaiting(
+  controller: AbortController,
+  setWaiting: (waiting: boolean) => void,
+): (waiting: boolean) => void {
+  return (waiting) => {
+    if (!controller.signal.aborted) setWaiting(waiting);
+  };
 }
 
 function useActivityConnection(input: ActivityConnectionInput): void {
-  const { batch, epoch, runId, runStateRef, setState, ingestDeltas } = input;
+  const { batch, epoch, runId, runStateRef, setState, ingestDeltas, setConnectionWaiting } = input;
   const { cancel, enqueue, flush } = batch;
   // A re-pair without a page load reopens the channel (F65).
   const redemptions = useCodingAppSessionRedemptions();
@@ -183,14 +252,12 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       feed: current.feed?.runId === runId ? current.feed : null,
       errorCode: null,
     }));
-    const publish = (snapshot: CodingAppSessionChannelSnapshot): void => {
-      if (controller.signal.aborted) return;
-      // Deltas are appended as they arrive: the batch below keeps only the newest snapshot.
-      const content = snapshot.content;
-      if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
-      enqueue(snapshot);
-    };
-    void connectActivity(controller, publish, runStateRef)
+    void connectActivity(
+      controller,
+      snapshotPublisher(controller, ingestDeltas, enqueue),
+      runStateRef,
+      guardedWaiting(controller, setConnectionWaiting),
+    )
       .then(() => {
         if (controller.signal.aborted) return;
         flush();
@@ -203,24 +270,74 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       });
     return () => {
       controller.abort();
+      setConnectionWaiting(false);
       cancel();
     };
-  }, [cancel, enqueue, epoch, flush, ingestDeltas, redemptions, runId, runStateRef, setState]);
+  }, [
+    cancel,
+    enqueue,
+    epoch,
+    flush,
+    ingestDeltas,
+    redemptions,
+    runId,
+    runStateRef,
+    setConnectionWaiting,
+    setState,
+  ]);
 }
 
 async function connectActivity(
   controller: AbortController,
-  enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void,
+  enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void,
   runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>,
+  onWaiting: (waiting: boolean) => void,
 ): Promise<void> {
   await codingAppSessionPairingSettled();
   if (controller.signal.aborted) return;
   const endedBeforeRead = terminalRunState(runStateRef.current);
-  enqueue(await getCodingAppSessionChannelSnapshot(controller.signal));
+  // A read made once the run had settled is the run's last word on its activity.
+  enqueue(await getCodingAppSessionChannelSnapshot(controller.signal), endedBeforeRead);
   // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
   // subscription here turns a later server restart into an error on an already finished task.
   if (controller.signal.aborted || endedBeforeRead) return;
-  await streamCodingAppSessionChannelSnapshots({ signal: controller.signal, onSnapshot: enqueue });
+  // The stream gives its connection up when a stream that outranks it waits for one (see
+  // browser-stream-capacity); it is then reopened from a fresh snapshot once a slot is granted again.
+  let resumed = false;
+  while (await streamUntilYielded(controller, enqueue, resumed, onWaiting)) resumed = true; // NOSONAR typescript:S9382 -- each reopen waits for the previous stream to give its slot up
+}
+
+// Resolves true when the stream gave its slot up and has to be opened again.
+async function streamUntilYielded(
+  controller: AbortController,
+  enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void,
+  resumed: boolean,
+  onWaiting: (waiting: boolean) => void,
+): Promise<boolean> {
+  const yielded = new AbortController();
+  const release = await admitDirectBrowserStreamAsync(controller.signal, {
+    replayRank: 1,
+    onYield: () => yielded.abort(),
+    onWaiting,
+  });
+  if (release === null) {
+    if (controller.signal.aborted) return false;
+    throw new Error("Workbench activity stream capacity unavailable");
+  }
+  try {
+    // What happened while the stream was closed is read again, never assumed.
+    if (resumed) enqueue(await getCodingAppSessionChannelSnapshot(controller.signal));
+    await streamCodingAppSessionChannelSnapshots({
+      signal: AbortSignal.any([controller.signal, yielded.signal]),
+      onSnapshot: enqueue,
+    });
+  } catch (error) {
+    // An abort the yield caused is the intended end of this connection, not a failure.
+    if (!yielded.signal.aborted || controller.signal.aborted) throw error;
+  } finally {
+    release();
+  }
+  return yielded.signal.aborted && !controller.signal.aborted;
 }
 
 function markDisconnected(
@@ -266,6 +383,7 @@ function stateFromSnapshot(
   snapshot: CodingAppSessionChannelSnapshot,
   runId: string,
   runState: CodingWorkbenchRuntimeStateName | undefined,
+  final: boolean,
 ): CodingWorkbenchSafeActivityState {
   const content = snapshot.content;
   if (
@@ -275,7 +393,12 @@ function stateFromSnapshot(
   ) {
     return missingProjectionState(runState);
   }
-  return { status: lifecycleStatus(runState), feed: content.feed, errorCode: null };
+  return {
+    status: lifecycleStatus(runState),
+    feed: content.feed,
+    errorCode: null,
+    ...(final && terminalRunState(runState) ? { finalConfirmed: true as const } : {}),
+  };
 }
 
 // #3610 (W17): no projection for this run. While the run lives that is a lost connection worth a
@@ -285,10 +408,20 @@ function missingProjectionState(
   runState: CodingWorkbenchRuntimeStateName | undefined,
 ): CodingWorkbenchSafeActivityState {
   return {
-    status: terminalRunState(runState) ? "ended" : "unavailable",
+    status: missingProjectionStatus(runState),
     feed: null,
     errorCode: null,
   };
+}
+
+// U-23: a run in recovery-required lost its projection with the process that held it (a server
+// restart); Reconnect cannot bring it back, so it reads as the run needing attention, not as a lost
+// connection. The channel stays open, so a projection that is rebuilt later still replaces this.
+function missingProjectionStatus(
+  runState: CodingWorkbenchRuntimeStateName | undefined,
+): CodingWorkbenchSafeActivityStatus {
+  if (terminalRunState(runState)) return "ended";
+  return runState === "recovery-required" ? "recovery" : "unavailable";
 }
 
 function isSafeActivityContent(
@@ -307,13 +440,79 @@ function stateForLifecycle(
   // exact "stale content presented as live" the acceptance criterion forbids. Honest failure
   // first; the operator reconnects and only then sees a real terminal feed.
   if (current.feed === null) {
-    return current.status === "unavailable" && terminalRunState(runState)
+    return (current.status === "unavailable" || current.status === "recovery") &&
+      terminalRunState(runState)
       ? { ...current, status: "ended" }
       : current;
   }
   // A held feed that is still being re-read is not confirmed live (or paused, or ended) yet.
   if (failureStatus(current.status) || current.status === "loading") return current;
-  return { ...current, status: lifecycleStatus(runState) };
+  const { finalConfirmed, ...rest } = current;
+  return {
+    ...rest,
+    status: lifecycleStatus(runState),
+    ...(finalConfirmed === true && terminalRunState(runState) ? { finalConfirmed } : {}),
+  };
+}
+
+// A feed held from the live stream is only relabelled `ended` when its run settles. Read it once
+// more then, silently: the shown feed and status stay, no loading caption and no error appears for
+// this read. A failed read leaves the feed unconfirmed (the no-tools notice stays hidden) and is
+// retried within the reconnect delays.
+function useSettledActivityConfirmation(input: {
+  readonly runId: string | undefined;
+  readonly runState: CodingWorkbenchRuntimeStateName | undefined;
+  readonly state: CodingWorkbenchSafeActivityState;
+  readonly setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>;
+}): void {
+  const { runId, runState, setState, state } = input;
+  const unconfirmed =
+    runId !== undefined &&
+    terminalRunState(runState) &&
+    state.status === "ended" &&
+    state.feed !== null &&
+    state.finalConfirmed !== true;
+  useEffect(() => {
+    if (!unconfirmed || runId === undefined) return undefined;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (index: number): void => {
+      void confirmSettledActivity(controller.signal, runId, runState, setState).then((done) => {
+        if (done || controller.signal.aborted) return;
+        const delay = CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS[index];
+        if (delay === undefined) {
+          reportClientDiagnostic("[keiko] coding settled activity confirmation gave up");
+          return;
+        }
+        timer = setTimeout(() => attempt(index + 1), delay);
+      });
+    };
+    attempt(0);
+    return (): void => {
+      controller.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [unconfirmed, runId, runState, setState]);
+}
+
+// True once the run's activity was read after it settled and is held as confirmed. A read that
+// fails or names no projection returns false and changes nothing on screen.
+async function confirmSettledActivity(
+  signal: AbortSignal,
+  runId: string,
+  runState: CodingWorkbenchRuntimeStateName | undefined,
+  setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>,
+): Promise<boolean> {
+  const snapshot = await getCodingAppSessionChannelSnapshot(signal).then(
+    (value) => value,
+    () => undefined,
+  );
+  if (signal.aborted) return true;
+  if (snapshot === undefined) return false;
+  const next = stateFromSnapshot(snapshot, runId, runState, true);
+  if (next.feed === null) return false;
+  setState((current) => (current.feed?.runId === runId ? next : current));
+  return true;
 }
 
 function lifecycleStatus(
@@ -323,15 +522,6 @@ function lifecycleStatus(
   if (runState === "recovery-required") return "recovery";
   if (terminalRunState(runState)) return "ended";
   return "live";
-}
-
-function terminalRunState(runState: CodingWorkbenchRuntimeStateName | undefined): boolean {
-  return (
-    runState === "succeeded" ||
-    runState === "failed" ||
-    runState === "cancelled" ||
-    runState === "taken-over"
-  );
 }
 
 /**

@@ -943,3 +943,13 @@ Linux gates image with an init process, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EV
 `npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed there. Only
 the three producer records were kept; the fourteen committed captures, updater assertions and
 harness inputs retain their existing values.
+
+## Workbench review fixes on the night branch — 2026-11-28 (#4491)
+
+The Workbench review fixes of PR #4573 changed `packages/keiko-ui/src/lib/api.ts`, a declared source
+(the model activation, the aborted branch, summary and status reads, the Git probe and the closed
+git-delivery execution note), so the freshness gate rejected its old digest. On 2026-11-28 (UTC),
+after the last of these changes, the original nine updater cases passed in 5.2 minutes in the Linux
+gates image with an init process, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and
+`npm run check:update-ui-evidence` passed there. Only the three producer records were kept; the
+fourteen committed captures, updater assertions and harness inputs retain their existing values.

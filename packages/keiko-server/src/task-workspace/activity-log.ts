@@ -66,6 +66,7 @@ import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
+  type WorkspaceDriftCause,
   type WorkspaceLifecycleEvidenceRecord,
   type WorkspaceLifecycleOperation,
   type WorkspaceLifecycleOutcome,
@@ -117,6 +118,7 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
         "blocked",
         "failed",
         "retry-required",
+        "unchanged",
         "reconciled",
         "repaired",
         "operator-required",
@@ -148,6 +150,14 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["folder"],
     },
+    // Present only when the selected repository has no commit yet (a fresh `git init`, #4491): the
+    // checkout opens on its unborn branch for the first commit. Absent on every born repository.
+    headState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unborn"],
+    },
     driftMarker: {
       type: "string",
       dataClass: "closed-enum",
@@ -164,6 +174,22 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
         "identity-schema-retired",
         "identity-unsupported",
       ],
+    },
+    // Which re-proof of the active-pointer read refused an in-place binding (evidence.ts).
+    driftCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "instance-record-missing",
+        "root-unregistered",
+        "root-not-canonical",
+        "git-state-unreadable",
+        "branch-changed",
+        "git-dir-identity-changed",
+        "folder-identity-changed",
+        "inspection-failed",
+      ] satisfies readonly WorkspaceDriftCause[],
     },
     evidencePersistence: {
       type: "string",
@@ -288,6 +314,9 @@ export interface WorkspaceLifecycleLogInput {
   // The branch a provisioned workspace was cut from. Only its digest reaches `extra`.
   readonly baseBranch?: string | undefined;
   readonly workspaceKind?: "folder" | undefined;
+  readonly headState?: "unborn" | undefined;
+  // Which re-proof of the active-pointer read refused an in-place binding (evidence.ts).
+  readonly driftCause?: WorkspaceDriftCause | undefined;
 }
 
 export interface WorkspaceLifecycleFailureInput {
@@ -310,6 +339,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   readonly baseBranch?: string | undefined;
   readonly workspaceKind?: "folder" | undefined;
+  readonly headState?: "unborn" | undefined;
 }
 
 interface WorkspaceErrorTrace {
@@ -438,6 +468,8 @@ export function logWorkspaceLifecycle(
         ? {}
         : { baseBranchDigest: baseBranchDigest(input.baseBranch) }),
       ...(input.workspaceKind === undefined ? {} : { workspaceKind: input.workspaceKind }),
+      ...(input.headState === undefined ? {} : { headState: input.headState }),
+      ...(input.driftCause === undefined ? {} : { driftCause: input.driftCause }),
       ...(input.error === undefined ? {} : errorTrace(input.error)),
     },
   });
@@ -507,6 +539,7 @@ export function recordWorkspaceLifecycle(
     driftMarker: input.driftMarker,
     baseBranch: input.baseBranch,
     workspaceKind: input.workspaceKind,
+    headState: input.headState,
   });
 }
 
@@ -520,6 +553,7 @@ export interface WorkspaceSelectionOutcome {
   readonly error?: TaskWorkspaceError | undefined;
   readonly baseBranch?: string | undefined;
   readonly workspaceKind?: "folder" | undefined;
+  readonly headState?: "unborn" | undefined;
 }
 
 export function recordWorkspaceSelection(
@@ -553,6 +587,7 @@ export function recordWorkspaceSelection(
     },
     baseBranch: input.baseBranch,
     workspaceKind: input.workspaceKind,
+    headState: input.headState,
     errorCode: error?.code,
     error,
   });

@@ -9,6 +9,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
+import { gitZeroObjectId } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+
 import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 
 const HEAD_BYTES = 4_096;
@@ -40,7 +42,13 @@ const NODE_FS: ProductionWorkspaceHeadFileSystem = {
   realpath: realpathSync,
 };
 
-/** Reads a live Git HEAD without a shell or ambient executable lookup. */
+/**
+ * Reads a live Git HEAD without a shell or ambient executable lookup. It is deliberately file-based
+ * and spawn-free: the authority re-reads HEAD on every request and every run step, where starting
+ * Git would add latency, depend on the ambient executable and open a console on Windows. Every read
+ * is bounded and handle-verified instead. The tools reader (`readGitHeadState`) asks Git itself; the
+ * two must agree, which the head reader's SHA-256 test proves for the unborn zero id.
+ */
 export function readProductionWorkspaceHead(
   workspaceRoot: string,
   repositoryRoot: string,
@@ -54,7 +62,14 @@ export function readProductionWorkspaceHead(
 }
 
 export interface ProductionWorkspaceGitState {
+  /**
+   * The commit HEAD resolves to. An unborn branch (a fresh `git init`, #4491) has none: it reads as
+   * the all-zero object id of the repository's object format, Git's own "no object" value and the
+   * one the verified-commit lane already persists for an unborn parent. Never an empty string.
+   */
   readonly head: string;
+  /** `unborn` when HEAD names a branch whose ref does not exist yet. */
+  readonly headState: "born" | "unborn";
   readonly branch: string | undefined;
   readonly gitDir: string;
 }
@@ -71,14 +86,198 @@ export function readProductionWorkspaceGitState(
   if (gitDir === undefined) return undefined;
   const head = boundedText(join(gitDir, "HEAD"), HEAD_BYTES, fileSystem)?.trim();
   if (head === undefined) return undefined;
-  if (SHA.test(head)) return { head, branch: undefined, gitDir };
+  if (SHA.test(head)) return { head, headState: "born", branch: undefined, gitDir };
   const reference = head.startsWith("ref: ") ? head.slice(5) : "";
-  const resolved = safeRef(reference)
-    ? readReference(gitDir, commonRoot, reference, fileSystem)
+  return safeRef(reference)
+    ? referencedState(gitDir, commonRoot, reference, fileSystem)
     : undefined;
-  return resolved === undefined
-    ? undefined
-    : { head: resolved, branch: localBranch(reference), gitDir };
+}
+
+function referencedState(
+  gitDir: string,
+  commonRoot: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): ProductionWorkspaceGitState | undefined {
+  const branch = localBranch(reference);
+  const resolved = readReference(gitDir, commonRoot, reference, fileSystem);
+  if (resolved !== undefined) return { head: resolved, headState: "born", branch, gitDir };
+  if (branch === undefined || !referenceAbsent(gitDir, commonRoot, reference, fileSystem))
+    return undefined;
+  const zero = gitZeroObjectId(objectIdLength(commonRoot, fileSystem));
+  return { head: zero, headState: "unborn", branch, gitDir };
+}
+
+// `refs/heads/<branch>` provably does not exist: no loose file in the worktree or common git dir
+// (a missing path, never an unreadable or non-file one) and no packed entry. Anything else (a
+// directory in its place, a symlink, an unreadable file) is not an unborn branch but a broken one.
+function referenceAbsent(
+  gitDir: string,
+  commonRoot: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const commonDir = resolveCommonDir(gitDir, commonRoot, fileSystem);
+  if (!looseReferenceMissing(gitDir, reference, fileSystem)) return false;
+  if (commonDir !== gitDir && !looseReferenceMissing(commonDir, reference, fileSystem))
+    return false;
+  return packedReferencesLackReference(commonDir, reference, fileSystem);
+}
+
+function pathMissing(path: string, fileSystem: ProductionWorkspaceHeadFileSystem): boolean {
+  try {
+    fileSystem.lstat(path);
+    return false;
+  } catch (error) {
+    // Only a path that is not there counts as missing; any other failure is not an answer.
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return true;
+    throw error;
+  }
+}
+
+function looseReferenceMissing(
+  root: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const candidate = resolve(root, reference);
+  if (!containsCanonicalPath(root, dirname(candidate))) return false;
+  let current = root;
+  for (const segment of relative(root, candidate).split(sep)) {
+    current = join(current, segment);
+    if (pathMissing(current, fileSystem)) return true;
+    if (fileSystem.lstat(current).isSymbolicLink()) return false;
+  }
+  return false;
+}
+
+function packedReferencesLackReference(
+  root: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const path = join(root, "packed-refs");
+  if (pathMissing(path, fileSystem)) return true;
+  const packed = boundedText(path, PACKED_REFS_BYTES, fileSystem);
+  if (packed === undefined) return false;
+  return !packed.split(/\r?\n/u).some((line) => {
+    const separator = line.indexOf(" ");
+    return !line.startsWith("#") && separator > 0 && line.slice(separator + 1) === reference;
+  });
+}
+
+// SHA-256 repositories record `objectformat = sha256` in the common config; anything else is
+// SHA-1. A config that cannot be read keeps the default, which only affects the stand-in's length.
+function objectIdLength(
+  commonRoot: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): 40 | 64 {
+  const config = boundedText(join(commonRoot, "config"), HEAD_BYTES * 16, fileSystem);
+  return config !== undefined && declaresSha256(config) ? 64 : 40;
+}
+
+// Git's own config grammar for the one key that matters: `extensions.objectformat` (section and key
+// names are case-insensitive, the value may be quoted and followed by a `#` or `;` comment, and the
+// last assignment wins). Read line by line with no backtracking pattern.
+function declaresSha256(config: string): boolean {
+  let section = "";
+  let format: string | undefined;
+  for (const raw of logicalLines(config)) {
+    let line = raw.trim();
+    if (line.startsWith("[")) {
+      // A header may carry the first assignment on its own line: `[extensions] objectformat = sha256`.
+      const header = headerOf(line);
+      section = header.section;
+      line = header.rest;
+    }
+    if (section !== "extensions") continue;
+    const assignment = assignmentOf(line);
+    if (assignment?.key === "objectformat") format = assignment.value;
+  }
+  return format === "sha256";
+}
+
+// Git joins a line that ends in an unescaped backslash with the next one (`sha\` + `256` reads as
+// `sha256`). A comment ends at its line end whatever it ends in, so a trailing backslash after an
+// unquoted `#` or `;` continues nothing, and a quote opened before the break stays open after it.
+function logicalLines(config: string): string[] {
+  const lines: string[] = [];
+  let pending = "";
+  let quoted = false;
+  for (const physical of config.split(/\r?\n/u)) {
+    const scan = scanLine(physical, quoted);
+    if (scan.continues) {
+      pending += physical.slice(0, -1);
+      quoted = scan.quoted;
+    } else {
+      lines.push(pending + physical);
+      pending = "";
+      quoted = false;
+    }
+  }
+  if (pending !== "") lines.push(pending);
+  return lines;
+}
+
+function scanLine(
+  physical: string,
+  startQuoted: boolean,
+): { readonly continues: boolean; readonly quoted: boolean } {
+  let quoted = startQuoted;
+  let escaped = false;
+  for (const character of physical) {
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === '"') quoted = !quoted;
+    else if (!quoted && (character === "#" || character === ";"))
+      return { continues: false, quoted };
+  }
+  return { continues: escaped, quoted };
+}
+
+// The lower-cased name of a `[section]` or `[section "subsection"]` header and the text after its
+// closing bracket; a subsection or a malformed header names no section that counts.
+function headerOf(line: string): { readonly section: string; readonly rest: string } {
+  const close = line.indexOf("]");
+  if (close < 0) return { section: "", rest: "" };
+  const name = line.slice(1, close).trim();
+  return {
+    section: /^[A-Za-z][A-Za-z0-9-]*$/u.test(name) ? name.toLowerCase() : "",
+    rest: line.slice(close + 1).trim(),
+  };
+}
+
+function assignmentOf(line: string): { readonly key: string; readonly value: string } | undefined {
+  const equals = line.indexOf("=");
+  if (equals < 0) return undefined;
+  const key = line.slice(0, equals).trim().toLowerCase();
+  return /^[a-z][a-z0-9-]*$/u.test(key)
+    ? { key, value: configValue(line.slice(equals + 1)).toLowerCase() }
+    : undefined;
+}
+
+// A value as Git reads it: quotes group text and are dropped, a backslash escapes the next
+// character, and an unquoted `#` or `;` starts a comment. Surrounding blanks are not part of it.
+function configValue(text: string): string {
+  let value = "";
+  let quoted = false;
+  let escaped = false;
+  for (const character of text) {
+    if (escaped) {
+      value += character;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (!quoted && (character === "#" || character === ";")) {
+      break;
+    } else {
+      value += character;
+    }
+  }
+  return value.trim();
 }
 
 function localBranch(reference: string): string | undefined {

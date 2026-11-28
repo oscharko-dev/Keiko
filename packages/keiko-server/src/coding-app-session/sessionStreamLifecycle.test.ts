@@ -225,6 +225,8 @@ describe("channel lifecycle lines (F65)", () => {
           loss: "none",
           drainWaitCount: 0,
           coalescedSnapshotCount: 0,
+          carriedTextDeltaCount: 0,
+          carryFallbackCount: 0,
         },
       }),
     ]);
@@ -242,6 +244,8 @@ describe("channel lifecycle lines (F65)", () => {
       durationMs: 1_500,
       drainWaitCount: 0,
       coalescedSnapshotCount: 0,
+      carriedTextDeltaCount: 0,
+      carryFallbackCount: 0,
     });
   });
 
@@ -454,7 +458,12 @@ describe("app-session stream transport and completion remain distinct", () => {
     response.destroy();
     expect(
       sink.events.find((event) => event.op === "coding-app-session.channel.closed")?.extra,
-    ).toMatchObject({ drainWaitCount: 1, coalescedSnapshotCount: 1 });
+    ).toMatchObject({
+      drainWaitCount: 1,
+      coalescedSnapshotCount: 1,
+      carriedTextDeltaCount: 0,
+      carryFallbackCount: 0,
+    });
     expect(terminalReason()).toBe("client-disconnected");
   });
 

@@ -33,6 +33,13 @@ function errorsFor(value: unknown): readonly string[] {
 }
 
 describe("coding workbench runtime approval review channel", () => {
+  it("accepts an honest counts-unavailable marker and refuses a non-boolean one", () => {
+    expect(errorsFor(activeReview({ countsUnavailable: true }))).toEqual([]);
+    expect(errorsFor(activeReview({ countsUnavailable: "yes" }))).toContain(
+      "pendingApprovalReview.countsUnavailable must be a boolean",
+    );
+  });
+
   it("accepts a bounded, workspace-relative review", () => {
     expect(validateCodingWorkbenchRuntimeApprovalReviewChannelPayload(activeReview()).ok).toBe(
       true,
@@ -98,6 +105,31 @@ describe("coding workbench runtime approval review channel", () => {
     expect(errorsFor(activeReview({ paths: [longPath] }))).toContain(
       "pendingApprovalReview.paths[0] is not a contained relative path",
     );
+  });
+
+  // U-28: the scope a Git stage asked for is optional (an edit changeset has none), bounded like the
+  // path list and may be the workspace itself.
+  it("accepts an optional requested scope and rejects an unbounded or escaping one", () => {
+    expect(errorsFor(activeReview({}))).toEqual([]);
+    expect(errorsFor(activeReview({ requested: ["src", "test"] }))).toEqual([]);
+    expect(errorsFor(activeReview({ requested: ["."] }))).toEqual([]);
+    const tooMany = Array.from(
+      { length: CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS + 1 },
+      (_value, index) => `dir${String(index)}`,
+    );
+    expect(errorsFor(activeReview({ requested: tooMany }))).toContain(
+      "pendingApprovalReview.requested exceeds the request bound",
+    );
+    expect(errorsFor(activeReview({ requested: [] }))).toContain(
+      "pendingApprovalReview.requested must be a non-empty array",
+    );
+    expect(errorsFor(activeReview({ requested: ["src", "src"] }))).toContain(
+      "pendingApprovalReview.requested must be unique",
+    );
+    for (const entry of ["../out", "/abs", "a\\b", 3])
+      expect(errorsFor(activeReview({ requested: [entry] }))).toContain(
+        "pendingApprovalReview.requested[0] is not a contained path",
+      );
   });
 
   it("rejects counts that are negative, fractional or unbounded", () => {
@@ -462,5 +494,92 @@ describe("native action review boundaries (#3897)", () => {
     ])("refuses %s", (_label, bad) => {
       expect(errorsFor(pending(action(bad)))).not.toEqual([]);
     });
+  });
+});
+
+describe("verification preview review (ADR-0124 D6)", () => {
+  const review = (verificationPreview: unknown, extra: Record<string, unknown> = {}): unknown =>
+    activeReview({ paths: [], fileCount: 0, verificationPreview, ...extra });
+
+  it.each([
+    ["commands", { status: "commands", commands: ["mvn -B test"], truncated: false }],
+    ["a targeted-test deferral", { status: "deferred", reason: "targeted-test" }],
+    ["a package-selection deferral", { status: "deferred", reason: "package-selection" }],
+    ["a host-setup deferral", { status: "deferred", reason: "host-setup" }],
+    ["an unavailable lookup", { status: "unavailable", reason: "preview-failed" }],
+  ])("accepts %s", (_label, preview) => {
+    expect(errorsFor(review(preview))).toEqual([]);
+  });
+
+  it.each([
+    ["an empty command list", { status: "commands", commands: [], truncated: false }],
+    [
+      "too many commands",
+      {
+        status: "commands",
+        commands: Array.from({ length: 9 }, () => "npm test"),
+        truncated: true,
+      },
+    ],
+    [
+      "an over-long command",
+      { status: "commands", commands: ["x".repeat(1_025)], truncated: true },
+    ],
+    ["an unknown deferral", { status: "deferred", reason: "other" }],
+    ["an unknown status", { status: "later" }],
+    ["an inherited status name", { status: "constructor" }],
+    ["an extra key", { status: "deferred", reason: "targeted-test", command: "rm" }],
+  ])("refuses %s", (_label, preview) => {
+    expect(errorsFor(review(preview))).not.toEqual([]);
+  });
+
+  it("refuses a preview that also names paths", () => {
+    expect(
+      errorsFor(
+        activeReview({
+          verificationPreview: { status: "deferred", reason: "targeted-test" },
+        }),
+      ),
+    ).not.toEqual([]);
+  });
+});
+
+describe("commit review renames", () => {
+  const verifiedCommit = {
+    result: { proposalId: "permission-42" },
+    message: "fix: rename",
+  };
+  const withRename = (renames: unknown): Readonly<Record<string, unknown>> =>
+    activeReview({ renames, verifiedCommit });
+
+  it("carries the old and the new path as separate, individually bounded fields", () => {
+    const long = (letter: string): string => `${letter.repeat(300)}.js`;
+    const review = withRename([{ path: "src/a.ts", from: long("o") }]);
+    expect(errorsFor(review).filter((error) => error.includes("renames"))).toEqual([]);
+    const tooLong = withRename([{ path: "src/a.ts", from: "o".repeat(513) }]);
+    expect(errorsFor(tooLong)).toContain("pendingApprovalReview.renames[0] is invalid");
+  });
+
+  it.each([
+    ["a path that is not listed", [{ path: "src/other.ts", from: "src/old.ts" }]],
+    ["an escaping origin", [{ path: "src/a.ts", from: "../old.ts" }]],
+    ["an extra key", [{ path: "src/a.ts", from: "src/old.ts", extra: true }]],
+    [
+      "a repeated path",
+      [
+        { path: "src/a.ts", from: "x" },
+        { path: "src/a.ts", from: "y" },
+      ],
+    ],
+  ])("refuses %s", (_name, renames) => {
+    expect(
+      errorsFor(withRename(renames)).filter((error) => error.includes("renames[")).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("refuses renames on a review that is not a commit review", () => {
+    expect(
+      errorsFor(activeReview({ renames: [{ path: "src/a.ts", from: "src/old.ts" }] })),
+    ).toContain("pendingApprovalReview.renames belongs to a commit review and must be an array");
   });
 });

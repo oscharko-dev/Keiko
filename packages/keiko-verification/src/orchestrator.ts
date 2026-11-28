@@ -8,6 +8,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  VERIFICATION_RUNAWAY_OUTPUT_BYTES,
   type VerificationDependencyConsumer,
   type VerificationDependencySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
@@ -22,7 +23,11 @@ import {
   type SandboxPolicy,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
-import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
+import {
+  defaultResolveExecutable,
+  executionRootBackendFor,
+  nodeSpawnFn,
+} from "@oscharko-dev/keiko-tools/internal/exec";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { join } from "node:path";
 import {
@@ -39,7 +44,15 @@ import {
   type DependencyBootstrapDeps,
   type DependencyBootstrapOutcome,
 } from "./dependencies.js";
-import { classifyScripts } from "./detect.js";
+import {
+  BOUND_SCRIPT_REFUSAL_TEXT,
+  BOUND_SCRIPT_WRAPPER,
+  bindApprovedScript,
+  SCRIPTS_UNBOUND_DENIAL_PREFIX,
+  type BoundScript,
+  type ScriptBindingOutcome,
+} from "./boundScript.js";
+import { classifyScripts, detectScripts, scriptTableDigest } from "./detect.js";
 import { outputExcerpt } from "./excerpt.js";
 import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
@@ -115,6 +128,17 @@ export interface VerificationDeps {
   // persisted as body-free evidence, while the caller may forward the excerpt to the actor that
   // has to repair the failure (the coding model, ADR-0126 D3).
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
+  // The digest of the package script table the plan was approved on (`scriptTableDigest`). When set,
+  // every script step re-proves it on the workspace the step runs in, after the exclusive queue and
+  // the dependency bootstrap, immediately before it spawns and again once it ended: a script (or a
+  // pre/post lifecycle script) changed since the approval is refused, never run or reported as run.
+  readonly approvedScriptsDigest?: string | undefined;
+  // True when the caller always approves the scripts it runs: a script step of a run that then
+  // carries no digest is refused (`approval-missing`), never run against whatever package.json holds.
+  readonly requireApprovedScripts?: boolean | undefined;
+  // Called once per script step with the closed outcome of binding it to the approved bytes, for the
+  // body-free activity log line; it carries no script, name or path.
+  readonly onScriptBinding?: ((outcome: ScriptBindingOutcome) => void) | undefined;
 }
 
 export interface VerificationStepOutput {
@@ -177,6 +201,20 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
   ...DEFAULT_COMMAND_RULES,
 ]);
 
+// The one `sh` step: Keiko runs the approved package-script bytes itself, as `npm run` does, so the
+// bytes cannot change between the approval and the effect (boundScript.ts). Its argv is built only
+// by the orchestrator from the approved plan, never from model or request input, and the rule admits
+// no program but the constant wrapper. It is not a widening: `npm run` already hands exactly these
+// bytes to `sh -c`, under the same egress sandbox and workspace boundary as the npm step.
+const BOUND_SCRIPT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  {
+    executable: "sh",
+    allowedSubcommands: Object.freeze([BOUND_SCRIPT_WRAPPER]),
+    requiredLeadingFlags: Object.freeze(["-c"]),
+  },
+  ...VERIFICATION_COMMAND_RULES,
+]);
+
 const ALL_STATUSES: readonly VerificationStatus[] = [
   "passed",
   "failed",
@@ -203,6 +241,8 @@ function policyForStep(step: VerificationStep, network: NetworkPolicy): SandboxP
       ? { envAllowlist: [...DEFAULT_SANDBOX_POLICY.envAllowlist, ...MAVEN_STEP_ENVIRONMENT] }
       : {}),
     maxOutputBytes: limits.maxOutputBytes,
+    outputOverflow: "retain-head-tail",
+    runawayOutputBytes: limits.runawayOutputBytes ?? VERIFICATION_RUNAWAY_OUTPUT_BYTES,
     defaultTimeoutMs: limits.wallTimeMs,
     network,
     filesystem: "execution-root",
@@ -303,6 +343,97 @@ function deniedResult(
     ),
     detail: redact(reason),
   };
+}
+
+// The closed prefix of a denial because the package scripts differ from the approved bytes.
+export const SCRIPTS_CHANGED_DENIAL_PREFIX = "scripts changed after approval: ";
+
+// Whether the package scripts the step would run are the approved bytes, read on the workspace the
+// step executes in. An unreadable manifest reads as no scripts and so never matches.
+function scriptsMatchApproval(step: VerificationStep, deps: VerificationDeps): boolean {
+  if (deps.approvedScriptsDigest === undefined || step.scriptName === undefined) return true;
+  const workspace = deps.stepWorkspace?.() ?? deps.workspace;
+  const scripts = detectScripts(workspace, deps.fs, step.cwd).scripts;
+  return scriptTableDigest(scripts) === deps.approvedScriptsDigest;
+}
+
+function isScriptStep(step: VerificationStep): boolean {
+  return step.scriptName !== undefined && PACKAGE_MANAGER_COMMANDS.has(step.command);
+}
+
+// A script step of a package manager on macOS or Linux whose scripts were approved by digest runs
+// the approved bytes itself. Windows keeps running the package manager against the private step
+// copy, which only earlier steps can write, with the digest check before and after each step.
+function bindStep(step: VerificationStep, deps: VerificationDeps): BoundScript | undefined {
+  if (!isScriptStep(step)) return undefined;
+  const digest = deps.approvedScriptsDigest;
+  if (digest === undefined) {
+    // A run that must carry an approval and lost it never runs unbound.
+    return deps.requireApprovedScripts === true
+      ? { kind: "refused", reason: "approval-missing" }
+      : undefined;
+  }
+  // A Linux container runs `sh` on any host, a Windows one included: the approved bytes bind there.
+  // Only the Windows AppContainer runs the package manager itself, against the private step copy.
+  const inContainer = executionRootBackend(deps).startsWith("container-");
+  if (!inContainer && (deps.platform ?? process.platform) === "win32") return windowsFence(deps);
+  return bindOnHostOrContainer(step, deps, digest, inContainer);
+}
+
+function bindOnHostOrContainer(
+  step: VerificationStep,
+  deps: VerificationDeps,
+  approvedDigest: string,
+  inContainer: boolean,
+): BoundScript {
+  const workspace = deps.stepWorkspace?.() ?? deps.workspace;
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  // Host paths (the Node.js and the package manager) name nothing inside a container.
+  return bindApprovedScript({
+    step,
+    workspace,
+    fs,
+    approvedDigest,
+    ...(inContainer
+      ? {}
+      : {
+          nodeExecPath: process.execPath,
+          packageManagerPath: packageManagerPath(step, deps, workspace, fs),
+        }),
+  });
+}
+
+// The Windows AppContainer runs the package manager against the run's private step copy, which only
+// earlier steps can write, under the digest fence. Without that copy the fence would read the live folder, so the
+// step is refused instead.
+function windowsFence(deps: VerificationDeps): BoundScript | undefined {
+  return deps.stepWorkspace === undefined
+    ? { kind: "refused", reason: "windows-step-copy-missing" }
+    : undefined;
+}
+
+function executionRootBackend(deps: VerificationDeps): string {
+  return executionRootBackendFor({
+    platform: deps.platform,
+    sandboxAvailability: deps.sandboxAvailability,
+    processEnv: deps.processEnv ?? process.env,
+    windowsStepSupervisor: deps.windowsStepSupervisor,
+  });
+}
+
+function packageManagerPath(
+  step: VerificationStep,
+  deps: VerificationDeps,
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+): string | undefined {
+  try {
+    const resolve = deps.resolveExecutable ?? defaultResolveExecutable;
+    return resolve(step.command, { workspace, processEnv: deps.processEnv ?? process.env, fs });
+  } catch {
+    // Not resolvable here: the script runs without `npm_execpath`, as npm's own env omits it too.
+    return undefined;
+  }
 }
 
 const PACKAGE_MANAGER_COMMANDS: ReadonlySet<string> = new Set(["npm", "yarn", "pnpm"]);
@@ -426,6 +557,7 @@ async function runStep(
   baseSpawn: SpawnFn,
   monitor: ResourceMonitor,
   network: NetworkPolicy,
+  bound?: Extract<BoundScript, { readonly kind: "bound" }>,
 ): Promise<StepRun> {
   const now = deps.now ?? Date.now;
   const startedAt = now();
@@ -447,16 +579,17 @@ async function runStep(
   };
   try {
     assertTargetedProjectRoot(step, deps);
+    // Validates the package folder; a bound step runs from the execution root and enters it itself.
     const invocation = stepInvocation(step, deps);
     const result = await runCommand(
       {
-        command: step.command,
-        args: invocation.args,
-        cwd: invocation.cwd,
+        command: bound === undefined ? step.command : "sh",
+        args: bound === undefined ? invocation.args : bound.args,
+        cwd: bound === undefined ? invocation.cwd : undefined,
         timeoutMs: step.limits.wallTimeMs,
         signal: ac.signal,
       },
-      buildRunDeps(deps, step, spawn, network),
+      buildRunDeps(deps, step, spawn, network, bound),
     );
     return { result, error: undefined, abortReason, durationMs: result.durationMs };
   } catch (error) {
@@ -522,11 +655,13 @@ function buildRunDeps(
   step: VerificationStep,
   spawn: SpawnFn,
   network: NetworkPolicy,
+  bound?: Extract<BoundScript, { readonly kind: "bound" }>,
 ): RunCommandDeps {
+  const policy = policyForStep(step, network);
   return {
     workspace: deps.stepWorkspace?.() ?? deps.workspace,
-    policy: policyForStep(step, network),
-    commandRules: VERIFICATION_COMMAND_RULES,
+    policy: bound === undefined ? policy : { ...policy, pinnedEnv: bound.env },
+    commandRules: bound === undefined ? VERIFICATION_COMMAND_RULES : BOUND_SCRIPT_COMMAND_RULES,
     spawn,
     processEnv: deps.processEnv ?? process.env,
     now: deps.now ?? Date.now,
@@ -625,6 +760,7 @@ function toResult(
     truncated: run.result?.truncated ?? false,
     redacted: true,
     outputSummary: outputDigest(run.result),
+    ...outputRetention(run.result),
     appliedLimits: buildAppliedLimits(
       step.limits,
       breached,
@@ -633,6 +769,19 @@ function toResult(
     ),
     detail: detailFor(status, run),
     ...(locations.length > 0 ? { locations } : {}),
+  };
+}
+
+// What the step kept and dropped of its output while it ran to its own end; nothing when it dropped
+// none (and for a runaway, whose output is withheld whole).
+function outputRetention(result: CommandResult | undefined): {
+  readonly outputRetainedBytes?: number;
+  readonly outputDiscardedBytes?: number;
+} {
+  if (result?.discardedByteCount === undefined) return {};
+  return {
+    outputRetainedBytes: result.retainedByteCount ?? 0,
+    outputDiscardedBytes: result.discardedByteCount,
   };
 }
 
@@ -970,6 +1119,82 @@ function preExecutionResult(
   return undefined;
 }
 
+const SCRIPTS_CHANGED_TEXT =
+  "the package scripts differ from the ones that were approved; review them and start the check again.";
+const SCRIPTS_CHANGED_DURING_TEXT =
+  "the package scripts changed while the step ran, so its result is not reported as the approved scripts' outcome; review them and start the check again.";
+
+// Why a script step must not run: its scripts differ from the approved bytes, or the approved bytes
+// cannot be run unbound. Undefined when it may run.
+function scriptsRefusal(
+  step: VerificationStep,
+  deps: VerificationDeps,
+  bound: BoundScript | undefined,
+): string | undefined {
+  if (bound?.kind === "refused") {
+    return `${SCRIPTS_UNBOUND_DENIAL_PREFIX}${bound.reason}. ${BOUND_SCRIPT_REFUSAL_TEXT[bound.reason]}`;
+  }
+  // A bound step read the manifest once already; only an unbound one is proved here.
+  if (bound?.kind === "changed" || (bound === undefined && !scriptsMatchApproval(step, deps))) {
+    return `${SCRIPTS_CHANGED_DENIAL_PREFIX}${SCRIPTS_CHANGED_TEXT}`;
+  }
+  return undefined;
+}
+
+// The closed outcome the activity log records for a script step that was refused before it ran.
+function refusalOutcome(bound: BoundScript | undefined): ScriptBindingOutcome {
+  return bound?.kind === "refused" ? `refused:${bound.reason}` : "scripts-changed";
+}
+
+interface StepHost {
+  readonly baseSpawn: SpawnFn;
+  readonly monitor: ResourceMonitor;
+  readonly resolution: Extract<NetworkResolution, { readonly kind: "run" }>;
+}
+
+// One admitted step: bind the approved script bytes where the host runs them itself, refuse a step
+// whose scripts are not the approved ones, run it, prove the scripts again once it ended (a nested
+// package-manager call may have read a changed file) and report its output.
+async function executeStep(
+  step: VerificationStep,
+  deps: VerificationDeps,
+  host: StepHost,
+): Promise<VerificationResult> {
+  const bound = bindStep(step, deps);
+  const refusal = scriptsRefusal(step, deps, bound);
+  if (refusal !== undefined) {
+    if (isScriptStep(step)) deps.onScriptBinding?.(refusalOutcome(bound));
+    return deniedResult(step, refusal);
+  }
+  const boundRun = bound?.kind === "bound" ? bound : undefined;
+  const { baseSpawn, monitor, resolution } = host;
+  const run = await runStep(step, deps, baseSpawn, monitor, resolution.network, boundRun); // NOSONAR typescript:S9382 -- verification steps run one after another by contract.
+  const unchanged = scriptsMatchApproval(step, deps);
+  const result = unchanged
+    ? toResult(step, run, deps.workspace.root, monitor.canEnforceProcessTreeMemory())
+    : deniedResult(step, `${SCRIPTS_CHANGED_DENIAL_PREFIX}${SCRIPTS_CHANGED_DURING_TEXT}`);
+  reportRanBinding(step, deps, ranBindingOutcome(unchanged, boundRun !== undefined));
+  reportStepOutput(deps, step, run, result);
+  return result;
+}
+
+// How a script step that ran was bound: a changed script table overrides how it ran.
+function ranBindingOutcome(unchanged: boolean, bound: boolean): ScriptBindingOutcome {
+  if (!unchanged) return "scripts-changed";
+  return bound ? "bound" : "fenced-windows";
+}
+
+// The outcome of a script step that ran; a run without an approval digest has no binding to report.
+function reportRanBinding(
+  step: VerificationStep,
+  deps: VerificationDeps,
+  outcome: ScriptBindingOutcome,
+): void {
+  if (isScriptStep(step) && deps.approvedScriptsDigest !== undefined) {
+    deps.onScriptBinding?.(outcome);
+  }
+}
+
 async function runPlanSteps(
   plan: VerificationPlan,
   deps: VerificationDeps,
@@ -1008,9 +1233,7 @@ async function runPlanSteps(
       );
       continue;
     }
-    const run = await runStep(step, deps, baseSpawn, monitor, resolution.network); // NOSONAR typescript:S9382 -- verification steps run one after another by contract.
-    const result = toResult(step, run, deps.workspace.root, processTreeMemoryEnforced);
-    reportStepOutput(deps, step, run, result);
+    const result = await executeStep(step, deps, { baseSpawn, monitor, resolution }); // NOSONAR typescript:S9382 -- verification steps run one after another by contract.
     results.push(result);
     cancelled ||= result.status === "cancelled";
   }

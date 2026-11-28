@@ -214,6 +214,8 @@ function boundWorkspace(
 function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
   return {
     ...createInitialCodingWorkbenchRuntimeState(),
+    // The window's run has been read and there is none: an automatic activation waits for that (U-3).
+    run: { status: "ready", value: null, error: null },
     canStart: true,
     runtime: {
       status: "ready",
@@ -239,6 +241,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     setSelectedModel: vi.fn(),
     adoptModel: vi.fn(),
     setReasoningEffort: vi.fn(),
+    dismissRefusal: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),
@@ -327,6 +330,7 @@ describe("Coding Workbench prompt issue intake", () => {
     await waitFor(() =>
       expect(runtimeActions.start).toHaveBeenCalledWith(`Implement ${ISSUE_URL}`, {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repos/keiko-checkout",
         conversationId: undefined,
         issue: {
           issueRef: ISSUE_URL.toLowerCase(),

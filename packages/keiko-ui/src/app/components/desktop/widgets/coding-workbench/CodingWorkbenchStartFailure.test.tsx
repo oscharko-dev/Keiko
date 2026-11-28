@@ -7,6 +7,7 @@
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
@@ -102,6 +103,7 @@ vi.mock("../../context/ActiveWorkspaceContext", async (importOriginal) => {
 });
 
 const AT = "2026-07-13T12:00:00.000Z";
+const AXE_OPTIONS = { rules: { region: { enabled: false } } } as const;
 const CORRELATION_ID = "ui-f09a-correlation";
 
 function codingModel(): ModelCapability {
@@ -249,18 +251,87 @@ function sidecarProfile(): unknown {
   };
 }
 
-function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+// U-14: another paired window of the same installation already runs a task. The start is refused
+// as an active-run conflict and the next status read shows the other window's run. The two windows
+// share one private draft: either it refuses this window's save (a stale revision), or it saves and
+// then hands back the text the other window left, an empty one.
+const otherWindowRun = {
+  active: false,
+  started: false,
+  draft: "conflict" as "conflict" | "replaced",
+  statusFails: false,
+};
+
+function otherWindowDraftResponse(method: string, body: string): Response {
+  if (otherWindowRun.draft === "conflict") {
+    return method === "PUT"
+      ? jsonResponse(409, { error: { code: "DRAFT_CONFLICT", message: "Draft revision stale." } })
+      : jsonResponse(200, { text: "", revision: 3 });
+  }
+  if (method === "PUT") {
+    const saved = JSON.parse(body) as { text: string };
+    return jsonResponse(200, { text: saved.text, revision: 4 });
+  }
+  return jsonResponse(200, { text: "", revision: otherWindowRun.started ? 5 : 3 });
+}
+
+function otherWindowStatusResponse(): Response {
+  return jsonResponse(200, {
+    schemaVersion: "1",
+    state: "running",
+    runId: "run-other-window",
+    revision: 5,
+    updatedAt: AT,
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+  });
+}
+
+function otherWindowRunResponse(url: string, init: RequestInit | undefined): Response | undefined {
+  if (!otherWindowRun.active) return undefined;
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "POST" && url.endsWith("/api/coding-workbench/runtime/runs")) {
-    return Promise.resolve(
-      jsonResponse(403, {
-        error: {
-          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
-          message: "Runtime request was rejected.",
-        },
-      }),
-    );
+    otherWindowRun.started = true;
+    return jsonResponse(409, {
+      error: { code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT", message: "Run already active." },
+    });
+  }
+  if (url.includes("/api/coding-workbench/drafts/")) {
+    return otherWindowDraftResponse(method, typeof init?.body === "string" ? init.body : "");
+  }
+  const reading = url.includes("/api/coding-workbench/runtime/status");
+  if (reading && otherWindowRun.statusFails) {
+    return jsonResponse(500, { error: { code: "INTERNAL", message: "Status unavailable." } });
+  }
+  return reading && otherWindowRun.started ? otherWindowStatusResponse() : undefined;
+}
+
+function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const other = otherWindowRunResponse(url, init);
+  return other === undefined ? routeBaseFetch(url, init) : Promise.resolve(other);
+}
+
+// U-20: the server answers a start only after it launched the runtime, which takes seconds. While
+// `hold` is set the start request stays open until `release` answers it (with the usual refusal).
+const heldStart = { hold: false, release: (): void => undefined };
+
+function refusedStartResponse(): Response {
+  return jsonResponse(403, {
+    error: {
+      code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+      message: "Runtime request was rejected.",
+    },
+  });
+}
+
+function routeBaseFetch(url: string, init?: RequestInit): Promise<Response> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method === "POST" && url.endsWith("/api/coding-workbench/runtime/runs")) {
+    if (!heldStart.hold) return Promise.resolve(refusedStartResponse());
+    return new Promise<Response>((resolve) => {
+      heldStart.release = (): void => resolve(refusedStartResponse());
+    });
   }
   if (url.includes("/api/coding-workbench/runtime/status")) {
     return Promise.resolve(jsonResponse(200, idleSnapshot()));
@@ -307,9 +378,57 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
   });
 
   afterEach((): void => {
+    heldStart.hold = false;
+    heldStart.release = (): void => undefined;
+    otherWindowRun.active = false;
+    otherWindowRun.started = false;
+    otherWindowRun.draft = "conflict";
+    otherWindowRun.statusFails = false;
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     resetSupportReportOutcomesForTests();
+  });
+
+  // U-20: a person who pressed Start saw "No active coding run." for seconds while the server
+  // launched the runtime, and pressed again. The status line says the start is under way, the typed
+  // text stays visible but read-only, and a refused start hands the text back unchanged.
+  it("shows the start under way at once and keeps the typed text through a refusal (U-20, U-14)", async (): Promise<void> => {
+    heldStart.hold = true;
+    const user = userEvent.setup();
+    render(<CodingWorkbenchWindow />);
+    const task = screen.getByLabelText("Task instructions");
+    await user.type(task, "Fix the flaky retry loop");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+        "data-on",
+        "true",
+      );
+    });
+    expect(screen.getByTestId("coding-runtime-announcement")).not.toHaveTextContent("Starting");
+
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Starting$/u);
+    });
+    expect(screen.queryByText("No active coding run.")).toBeNull();
+    expect(task).toHaveValue("Fix the flaky retry loop");
+    expect(task).toHaveAttribute("readonly");
+    expect(task).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("button", { name: "Start coding run" })).toBeNull();
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+
+    await act(async () => {
+      heldStart.release();
+      await Promise.resolve();
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
+    expect(task).toHaveValue("Fix the flaky retry loop");
+    expect(task).not.toHaveAttribute("readonly");
+    expect(task).not.toHaveAttribute("aria-busy");
+    expect(screen.getByTestId("coding-runtime-announcement")).not.toHaveTextContent("Starting");
   });
 
   it("surfaces a rejected start as a visible alert carrying the error code and correlation id", async (): Promise<void> => {
@@ -358,5 +477,150 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
       "href",
       "blob:keiko-report",
     );
+  });
+
+  function draftCalls(method: "GET" | "PUT"): number {
+    return vi
+      .mocked(fetch)
+      .mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes("/api/coding-workbench/drafts/") &&
+          (init?.method ?? "GET") === method,
+      ).length;
+  }
+
+  function statusReads(): number {
+    return vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).includes("/api/coding-workbench/runtime/status"))
+      .length;
+  }
+
+  async function startRefusedByOtherWindow(task: string): Promise<void> {
+    otherWindowRun.active = true;
+    const user = userEvent.setup();
+    render(<CodingWorkbenchWindow draftKey="coding" />);
+    await user.type(screen.getByLabelText("Task instructions"), task);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+        "data-on",
+        "true",
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    await waitFor(() => expect(otherWindowRun.started).toBe(true));
+    // The next status read adopts the other window's run: its Stop control replaces Start.
+    await screen.findByRole("button", { name: "Stop run" });
+  }
+
+  it("drops the refused start's alert when the person begins a new task (U-42)", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const { rerender } = render(<CodingWorkbenchWindow />);
+    await user.type(screen.getByLabelText("Task instructions"), "Fix the flaky retry loop");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+        "data-on",
+        "true",
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+    );
+
+    rerender(<CodingWorkbenchWindow historySelection="new:task-2" />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED/)).toBeNull();
+    });
+  });
+
+  it("keeps the typed task and says why when another window's run refuses the start (U-14)", async (): Promise<void> => {
+    const task = "Fix the flaky retry loop";
+    await startRefusedByOtherWindow(task);
+
+    expect(
+      screen.getByText(/Another coding run is already active in this installation/u),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Task instructions")).toHaveValue(task);
+  });
+
+  it("keeps the task in this window only when the shared draft hands back an empty text (U-14)", async (): Promise<void> => {
+    otherWindowRun.draft = "replaced";
+    const task = "Fix the flaky retry loop";
+    await startRefusedByOtherWindow(task);
+
+    // The shared draft saved the task once; the other window then cleared it on purpose, so the
+    // next read hands back an empty text. This window keeps showing its task and writes nothing.
+    await waitFor(() => expect(draftCalls("PUT")).toBe(1));
+    const reads = draftCalls("GET");
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(draftCalls("GET")).toBeGreaterThan(reads));
+    expect(screen.getByLabelText("Task instructions")).toHaveValue(task);
+    // A write-back would follow the draft's debounce: poll past it and see that none comes.
+    await expect(
+      waitFor(() => expect(draftCalls("PUT")).toBeGreaterThan(1), { timeout: 900 }),
+    ).rejects.toThrow();
+    expect(draftCalls("PUT")).toBe(1);
+  });
+
+  it("raises the refresh error when the same read fails as an ordinary, non-quiet read (U-14)", async (): Promise<void> => {
+    otherWindowRun.active = true;
+    otherWindowRun.statusFails = true;
+    render(<CodingWorkbenchWindow />);
+
+    expect(await screen.findByText("Run could not be refreshed.")).toBeInTheDocument();
+  });
+
+  it("does not flash a refresh error when the read on return fails while a run is followed (U-14)", async (): Promise<void> => {
+    otherWindowRun.active = true;
+    otherWindowRun.started = true;
+    render(<CodingWorkbenchWindow />);
+    await screen.findByRole("button", { name: "Stop run" });
+
+    otherWindowRun.statusFails = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(statusReads()).toBeGreaterThan(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Run could not be refreshed.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+
+  it("shows a run another window started as soon as the person returns to this window (U-14)", async (): Promise<void> => {
+    otherWindowRun.active = true;
+    render(<CodingWorkbenchWindow />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Stop run" })).not.toBeInTheDocument();
+
+    // The other window starts its run; this one is told nothing until the person comes back.
+    otherWindowRun.started = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start coding run" })).not.toBeInTheDocument();
+  });
+
+  it("lets the person clear the kept task on purpose (U-14)", async (): Promise<void> => {
+    otherWindowRun.draft = "replaced";
+    await startRefusedByOtherWindow("Fix the flaky retry loop");
+
+    await userEvent.setup().clear(screen.getByLabelText("Task instructions"));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Task instructions")).toHaveValue("");
+    });
   });
 });

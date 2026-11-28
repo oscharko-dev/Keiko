@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor, type RenderHookResult } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionChannelSnapshot } from "@oscharko-dev/keiko-contracts";
 
@@ -7,6 +7,12 @@ import {
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { ApiError } from "./api";
+import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+} from "./browser-stream-capacity";
+import { CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT } from "./useCodingWorkbenchEarlierRunFeeds";
 import { correlationIdOf } from "./client-error-summary";
 import type { CodingAppSessionStreamInput } from "./coding-app-session-channel-api";
 import type { ClientDiagnosticMeta } from "./client-diagnostics";
@@ -401,6 +407,195 @@ describe("useCodingWorkbenchSafeActivity", () => {
     await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
   });
 
+  // U-11: a continuation is a new run in the same task, and the server's projection holds one run
+  // at a time. The tool rows of the run before it stay, as standalone OpenCode keeps an earlier
+  // turn's tool parts, whether that run was stopped or completed.
+  function activitySnapshot(
+    runId: string,
+    toolState: "running" | "succeeded",
+  ): CodingAppSessionChannelSnapshot {
+    const base = snapshot(0, runId);
+    const content = base.content;
+    if (content?.kind !== "safe-activity" || !("feed" in content)) throw new TypeError("fixture");
+    if (content.feed.availability !== "available") throw new TypeError("fixture");
+    return {
+      ...base,
+      content: {
+        ...content,
+        feed: {
+          ...content.feed,
+          turns: [
+            {
+              turnId: `turn-${runId}`,
+              messages: [],
+              tools: [{ callId: `call-${runId}`, tool: "read", state: toolState, occurredAt: AT }],
+              truncated: false,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  it.each([
+    ["stopped", "cancelled", "running", "cancelled"],
+    ["completed", "succeeded", "succeeded", "succeeded"],
+  ] as const)(
+    "keeps the tool rows of a %s run when a continuation starts in the same task",
+    async (_name, endState, toolState, shownState) => {
+      getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+        activitySnapshot("run-1", toolState),
+      );
+      const view = renderHook(
+        (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+        {
+          initialProps: {
+            runId: "run-1",
+            runState: "running",
+            runtimeEventSignal: 0,
+            conversationId: "task-1",
+          } as UseCodingWorkbenchSafeActivityInput,
+        },
+      );
+      await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-1"));
+      expect(view.result.current.earlierFeeds).toEqual([]);
+      view.rerender({
+        runId: "run-1",
+        runState: endState,
+        runtimeEventSignal: 1,
+        conversationId: "task-1",
+      });
+
+      getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+        activitySnapshot("run-2", "running"),
+      );
+      view.rerender({
+        runId: "run-2",
+        runState: "running",
+        runtimeEventSignal: 0,
+        conversationId: "task-1",
+      });
+      await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+      const earlier = view.result.current.earlierFeeds ?? [];
+      expect(earlier.map((feed) => feed.runId)).toEqual(["run-1"]);
+      expect(earlier[0]?.turns[0]?.tools.map((tool) => tool.state)).toEqual([shownState]);
+    },
+  );
+
+  it("never offers the earlier feed of another task", async () => {
+    getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+      activitySnapshot("run-1", "succeeded"),
+    );
+    const view = renderHook(
+      (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+      {
+        initialProps: {
+          runId: "run-1",
+          runState: "succeeded",
+          runtimeEventSignal: 0,
+          conversationId: "task-1",
+        } as UseCodingWorkbenchSafeActivityInput,
+      },
+    );
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-1"));
+    getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+      activitySnapshot("run-2", "running"),
+    );
+    view.rerender({
+      runId: "run-2",
+      runState: "running",
+      runtimeEventSignal: 0,
+      conversationId: "task-2",
+    });
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+    expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
+  type EarlierInput = UseCodingWorkbenchSafeActivityInput;
+  type EarlierView = RenderHookResult<
+    ReturnType<typeof useCodingWorkbenchSafeActivity>,
+    EarlierInput
+  >;
+
+  async function showRun(
+    view: EarlierView,
+    input: EarlierInput,
+    toolState: "running" | "succeeded" = "succeeded",
+  ): Promise<void> {
+    const runId = input.runId ?? "run-unnamed";
+    getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+      activitySnapshot(runId, toolState),
+    );
+    view.rerender(input);
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe(runId));
+  }
+
+  function renderEarlier(initial: EarlierInput): EarlierView {
+    return renderHook((input: EarlierInput) => useCodingWorkbenchSafeActivity(input), {
+      initialProps: initial,
+    });
+  }
+
+  it("keeps a run that is still live as it was, not settled as cancelled", async () => {
+    const first: EarlierInput = {
+      runId: "run-1",
+      runState: "running",
+      runtimeEventSignal: 0,
+      conversationId: "task-1",
+    };
+    const view = renderEarlier(first);
+    await showRun(view, first, "running");
+    await showRun(view, { ...first, runId: "run-2" });
+    const tools = view.result.current.earlierFeeds?.[0]?.turns[0]?.tools ?? [];
+    expect(tools.map((tool) => tool.state)).toEqual(["running"]);
+  });
+
+  it("drops the feeds of other tasks when the shown task changes", async () => {
+    const first: EarlierInput = {
+      runId: "run-1",
+      runState: "succeeded",
+      runtimeEventSignal: 0,
+      conversationId: "task-1",
+    };
+    const view = renderEarlier(first);
+    await showRun(view, first);
+    await showRun(view, { ...first, runId: "run-2" });
+    expect(view.result.current.earlierFeeds?.map((feed) => feed.runId)).toEqual(["run-1"]);
+    await showRun(view, { ...first, runId: "run-3", conversationId: "task-2" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+    await showRun(view, { ...first, runId: "run-4", conversationId: "task-1" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
+  it("keeps nothing for a run that names no task", async () => {
+    const first: EarlierInput = { runId: "run-1", runState: "succeeded", runtimeEventSignal: 0 };
+    const view = renderEarlier(first);
+    await showRun(view, first);
+    await showRun(view, { ...first, runId: "run-2" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+    await showRun(view, { ...first, runId: "run-3", conversationId: "task-1" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
+  it("holds at most the bound of earlier runs and evicts the oldest first", async () => {
+    const first: EarlierInput = {
+      runId: "run-1",
+      runState: "succeeded",
+      runtimeEventSignal: 0,
+      conversationId: "task-1",
+    };
+    const view = renderEarlier(first);
+    await showRun(view, first);
+    const runs = CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT + 2;
+    for (let run = 2; run <= runs; run += 1) {
+      await showRun(view, { ...first, runId: `run-${String(run)}` });
+    }
+    const held = (view.result.current.earlierFeeds ?? []).map((feed) => feed.runId);
+    expect(held).toHaveLength(CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT);
+    expect(held[0]).toBe("run-2");
+    expect(held.at(-1)).toBe(`run-${String(runs - 1)}`);
+  });
+
   // Stability audit item 5: every reconnect used to blank the conversation until the snapshot read
   // answered, and a failed read then left it blank. The feed already held is kept, captioned by the
   // non-live status, until a new snapshot replaces it.
@@ -622,6 +817,73 @@ describe("useCodingWorkbenchSafeActivity", () => {
 
     await waitFor(() => expect(view.result.current.status).toBe("unavailable"));
     expect(view.result.current.feed).toBeNull();
+  });
+
+  it("reads a recovery-required run without a projection as needing attention, not as a lost connection (U-23)", async () => {
+    getSnapshotMock.mockResolvedValue(unavailableSnapshot());
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "recovery-required",
+        runtimeEventSignal: 0,
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.status).toBe("recovery"));
+    expect(view.result.current.feed).toBeNull();
+  });
+
+  it("turns a recovery-required run without a projection into ended once it is cancelled (U-23)", async () => {
+    getSnapshotMock.mockResolvedValue(unavailableSnapshot());
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(
+      ({ runState }: { readonly runState: "recovery-required" | "cancelled" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "recovery-required" as "recovery-required" | "cancelled" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("recovery"));
+
+    view.rerender({ runState: "cancelled" });
+
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.feed).toBeNull();
+  });
+
+  it("replaces the recovery status when a projection appears on the open channel later (U-23)", async () => {
+    getSnapshotMock.mockResolvedValue(unavailableSnapshot());
+    let publish: ((value: CodingAppSessionChannelSnapshot) => void) | undefined;
+    streamSnapshotsMock.mockImplementation(
+      ({
+        signal,
+        onSnapshot,
+      }: {
+        readonly signal: AbortSignal;
+        readonly onSnapshot: typeof publish;
+      }): Promise<void> => {
+        publish = onSnapshot;
+        return new Promise((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "recovery-required",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("recovery"));
+    expect(view.result.current.feed).toBeNull();
+
+    act(() => {
+      publish?.(snapshot(1));
+    });
+
+    await waitFor(() => expect(view.result.current.feed).not.toBeNull());
+    expect(view.result.current.status).toBe("recovery");
+    view.unmount();
   });
 
   it("labels the projection as offline when the transport throws a TypeError", async () => {
@@ -927,5 +1189,203 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(finished.result.current.status).toBe("ended");
     await act(async () => vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS));
     expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useCodingWorkbenchSafeActivity final activity confirmation", () => {
+  beforeEach(() => {
+    getSnapshotMock.mockReset();
+    streamSnapshotsMock.mockReset();
+    getSnapshotMock.mockResolvedValue(snapshot());
+    holdStreamUntilAbort();
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("confirms the feed of a run that was already settled when it was read", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "succeeded",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("ended"));
+    expect(view.result.current.finalConfirmed).toBe(true);
+  });
+
+  it("does not call a feed read while the run was live final, and re-reads it once the run settles", async () => {
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+
+    getSnapshotMock.mockResolvedValue(repliedSnapshot());
+    view.rerender({ runState: "succeeded" });
+    // The held feed predates the settlement: it is never confirmed final until it is read again.
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+    await waitFor(() => expect(view.result.current.finalConfirmed).toBe(true));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(view.result.current.feed?.turns).toHaveLength(1);
+  });
+
+  it("re-reads silently: the shown feed and status stay, no loading caption appears at run end", async () => {
+    const statuses: string[] = [];
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) => {
+        const result = useCodingWorkbenchSafeActivity({
+          runId: "run-1",
+          runState,
+          runtimeEventSignal: 0,
+        });
+        statuses.push(result.status);
+        return result;
+      },
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    statuses.length = 0;
+    getSnapshotMock.mockResolvedValue(repliedSnapshot());
+    view.rerender({ runState: "succeeded" });
+    await waitFor(() => expect(view.result.current.finalConfirmed).toBe(true));
+    expect(statuses).not.toContain("loading");
+    expect(statuses).not.toContain("unavailable");
+    expect(view.result.current.status).toBe("ended");
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a failed settle re-read unconfirmed without an error, then retries within the bounds", async () => {
+    vi.useFakeTimers();
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    const settle = async (): Promise<void> => {
+      await act(async () => {
+        for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    };
+    await settle();
+    expect(view.result.current.status).toBe("live");
+
+    getSnapshotMock.mockRejectedValueOnce(new TypeError("network"));
+    getSnapshotMock.mockResolvedValue(repliedSnapshot());
+    view.rerender({ runState: "succeeded" });
+    await settle();
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+    expect(view.result.current.errorCode).toBeNull();
+
+    await act(async () =>
+      vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS[0] ?? 0),
+    );
+    await settle();
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.finalConfirmed).toBe(true);
+    expect(getSnapshotMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after the bounded attempts and never shows the run's activity as unavailable", async () => {
+    vi.useFakeTimers();
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    getSnapshotMock.mockRejectedValue(new TypeError("network"));
+    view.rerender({ runState: "succeeded" });
+    await act(async () => vi.advanceTimersByTimeAsync(120_000));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(
+      1 + 1 + CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS.length,
+    );
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+  });
+});
+
+describe("useCodingWorkbenchSafeActivity under origin stream capacity", () => {
+  beforeEach(() => {
+    getSnapshotMock.mockReset();
+    streamSnapshotsMock.mockReset();
+    getSnapshotMock.mockResolvedValue(snapshot());
+    holdStreamUntilAbort();
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("closes a hidden tab's stream for a visible tab's essential stream and reopens it from a fresh snapshot", async () => {
+    const held = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await advance(50);
+    expect(view.result.current.status).toBe("live");
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(1);
+    const admitted = vi.fn();
+    const otherTab = admitDirectBrowserStream(admitted);
+    await advance(0);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    await advance(10_000);
+    const first = streamSnapshotsMock.mock.calls[0]?.[0] as CodingAppSessionStreamInput;
+    expect(first.signal?.aborted).toBe(true);
+    expect(admitted).toHaveBeenCalledOnce();
+    // A yield is not a lost connection: no failure and no reconnect attempt.
+    expect(view.result.current.status).toBe("live");
+    otherTab.release();
+    await advance(5_000);
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(2);
+    expect(getSnapshotMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(view.result.current.status).toBe("live");
+    view.unmount();
+    held.forEach((admission) => admission.release());
+  });
+
+  it("reports a long wait for a free connection and clears it once the stream is admitted", async () => {
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await advance(0);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await advance(60_000);
+    expect(view.result.current.connectionWaiting).toBe(true);
+    expect(streamSnapshotsMock).not.toHaveBeenCalled();
+    held[0]?.release();
+    await advance(2_000);
+    expect(view.result.current.connectionWaiting).toBe(false);
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(1);
+    view.unmount();
+    held.forEach((admission) => admission.release());
   });
 });

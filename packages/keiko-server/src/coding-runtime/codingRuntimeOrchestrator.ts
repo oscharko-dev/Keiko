@@ -27,7 +27,9 @@ import type {
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchStopCause,
   CodingWorkbenchVerificationGap,
+  CodingWorkbenchVerificationGapDetail,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -37,6 +39,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { repositoryRootsAreSameFolder } from "./repositoryRootIdentity.js";
 import {
   CODING_WORKBENCH_RUNTIME_ORIGINS,
   DEFAULT_CODING_WORKBENCH_AGENT,
@@ -104,7 +107,11 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import type { CodingRuntimeInboxItems } from "./codingRuntimeInbox.js";
-import type { CodingRuntimeRevertState, CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import type {
+  CodingRuntimeRevertState,
+  CodingRuntimeStagedRevertOutcome,
+  CodingRuntimeTurnOrigin,
+} from "./codingRuntimeRevert.js";
 import {
   narrowerMode,
   type ScheduledWakeBlock,
@@ -462,6 +469,7 @@ const CODING_RUNTIME_APPROVAL_WAITING_OPERATION = defineActivityLogOperation({
         "system-mutation",
       ],
     },
+    expiresInMs: { type: "integer", dataClass: "duration", required: false },
     queuePosition: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
@@ -488,7 +496,12 @@ const CODING_RUNTIME_APPROVAL_RETIRED_OPERATION = defineActivityLogOperation({
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     revision: { type: "integer", dataClass: "count", required: true },
     requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    reason: { type: "string", dataClass: "closed-enum", required: true, values: ["expired"] },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["expired", "queue-full"],
+    },
     replaced: { type: "boolean", dataClass: "closed-enum", required: true },
   },
   causal: "correlation",
@@ -603,6 +616,8 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
         "task-submitted",
         "observation-streamed",
         "native-retry-changed",
+        "native-subagents-changed",
+        "native-agent-models-refused",
         "permission-requested",
         "diff-summarized",
         "verification-summarized",
@@ -794,6 +809,13 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       required: false,
       values: [...VERIFICATION_GAP_WORDS],
     },
+    // What the `check-failed` gap adds (U-38): Keiko asked once and the run changed no code after.
+    verificationGapDetail: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unchanged-after-continuation"],
+    },
     taskOutcomeStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -934,7 +956,7 @@ const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation
   emitter: "coding-runtime.codingRuntimeOrchestrator.deliveryTruthfulOutcome",
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    issueNumber: { type: "integer", dataClass: "count", required: true },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
     hasVerifiedCommit: { type: "boolean", dataClass: "closed-enum", required: true },
     hasDraftDelivery: { type: "boolean", dataClass: "closed-enum", required: true },
     reportedOutcome: {
@@ -952,6 +974,17 @@ const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation
   proofIds: ["coding-runtime.run.delivery-unevidenced.emitted-line"],
   releaseImpact: "patch",
 });
+
+/**
+ * What Keiko's shutdown interrupted (U-31): a run waiting on the person, or any other live run.
+ * Chosen from the state alone and never a claim about changes: an approval can be released while the
+ * state still reads waiting, and parallel tool calls can run beside a waiting one. A run already
+ * `stopping` is a person's Stop in flight and gets no shutdown cause.
+ */
+function shutdownStopCause(current: CodingRuntimeSnapshot): CodingWorkbenchStopCause | undefined {
+  if (current.state === "stopping") return undefined;
+  return waitsOnPerson(current) ? "server-shutdown-waiting" : "server-shutdown-working";
+}
 
 const CODING_RUNTIME_RUN_SHUTDOWN_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -1350,9 +1383,33 @@ function recordRuntimeStartFailure(
   });
 }
 
-/** Why a start could not resolve its workspace, principal or task history (#4492). */
+/**
+ * Why a start could not resolve its workspace, principal or task history (#4492), or why it named
+ * another repository than the active workspace (`workspace-selection-mismatch`).
+ */
 type StartScopeGap =
-  "no-active-workspace" | "no-principal" | "conversation-not-admitted" | "prior-run-missing";
+  | "no-active-workspace"
+  // The identity proof could not run (a transient read failure): not a drifted pointer, so it stays
+  // the generic authority failure and never asks the window to bind again.
+  | "identity-proof-failed"
+  | "no-principal"
+  | "conversation-not-admitted"
+  | "prior-run-missing"
+  | "workspace-selection-mismatch"
+  // The request states no repository (a stale window): the selection guard cannot run, so the start
+  // stays refused.
+  | "expected-workspace-missing";
+
+// A wake continues on the model its task last used, except the generic `coding` alias.
+function wakeModelSelection(modelId: string | undefined): { readonly modelId?: string } {
+  return modelId === undefined || modelId === "coding" ? {} : { modelId };
+}
+
+// The two roots a mismatch compares, named in the log by digest only: a path is never logged.
+function selectionMismatchDetail(expectedRoot: string, activeRoot: string): string {
+  const digest = (root: string): string => sha256Hex(root).slice(0, 16);
+  return `:expected=${digest(expectedRoot)}:active=${digest(activeRoot)}`;
+}
 
 // The start refusal `authority-resolution-failed` covers four different gaps; the operator's log
 // names which one, so a customer report locates it without a reproduction (#4492: a recreated
@@ -1361,6 +1418,7 @@ function recordStartScopeGap(
   diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string | undefined,
   gap: StartScopeGap,
+  detail = "",
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId:
@@ -1372,8 +1430,49 @@ function recordStartScopeGap(
     source: "coding-runtime-orchestrator.start",
     errorClass: "CodingRuntimeStartScopeUnresolved",
     message: "runtime-start-failed",
-    code: `stage=start-scope:reason=${gap}`,
+    code: `stage=start-scope:reason=${gap}${detail}`,
   });
+}
+
+function startScopeFailureCode(
+  gap: StartScopeGap,
+): "expected-workspace-missing" | "workspace-selection-mismatch" | "authority-resolution-failed" {
+  if (gap === "expected-workspace-missing") return "expected-workspace-missing";
+  if (gap === "workspace-selection-mismatch" || gap === "no-active-workspace")
+    return "workspace-selection-mismatch";
+  return "authority-resolution-failed";
+}
+
+// A root the filesystem cannot be asked about (a permission or path error) is not proven the same
+// folder: the start is refused as a selection mismatch and the cause is logged body-free with the
+// request's correlation id, never surfaced as an opaque server error.
+function rootsAreSameFolderOrReport(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  expectedRoot: string,
+  activeRoot: string,
+): boolean {
+  try {
+    return repositoryRootsAreSameFolder(expectedRoot, activeRoot);
+  } catch (error) {
+    const described = describeError(error);
+    emitServerDiagnostic(diagnostics, {
+      correlationId:
+        correlationId !== undefined && isValidCorrelationId(correlationId)
+          ? correlationId
+          : UNKNOWN_CORRELATION_ID,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.start",
+      source: "coding-runtime-orchestrator.start",
+      ...described,
+      message: "runtime-start-failed",
+      // The closed reason, with the machine errno (EACCES, ENOENT) the lookup failed with.
+      code: `stage=start-scope:reason=root-lookup-failed${
+        described.code === undefined ? "" : `:errno=${described.code}`
+      }`,
+    });
+    return false;
+  }
 }
 
 function recordRuntimeLifecycleFailure(
@@ -1604,8 +1703,10 @@ function recordRuntimeApprovalWaiting(
   runId: string,
   revision: number,
   permission: CodingWorkbenchRuntimePendingPermission,
+  nowMs: number,
   queuePosition?: number,
 ): void {
+  const expiresInMs = Date.parse(permission.expiresAt) - nowMs;
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_APPROVAL_WAITING_OPERATION,
@@ -1617,6 +1718,7 @@ function recordRuntimeApprovalWaiting(
         permissionKind: permission.kind,
         actionClass: permission.actionClass,
         ...(permission.actionKind === undefined ? {} : { actionKind: permission.actionKind }),
+        ...(Number.isFinite(expiresInMs) ? { expiresInMs: Math.max(0, expiresInMs) } : {}),
         ...(queuePosition === undefined ? {} : { queuePosition }),
       },
     ),
@@ -1629,12 +1731,13 @@ function recordRuntimeApprovalRetired(
   revision: number,
   requestId: string,
   replaced: boolean,
+  reason: "expired" | "queue-full" = "expired",
 ): void {
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_APPROVAL_RETIRED_OPERATION,
       { correlationId: runtimeDiagnosticCorrelationId(runId) },
-      { runId, revision, requestId, reason: "expired", replaced },
+      { runId, revision, requestId, reason, replaced },
     ),
   );
 }
@@ -1831,6 +1934,7 @@ interface RunSettledLogFacts {
   readonly cause?: RunSettlementCause | undefined;
   readonly verificationBlockedReason?: CodingVerificationBlockedReason | undefined;
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+  readonly verificationGapDetail?: CodingWorkbenchVerificationGapDetail | undefined;
 }
 
 function recordRuntimeRunSettled(
@@ -1840,7 +1944,8 @@ function recordRuntimeRunSettled(
   effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
   facts: RunSettledLogFacts,
 ): void {
-  const { failureCode, cause, verificationBlockedReason, verificationGap } = facts;
+  const { failureCode, cause, verificationBlockedReason, verificationGap, verificationGapDetail } =
+    facts;
   const errorKind = settlementErrorKind(state, cause, verificationBlockedReason, verificationGap);
   activityLog?.write(
     activityLogEvent(
@@ -1860,6 +1965,7 @@ function recordRuntimeRunSettled(
         ...(failureCode === undefined ? {} : { failureCode }),
         ...(verificationBlockedReason === undefined ? {} : { verificationBlockedReason }),
         ...(verificationGap === undefined ? {} : { verificationGap }),
+        ...(verificationGapDetail === undefined ? {} : { verificationGapDetail }),
         ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
         ...effort,
@@ -1873,6 +1979,8 @@ interface VerificationFailureSettlement {
   readonly failureCode: "verification-not-evidenced";
   /** Why no passing check followed the run's last change (#4491). */
   readonly gap: CodingWorkbenchVerificationGap;
+  /** What the gap adds: the model was asked once and changed no code afterwards (U-38). */
+  readonly gapDetail?: CodingWorkbenchVerificationGapDetail;
 }
 
 // The fact that named a failed run's cause: its own bounds or its last failed model call (F9), or
@@ -2081,16 +2189,13 @@ function isTerminalRuntimeState(
 }
 
 /**
- * Server-side ceiling on how long one approval challenge may live.
+ * Server-owned lifetime of one approval challenge.
  *
- * The lifetime arrives on the runtime child's `permission-requested` event as
- * `permissionRequest.expiresAt`. The child is on the untrusted side of the boundary — it is the
- * process the approval is being asked ABOUT — so it must not choose its own security lifetime. This
- * ceiling is the trusted counterpart of the 5-minute value the generated child-side tool source
- * happens to send today: a child that asks for longer (or a tampered one that asks for a year) is
- * clamped here, before the instant becomes the challenge expiry, the operator-visible deadline on
- * the approval card, and the TTL of the minted approval authority. All three derive from this one
- * clamped instant, so the card can never display a deadline the server does not enforce.
+ * The runtime child's `permissionRequest.expiresAt` is NOT trusted in either direction: the child is
+ * the process the approval is being asked ABOUT, so a shorter value must not end a person's
+ * decision early (W-6: a 5-minute ask lost a run's commit) and a longer one must not extend it. The
+ * server derives the instant from this value, and the challenge expiry, the operator-visible
+ * deadline on the approval card and the TTL of the minted approval authority all share it.
  *
  * It is the contract's one human-decision wait, so the catalog budget, the tool bridge deadline and
  * the plugin client timeout of every tool that waits for an approval derive from the same value
@@ -2205,7 +2310,15 @@ export class CodingRuntimeOrchestrator {
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
+  // The commit proposal a run's person explicitly denied: a deliberate "no" is not an unfinished
+  // delivery. It covers only that proposal, so a later proposal settles on its own outcome.
+  private readonly deniedCommitProposals = new Map<string, string>();
   private readonly verificationContinuations = new Map<string, number>();
+  // The run's code-edit revision when its verification continuation was dispatched (U-38).
+  private readonly continuationRevisions = new Map<
+    string,
+    { readonly revision: number; readonly target: string }
+  >();
   // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
   // settles.
   private readonly editRefusals = new CodingRuntimeEditRefusalStreaks();
@@ -2319,7 +2432,7 @@ export class CodingRuntimeOrchestrator {
         deps.taskDispatcher.revertState?.(runId),
       hold: async (runId, outcome): Promise<CodingRuntimeHoldResult> =>
         (await deps.manager.hold?.(runId, outcome)) ?? deps.manager.stop(runId, outcome),
-      commitStagedRevert: async (runId): Promise<"committed" | "none" | "failed"> =>
+      commitStagedRevert: async (runId): Promise<CodingRuntimeStagedRevertOutcome> =>
         (await deps.taskDispatcher.commitRevert?.(runId)) ?? "none",
       stop: async (runId): Promise<boolean> => (await deps.manager.stop(runId, "succeeded")).ok,
       expire: (close): void => {
@@ -2351,6 +2464,9 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeStartResult> {
     // A start still queued in the serial lane when the server began shutting down launches nothing.
     if (this.shutdownBegan()) return this.fail("runtime-unavailable");
+    if (statesNoExpectedWorkspace(input)) {
+      return this.refuseStartScope({ gap: "expected-workspace-missing" }, correlationId);
+    }
     if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
     this.activeRunId = undefined;
     this.activeEffectiveMode = undefined;
@@ -2363,6 +2479,9 @@ export class CodingRuntimeOrchestrator {
 
   retry(runId: string, input: unknown, correlationId?: string): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
+      if (statesNoExpectedWorkspace(input)) {
+        return this.refuseStartScope({ gap: "expected-workspace-missing" }, correlationId);
+      }
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
       if (prior?.state !== "recovery-required" || !prior.recoveryAcknowledgedAt)
@@ -2671,6 +2790,7 @@ export class CodingRuntimeOrchestrator {
         runId,
         transitioned.snapshot.revision,
         approval.permission,
+        this.now().getTime(),
       );
       this.scheduleApprovalExpiry(runId, approval);
     }
@@ -2875,14 +2995,28 @@ export class CodingRuntimeOrchestrator {
     return undefined;
   }
 
+  // The bookkeeping every denial owes, whoever denied: a refused verification command blocks the
+  // run's verification evidence (an ordinary decision or the queue-bound refusal alike).
+  private noteApprovalDenied(
+    runId: string,
+    actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"],
+  ): void {
+    if (actionKind === "verification-command") {
+      this.effort.verificationBlocked(runId, "verification-command-denied");
+    }
+  }
+
   private finishApprovalDecision(
     current: CodingRuntimeSnapshot,
     challenge: ApprovalChallenge,
     decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"],
     actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"],
   ): CodingRuntimeOrchestratorResult {
-    if (decision === "denied" && actionKind === "verification-command") {
-      this.effort.verificationBlocked(current.runId, "verification-command-denied");
+    if (decision === "denied") {
+      this.noteApprovalDenied(current.runId, actionKind);
+      // Only the person's own decision is a denial; the queue bound's refusal is the system's.
+      if (actionKind === "commit")
+        this.deniedCommitProposals.set(current.runId, challenge.permission.requestId);
     }
     // A denial rejects this one step: the runtime already told the model, and the run goes on
     // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
@@ -2910,11 +3044,13 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     challenge: ApprovalChallenge,
     actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
+    cause?: "queue-full",
   ): void {
     this.deps.manager.declineApproval?.({
       runId,
       requestId: challenge.permission.requestId,
       actionKind,
+      ...(cause === undefined ? {} : { cause }),
     });
   }
 
@@ -3189,6 +3325,11 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const terminal = event.kind === "runtime-stopped" || event.kind === "failure-redacted";
     if (current.state !== "paused" || terminal) return undefined;
+    // Pause gates new actions; it does not stop the sessions already working. The port reports a
+    // changed subagent count once, so an absorbed count would stay lost after Resume.
+    if (event.kind === "native-subagents-changed") {
+      return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
+    }
     // A run paused FOR a decision is resumed by that decision settling, so this one event is the
     // exception to a paused run absorbing its runtime events.
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
@@ -3280,7 +3421,13 @@ export class CodingRuntimeOrchestrator {
   ): void {
     if (!EFFORT_COUNTED_STATES.has(current.state)) return;
     if (!recordRuntimeVerificationSummary(this.deps.activityLog, event)) return;
-    if (event.verificationKind === "targeted-test" && event.verificationTargetDigest === undefined)
+    // A digest-less targeted PASS names no target, so it clears nothing; a digest-less FAILURE is
+    // still a failed check and is recorded (2026-11-28: no check run settles, a failed one never).
+    if (
+      event.verificationKind === "targeted-test" &&
+      event.verificationTargetDigest === undefined &&
+      verificationSummaryPassed(event) !== false
+    )
       return;
     this.effort.verification(
       current.runId,
@@ -3372,6 +3519,7 @@ export class CodingRuntimeOrchestrator {
         live.runId,
         next.snapshot.revision,
         challenge.permission,
+        this.now().getTime(),
       );
       this.scheduleApprovalExpiry(live.runId, challenge);
     }
@@ -3463,13 +3611,15 @@ export class CodingRuntimeOrchestrator {
     const permission = event.permissionRequest;
     if (permission === undefined) return undefined;
     if (!permission.actionKind && !isNativeActionPermissionRequest(permission)) return undefined;
-    const requested = Date.parse(permission.expiresAt);
     const nowMs = this.now().getTime();
+    const requested = Date.parse(permission.expiresAt);
+    // A malformed or already elapsed instant is a malformed ask, refused as before; a valid one is
+    // not used for the lifetime at all.
     if (!Number.isFinite(requested) || requested <= nowMs) return undefined;
-    // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
-    // the permission itself, so the challenge expiry, the operator-visible deadline, and the minted
-    // approval TTL are one value the server owns (MAX_APPROVAL_CHALLENGE_TTL_MS).
-    const expiresAt = Math.min(requested, nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS);
+    // The runtime child sits on the untrusted side of the boundary, so it chooses no security
+    // lifetime in either direction: the server-owned human-decision wait is the one lifetime, and
+    // the challenge expiry, the card deadline and the minted authority TTL all derive from it.
+    const expiresAt = nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS;
     return {
       revision: current.revision + 1,
       expiresAt,
@@ -3494,7 +3644,7 @@ export class CodingRuntimeOrchestrator {
       return this.fail("invalid-intent");
     }
     if (queued.length >= MAX_QUEUED_APPROVALS_PER_RUN) {
-      return this.stopAfterApprovalFailure(current);
+      return await this.refuseOverflowApproval(current, challenge);
     }
     queued.push(challenge);
     this.queuedApprovals.set(current.runId, queued);
@@ -3503,9 +3653,37 @@ export class CodingRuntimeOrchestrator {
       current.runId,
       current.revision,
       challenge.permission,
+      this.now().getTime(),
       queued.length,
     );
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+  }
+
+  // The queue bound protects memory only: the one ask past it is refused as a denial the model
+  // reads like any rejected step, and the healthy run keeps going. Only a refusal that cannot be
+  // settled with the runtime fails closed, as every other unsettled decision does.
+  private async refuseOverflowApproval(
+    current: CodingRuntimeSnapshot,
+    challenge: ApprovalChallenge,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const { requestId, actionKind } = challenge.permission;
+    if (actionKind !== undefined) {
+      this.declineServerRaisedAsk(current.runId, challenge, actionKind, "queue-full");
+    }
+    const settled = await this.resolveRuntimePermission(current.runId, requestId, "denied");
+    const live = this.current();
+    if (live?.runId !== current.runId) return this.fail("invalid-intent");
+    if (!settled) return this.stopAfterApprovalFailure(live);
+    this.noteApprovalDenied(live.runId, actionKind);
+    recordRuntimeApprovalRetired(
+      this.deps.activityLog,
+      live.runId,
+      live.revision,
+      requestId,
+      false,
+      "queue-full",
+    );
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(live) };
   }
 
   private promoteQueuedApproval(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
@@ -3531,6 +3709,7 @@ export class CodingRuntimeOrchestrator {
       current.runId,
       waiting.snapshot.revision,
       promoted.permission,
+      this.now().getTime(),
     );
     this.scheduleApprovalExpiry(current.runId, promoted);
     return waiting;
@@ -3655,14 +3834,31 @@ export class CodingRuntimeOrchestrator {
     // Read before the stop: the facts describe the model call that ended this turn (F9). An
     // escalation of the run's refused edits wins over them: it names the run's cause (F5).
     const cause = escalation ?? this.terminalFailure(runId, outcome);
-    const verificationFailure: VerificationFailureSettlement | undefined = verificationMissing
-      ? {
-          state: "failed",
-          failureCode: "verification-not-evidenced",
-          gap: this.verificationGap(runId),
-        }
+    const verificationFailure = verificationMissing
+      ? this.verificationFailureSettlement(runId)
       : undefined;
     await this.stopAndSettleTask(runId, outcome, cause, verificationFailure);
+  }
+
+  /**
+   * The settlement of a run that changed code and has no passing check after its last change. Only
+   * a check that failed, could not start or ran out of budget fails the run; a run that simply ran
+   * no check keeps the outcome its turn reported (owner decision 2026-11-28), the gap recorded
+   * body-free on the Activity Log and the debt handed to the task's next follow-up.
+   */
+  private verificationFailureSettlement(runId: string): VerificationFailureSettlement | undefined {
+    const gap = this.verificationGap(runId);
+    if (gap === "no-check-run") {
+      this.recordVerificationNotEvidenced(runId, gap);
+      this.effort.handVerificationDebtOn(runId);
+      return undefined;
+    }
+    return {
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+      gap,
+      ...this.verificationGapDetail(runId),
+    };
   }
 
   private async stopAndSettleTask(
@@ -3724,6 +3920,22 @@ export class CodingRuntimeOrchestrator {
     return this.deps.toolBudgetExhausted?.(runId) === true ? "budget-exhausted" : "no-check-run";
   }
 
+  // A check that stays red although Keiko asked the model once to look at it, and the run changed no
+  // code afterwards, is a failure this run left as it found it (U-38): the person's own work may be
+  // done, and the result names exactly that instead of a repair that did not happen.
+  private verificationGapDetail(runId: string): {
+    readonly gapDetail?: CodingWorkbenchVerificationGapDetail;
+  } {
+    const dispatched = this.continuationRevisions.get(runId);
+    // The same check, not just any red one: a different target that is red now (the first turned
+    // green and another failed) is a new failure, and the generic status names it.
+    const unchanged =
+      dispatched !== undefined &&
+      this.effort.failedCheckTarget(runId)?.target === dispatched.target &&
+      this.effort.verificationRevision(runId) === dispatched.revision;
+    return unchanged ? { gapDetail: "unchanged-after-continuation" } : {};
+  }
+
   // Why no continuation runs: only a failed check, with a repair still unspent, justifies one.
   private verificationContinuationSkip(
     runId: string,
@@ -3734,7 +3946,9 @@ export class CodingRuntimeOrchestrator {
     // neither leaves anything the model could still repair, so no continuation runs.
     if (this.effort.verificationBlockedReason(runId) !== undefined) return "blocked";
     if (this.deps.toolBudgetExhausted?.(runId) === true) return "budget-exhausted";
-    return this.effort.failedCheck(runId) === undefined ? "no-failed-check" : undefined;
+    const failed = this.effort.failedCheckTarget(runId);
+    if (failed === undefined) return "no-failed-check";
+    return failed.provenOwn ? undefined : "target-unproven";
   }
 
   /** A run that changed documentation alone asks for no check; the line says why none was asked. */
@@ -3761,18 +3975,30 @@ export class CodingRuntimeOrchestrator {
     }
     const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
+    const asked = this.continuationAsked(live.runId);
     const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
     if (dispatched === undefined) return false;
     if (this.continuationSuperseded(live)) {
       recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
       return true;
     }
+    // Only a continuation the model actually received counts as "asked" (U-38).
+    if (asked !== undefined) this.continuationRevisions.set(live.runId, asked);
     recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "continued", {
       failure,
     });
     this.operations.observeContinuation(live.runId, dispatched.completion);
     this.advanceRevision(live, "task-submitted");
     return true;
+  }
+
+  // The check and edit revision a continuation is about to be asked for (U-38).
+  private continuationAsked(
+    runId: string,
+  ): { readonly revision: number; readonly target: string } | undefined {
+    const revision = this.effort.verificationRevision(runId);
+    const target = this.effort.failedCheckTarget(runId)?.target;
+    return revision === undefined || target === undefined ? undefined : { revision, target };
   }
 
   // The one continuation task, naming the failed check; a refused or thrown dispatch is logged and
@@ -3865,6 +4091,7 @@ export class CodingRuntimeOrchestrator {
       undefined,
       settledCause,
       verificationFailure?.gap,
+      verificationFailure?.gapDetail,
     );
   }
 
@@ -4116,20 +4343,26 @@ export class CodingRuntimeOrchestrator {
    * something and says so through its own facts. Neither means the terminal state is
    * `delivery-not-evidenced`, and the operator sees a truthful failure instead of a false success.
    *
-   * Deliberately scoped to issue-bound runs: an ad-hoc task ("explain this module") legitimately
-   * ends with no commit, and inferring delivery intent from free text would turn honest successes
-   * into false failures.
+   * An issue-bound run needs delivery evidence to succeed. Any other run is held to it only once its
+   * own recorded commit proposal ended without a commit (`unfinishedCommitOutcome`), unless the
+   * person denied that proposal: an ad-hoc task ("explain this module") legitimately ends with no
+   * commit, and inferring delivery intent from free text would turn honest successes into false
+   * failures.
    */
   private deliveryTruthfulOutcome(
     live: CodingRuntimeSnapshot,
     target: TaskOutcomeTarget,
   ):
     | {
-        readonly state: "cancelled" | "failed" | "succeeded";
+        readonly state: TaskOutcomeState;
         readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
       }
     | undefined {
-    if (target.state !== "succeeded" || live.issueBinding === undefined) return target;
+    if (target.state !== "succeeded") return target;
+    // A run that reached for a commit and has none is not a success, issue-bound or not: the model
+    // proposed it (the proposal outcome is persisted, blocked, failed or never approved) and no
+    // commit exists. No free text is read; the run's own recorded attempt is the evidence (W-6).
+    if (live.issueBinding === undefined) return this.unfinishedCommitOutcome(live, target);
     // Presence is not delivery. A `verifiedCommitResult` is persisted for every proposal outcome,
     // `verification-failed` and `blocked` included, and a `draftDelivery` record exists as soon as a
     // push is PROPOSED. Reading either as evidence would re-admit the false success this method
@@ -4157,6 +4390,47 @@ export class CodingRuntimeOrchestrator {
           issueNumber: live.issueBinding.issueNumber,
           hasVerifiedCommit,
           hasDraftDelivery,
+          reportedOutcome: "succeeded",
+          continuations: this.deliveryContinuations.get(live.runId) ?? 0,
+        },
+      ),
+    );
+    return { state: "failed", failureCode: "delivery-not-evidenced" };
+  }
+
+  // A person's explicit denial of the commit proposal is a decision, not a failure: the commit is
+  // not made and the run stays what it reported. Evidence that cannot be read settles nothing on a
+  // guess, exactly as for an issue-bound run: it asks for recovery.
+  private unfinishedCommitOutcome(
+    live: CodingRuntimeSnapshot,
+    target: TaskOutcomeTarget,
+  ):
+    | {
+        readonly state: TaskOutcomeState;
+        readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      }
+    | undefined {
+    const attempt = live.verifiedCommitResult;
+    if (attempt === undefined || attempt.status === "succeeded") return target;
+    if (this.deniedCommitProposals.get(live.runId) === attempt.proposalId) return target;
+    const evidence = this.deliveryEvidence(live);
+    if (!evidence.readable) {
+      this.recordDeliveryEvidenceUnreadable(live, evidence.error);
+      return undefined;
+    }
+    if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return target;
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION,
+        {
+          level: "warn",
+          correlationId: runtimeDiagnosticCorrelationId(live.runId),
+          errorKind: "validation-failed",
+        },
+        {
+          runId: live.runId,
+          hasVerifiedCommit: false,
+          hasDraftDelivery: false,
           reportedOutcome: "succeeded",
           continuations: this.deliveryContinuations.get(live.runId) ?? 0,
         },
@@ -4251,7 +4525,15 @@ export class CodingRuntimeOrchestrator {
       this.deps.safeActivityProjection?.purgeAll("shutdown", correlationId);
       return { ok: true, snapshot: this.projection.idle() };
     }
-    const result = await this.end("stop", current.runId, { requestId: current.runId });
+    // Named before the end so the settlement this stop produces carries it, whichever path settles.
+    const cause = shutdownStopCause(current);
+    if (cause !== undefined) this.shutdownStopCause = { runId: current.runId, cause };
+    let result: CodingRuntimeOrchestratorResult;
+    try {
+      result = await this.end("stop", current.runId, { requestId: current.runId });
+    } finally {
+      this.shutdownStopCause = undefined;
+    }
     this.deps.activityLog?.write(
       activityLogEvent(
         CODING_RUNTIME_RUN_SHUTDOWN_OPERATION,
@@ -4277,13 +4559,30 @@ export class CodingRuntimeOrchestrator {
 
   // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
   // start cannot resolve right now — fail closed, never launch against an unproven workspace.
-  private activeWorkspaceOrUndefined(): ActiveWorkspaceView | undefined {
+  private activeWorkspaceOrUndefined(correlationId?: string): ActiveWorkspaceView | undefined {
+    const lookup = this.activeWorkspaceLookup(correlationId);
+    return "active" in lookup ? lookup.active : undefined;
+  }
+
+  // Tells a pointer the server has none for from a proof that could not run: the first is a binding
+  // to re-establish, the second must not be answered as one.
+  private activeWorkspaceLookup(
+    correlationId?: string,
+  ): { readonly active: ActiveWorkspaceView | undefined } | { readonly proofFailed: true } {
     try {
-      return this.deps.workspaceLifecycle.getActive();
+      return { active: this.deps.workspaceLifecycle.getActive(correlationId) };
     } catch (error) {
-      if (isIdentityProofFailure(error)) return undefined;
+      if (isIdentityProofFailure(error)) return { proofFailed: true };
       throw error;
     }
+  }
+
+  private startActiveWorkspace(
+    correlationId?: string,
+  ): { readonly active: ActiveWorkspaceView } | { readonly gap: StartScopeGap } {
+    const lookup = this.activeWorkspaceLookup(correlationId);
+    if ("proofFailed" in lookup) return { gap: "identity-proof-failed" };
+    return lookup.active === undefined ? { gap: "no-active-workspace" } : { active: lookup.active };
   }
 
   public getHistory(): CodingRuntimeHistory | undefined {
@@ -4295,6 +4594,10 @@ export class CodingRuntimeOrchestrator {
   // Set only while a scheduled wake starts in the serial lane (`startScheduledWake`).
   private startOrigin: CodingRuntimeTurnOrigin | undefined;
   private shuttingDown = false;
+  // The cause Keiko's own shutdown gives the cancellation of the live run it ends (U-31). A person's
+  // Stop never sets it, so that cancellation stays without one.
+  private shutdownStopCause:
+    { readonly runId: string; readonly cause: CodingWorkbenchStopCause } | undefined;
   private scheduledWakes: { readonly stop: () => void } | undefined;
 
   /**
@@ -4381,14 +4684,18 @@ export class CodingRuntimeOrchestrator {
     const priorId = this.deps.history?.previousRunId(plan.taskId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
     const intent = plan.intent.trim().slice(0, CODING_WORKBENCH_TASK_INTENT_MAX_CHARS);
-    if (prior === undefined || priorId === undefined || intent === "") return undefined;
-    const modelId = this.deps.history?.forRun(priorId)?.modelId;
+    // A wake has no person looking at a repository: it continues in the workspace that is active.
+    const active = this.activeWorkspaceOrUndefined();
+    if (prior === undefined || priorId === undefined || intent === "" || active === undefined) {
+      return undefined;
+    }
     return {
       requestId: `scheduled-wake-${randomUUID()}`,
       taskIntent: intent,
       conversationId: plan.taskId,
       requestedMode: narrowerMode(plan.consentMode, prior.requestedMode),
-      ...(modelId === undefined || modelId === "coding" ? {} : { modelId }),
+      expectedWorkspace: { root: active.instance.repositoryRoot },
+      ...wakeModelSelection(this.deps.history?.forRun(priorId)?.modelId),
     };
   }
 
@@ -4403,8 +4710,8 @@ export class CodingRuntimeOrchestrator {
     if (this.forkRefused(parsed.value)) return this.fail("invalid-intent");
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
-    const scope = this.historyStartScope(parsed.value);
-    if ("gap" in scope) return this.refuseStartScope(scope.gap, correlationId);
+    const scope = this.historyStartScope(parsed.value, correlationId);
+    if ("gap" in scope) return this.refuseStartScope(scope, correlationId);
     const { active, principal } = scope;
     let { request } = scope;
     const runId = this.newRunId();
@@ -4446,11 +4753,15 @@ export class CodingRuntimeOrchestrator {
   }
 
   private refuseStartScope(
-    gap: StartScopeGap,
+    scope: { readonly gap: StartScopeGap; readonly detail?: string },
     correlationId: string | undefined,
-  ): CodingRuntimeOrchestratorResult {
-    recordStartScopeGap(this.deps.diagnostics, correlationId, gap);
-    return this.fail("authority-resolution-failed");
+  ): Extract<CodingRuntimeStartResult, { readonly ok: false }> {
+    recordStartScopeGap(this.deps.diagnostics, correlationId, scope.gap, scope.detail);
+    // A start-only refusal, answered before any run exists: it is never a run failure code. A
+    // server with no active workspace (its pointer was invalidated, e.g. the repository was deleted
+    // and cloned again at the same path) is the same recoverable fact as another active repository:
+    // the window re-reads and re-binds what it shows. The log keeps the precise gap.
+    return { ok: false, failureCode: startScopeFailureCode(scope.gap) };
   }
 
   /**
@@ -4601,16 +4912,38 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  private historyStartScope(request: CodingWorkbenchRuntimeStartRequest):
+  private historyStartScope(
+    request: CodingWorkbenchRuntimeStartRequest,
+    correlationId?: string,
+  ):
     | {
         readonly active: ActiveWorkspaceView;
         readonly principal: string;
         readonly request: CodingWorkbenchRuntimeStartRequest;
         readonly unverifiedPredecessor?: boolean;
       }
-    | { readonly gap: StartScopeGap } {
-    const active = this.activeWorkspaceOrUndefined();
-    if (!active) return { gap: "no-active-workspace" };
+    | { readonly gap: StartScopeGap; readonly detail?: string } {
+    const found = this.startActiveWorkspace(correlationId);
+    if ("gap" in found) return found;
+    const { active } = found;
+    // The run starts in the repository the person sees or not at all: the request states the root
+    // the Workbench shows, and the server's global pointer is not allowed to differ from it.
+    if (
+      !rootsAreSameFolderOrReport(
+        this.deps.diagnostics,
+        correlationId,
+        request.expectedWorkspace.root,
+        active.instance.repositoryRoot,
+      )
+    ) {
+      return {
+        gap: "workspace-selection-mismatch",
+        detail: selectionMismatchDetail(
+          request.expectedWorkspace.root,
+          active.instance.repositoryRoot,
+        ),
+      };
+    }
     const principal = this.deps.serverPrincipal();
     if (!principal) return { gap: "no-principal" };
     if (request.conversationId === undefined) return { active, principal, request };
@@ -5024,7 +5357,6 @@ export class CodingRuntimeOrchestrator {
       authorityDigest: DIGEST(launch.treeBindingId),
       bindingDigest: DIGEST(active.instance.workspaceId),
       provenanceDigest: DIGEST(`${launch.adapterKind}:${launch.executablePath}`),
-      toolCallCount: 0,
       patchByteCount: 0,
       modelRequestCount: 0,
       ...(predecessorRunId ? { predecessorRunId } : {}),
@@ -5292,6 +5624,7 @@ export class CodingRuntimeOrchestrator {
     pauseReason?: CodingWorkbenchOperatorDecision,
     cause?: RunSettlementCause,
     verificationGap?: CodingWorkbenchVerificationGap,
+    verificationGapDetail?: CodingWorkbenchVerificationGapDetail,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
@@ -5303,6 +5636,7 @@ export class CodingRuntimeOrchestrator {
       failureCode,
       pauseReason,
       verificationGap,
+      verificationGapDetail,
     );
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);
@@ -5319,6 +5653,7 @@ export class CodingRuntimeOrchestrator {
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
     verificationGap?: CodingWorkbenchVerificationGap,
+    verificationGapDetail?: CodingWorkbenchVerificationGapDetail,
   ): CodingRuntimeSnapshot {
     const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
@@ -5328,8 +5663,18 @@ export class CodingRuntimeOrchestrator {
       ...(failureCode ? { failureCode } : {}),
       ...(pauseReason === undefined ? {} : { pauseReason }),
       ...(verificationGap === undefined ? {} : { verificationGap }),
+      ...(verificationGapDetail === undefined ? {} : { verificationGapDetail }),
+      ...this.stopCauseFor(current.runId, state),
       ...(result === undefined ? {} : { result }),
     });
+  }
+
+  private stopCauseFor(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+  ): { readonly stopCause?: CodingWorkbenchStopCause } {
+    const named = this.shutdownStopCause;
+    return state === "cancelled" && named?.runId === runId ? { stopCause: named.cause } : {};
   }
 
   private publishTransition(next: CodingRuntimeSnapshot): boolean {
@@ -5382,6 +5727,7 @@ export class CodingRuntimeOrchestrator {
             ? this.effort.verificationBlockedReason(next.runId)
             : undefined,
         verificationGap: next.verificationGap,
+        verificationGapDetail: next.verificationGapDetail,
       },
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
@@ -5687,17 +6033,16 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  // A stopped or taken-over run keeps its tool rows, as OpenCode keeps an aborted session's steps;
-  // only the calls still open are settled as cancelled (owner decision 2026-10-30, #3907).
+  // A run that ended keeps its tool rows, as OpenCode keeps an aborted session's steps; only the
+  // calls still open are settled as cancelled (owner decision 2026-10-30, #3907). That holds for every
+  // terminal state: a call that never reported its end must not stay "Running" after a failed,
+  // succeeded, budget- or time-exhausted run (#4491).
   private interruptExplicitlyEndedActivity(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
   ): void {
-    if (state !== "cancelled" && state !== "taken-over") return;
-    this.deps.safeActivityProjection?.interrupt(
-      runId,
-      state === "taken-over" ? "takeover" : "stop",
-    );
+    if (!TERMINAL_STATES.has(state)) return;
+    this.deps.safeActivityProjection?.interrupt(runId, interruptReasonOf(state));
   }
 
   private publishSettlement(
@@ -5732,7 +6077,9 @@ export class CodingRuntimeOrchestrator {
     // Every settlement ends a run's continuation budget, not only the task-settlement path: a
     // continued run that is stopped, taken over or moved to recovery must not keep its entry.
     this.deliveryContinuations.delete(next.runId);
+    this.deniedCommitProposals.delete(next.runId);
     this.verificationContinuations.delete(next.runId);
+    this.continuationRevisions.delete(next.runId);
     // Likewise its edit refusal streak and any escalation that has not settled it (F5).
     this.editRefusals.clear(next.runId);
     this.operations.clear(next.runId);
@@ -5802,8 +6149,17 @@ function taskOutcomeState(
   return { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
 }
 
+function interruptReasonOf(
+  state: CodingWorkbenchRuntimeStateName,
+): "takeover" | "stop" | "run-ended" {
+  if (state === "taken-over") return "takeover";
+  return state === "cancelled" ? "stop" : "run-ended";
+}
+
+type TaskOutcomeState = "cancelled" | "failed" | "succeeded";
+
 interface TaskOutcomeTarget {
-  readonly state: "cancelled" | "failed" | "succeeded";
+  readonly state: TaskOutcomeState;
   readonly failureCode?: TaskSettlementFailureCode | undefined;
 }
 
@@ -5866,4 +6222,15 @@ function scheduledWakeRefusal(code: CodingWorkbenchRuntimeStartFailureCode): Sch
   if (code === "active-run-conflict") return "active-run-conflict";
   if (code === "authority-resolution-failed") return "authority-resolution-failed";
   return code === "invalid-intent" ? "invalid-intent" : "start-failed";
+}
+
+// A well-formed request object that omits `expectedWorkspace` entirely: the one shape a UI bundle
+// opened before the field existed sends. Any other malformed input stays an invalid intent.
+function statesNoExpectedWorkspace(input: unknown): boolean {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    !("expectedWorkspace" in input)
+  );
 }

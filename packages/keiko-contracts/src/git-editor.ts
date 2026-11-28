@@ -174,6 +174,20 @@ function isWorkspacePath(value: unknown): value is string {
   return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
+/**
+ * A file path as the repository reported it in a diff response. Git names any byte sequence a POSIX
+ * filesystem holds, so a backslash inside a name is an ordinary character there and must not make
+ * the whole response invalid. A leading backslash (a UNC or `\?\` shape), a backslash that
+ * forms a `..` segment, and every shape `isWorkspacePath` refuses stay refused. A request that
+ * names such a file still goes through `isWorkspacePath`, so the entry is listed but never acted
+ * on.
+ */
+function isReportedFilePath(value: unknown): value is string {
+  if (typeof value !== "string" || !value.includes("\\")) return isWorkspacePath(value);
+  if (value.startsWith("\\") || value.split(/[/\\]/u).includes("..")) return false;
+  return isWorkspacePath(value.replaceAll("\\", "_"));
+}
+
 export function isGitEditorDiffScope(value: unknown): value is GitEditorDiffScope {
   return typeof value === "string" && GIT_EDITOR_DIFF_SCOPES.includes(value as GitEditorDiffScope);
 }
@@ -245,8 +259,8 @@ export function isGitEditorDiffHunk(value: unknown): value is GitEditorDiffHunk 
 }
 
 function hasValidFileMetadata(value: Readonly<Record<string, unknown>>): boolean {
-  if (!isWorkspacePath(value.path)) return false;
-  if (value.oldPath !== undefined && !isWorkspacePath(value.oldPath)) return false;
+  if (!isReportedFilePath(value.path)) return false;
+  if (value.oldPath !== undefined && !isReportedFilePath(value.oldPath)) return false;
   if (value.status === "renamed") return typeof value.oldPath === "string";
   return value.oldPath === undefined;
 }

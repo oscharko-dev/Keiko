@@ -38,6 +38,8 @@ import {
   CODING_WORKBENCH_VERIFYING_REFRESH_MS,
 } from "./coding-workbench-runtime-hooks";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 vi.mock("./client-diagnostics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client-diagnostics")>()),
   reportClientDiagnostic: vi.fn(),
@@ -642,7 +644,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       new DOMException("The operation timed out.", "TimeoutError"),
     );
     const { mutations, refreshRun } = renderMutations(readyRunState(null, { canStart: true }));
-    await act(() => mutations.start("task", { projectMemoryEnabled: true }));
+    await act(() =>
+      mutations.start("task", { projectMemoryEnabled: true, expectedWorkspaceRoot: EXPECTED_ROOT }),
+    );
     expect(refreshRun).toHaveBeenCalledOnce();
   });
 
@@ -650,7 +654,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "starting" }));
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));
     await act(() =>
-      mutations.start("write the failing test first", { projectMemoryEnabled: true }),
+      mutations.start("write the failing test first", {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
     );
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "mutation-start", mutation: "start" }),
@@ -659,12 +666,20 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       kind: "run-set",
       snapshot: snapshot({ state: "starting" }),
     });
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 
   it("reports a mutation failure when the readiness gate rejects the start", async () => {
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: false }));
-    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
+    await act(() =>
+      mutations.start("blocked", {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
+    );
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "mutation-failed",
@@ -678,7 +693,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     const { mutations, dispatch, refreshRun } = renderMutations(readyRunState(snapshot()));
     await act(() => mutations.stop());
     expect(refreshRun).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-2",
+    });
   });
 
   // ADR-0141 D6: a run control from a browser whose app session was revoked is answered with the
@@ -760,7 +778,12 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       readyRunState(snapshot({ state: "running" })),
     );
     await act(() => mutations.stop());
-    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
+    await act(() =>
+      mutations.start("blocked", {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
+    );
     expect(refreshRun).not.toHaveBeenCalled();
   });
 
@@ -789,7 +812,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     // .deadline.test.ts); the queue adds no second, generic note for the same timeout (#4109).
     expect(reportClientDiagnostic).not.toHaveBeenCalled();
     expect(stopCodingWorkbenchRuntime).toHaveBeenCalledTimes(2);
-    expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 
   // #4109: Stop is never queued behind a mutation that is still waiting for the server.
@@ -869,7 +895,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       expect(dispatch).not.toHaveBeenCalledWith(
         expect.objectContaining({ kind: "mutation-failed" }),
       );
-      expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "mutation-complete",
+        acknowledgedRunId: "run-1",
+      });
       // Server truth reconciles through the Stop answer, never through the preempted approval.
       expect(dispatch).toHaveBeenCalledWith({
         kind: "run-set",
@@ -982,6 +1011,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       await act(async () => {
         const start = mutations.start("write the failing test first", {
           projectMemoryEnabled: true,
+          expectedWorkspaceRoot: EXPECTED_ROOT,
         });
         await vi.waitFor(() => {
           expect(held).toHaveLength(1);
@@ -994,7 +1024,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       expect(refreshRun).toHaveBeenCalledOnce();
       // A cancel is not a success: the Window keeps the person's draft on this outcome.
       expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-cancelled" });
-      expect(dispatch).not.toHaveBeenCalledWith({ kind: "mutation-complete" });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-complete" }),
+      );
       expect(dispatch).not.toHaveBeenCalledWith(
         expect.objectContaining({ kind: "mutation-failed" }),
       );
@@ -1013,6 +1045,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
         await act(async () => {
           const start = rendered.mutations.start("write the failing test first", {
             projectMemoryEnabled: true,
+            expectedWorkspaceRoot: EXPECTED_ROOT,
           });
           await vi.waitFor(() => {
             expect(held).toHaveLength(1);
@@ -1080,6 +1113,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       await act(async () => {
         const start = mutations.start("write the failing test first", {
           projectMemoryEnabled: true,
+          expectedWorkspaceRoot: EXPECTED_ROOT,
         });
         await vi.waitFor(() => {
           expect(held).toHaveLength(1);
@@ -1153,7 +1187,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       },
       expect.any(AbortSignal),
     );
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 
   it("reports a waiting-message action against a run that is not running without sending it", async () => {
@@ -1189,7 +1226,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     const { mutations: retryMutations } = renderMutations(
       readyRunState(snapshot(), { canRetry: true }),
     );
-    await act(() => retryMutations.retry("try again"));
+    await act(() => retryMutations.retry("try again", EXPECTED_ROOT));
     expect(retryCodingWorkbenchRuntime).toHaveBeenCalledWith(
       "run-1",
       expect.objectContaining({ taskIntent: "try again" }),
@@ -1205,7 +1242,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       { requestId: "run-1", acknowledged: true },
       expect.any(AbortSignal),
     );
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 });
 

@@ -20,6 +20,31 @@ tool-calling proof. Every chat model is inactive in each server process until th
 it in Settings > Models, and that activation is its readiness check; a pick or a Send in Chat and a
 pick or Start in the Coding Workbench no longer start a basic-chat check. Only activated models are
 offered and elected as an automatic default, and the Workbench proves tool calling only for them.
+Clarified 2026-11-27 (U-12, #4491): the person may start that same activation from the Coding
+Workbench's own notice for a model that is not activated yet. It is the same route and check as
+Settings > Models, started only by that person's click; activation stays manual, per process and
+unprobed in the background. The log records the starting surface.
+Amended 2026-11-28 (owner decision): an activation is remembered across restarts and supersedes the
+per-process part of the 2026-11-16 amendment. A successful activation is persisted in the server's
+state directory (`model-activations.json`, private, written through the existing atomic private-JSON
+writer) bound to the installation identity, the product version, the model's configuration (endpoint,
+protocol, model id, deployment identity) and a digest of its credential salted with the installation
+identity, never the credential. At the next start a record whose whole binding still holds restores
+the model as activated WITHOUT any request to a model (startup still loads no model, 2026-11-13);
+only the basic-chat proof is restored, so a tool-calling proof is never claimed from the record: the
+Workbench proves tool calling lazily at first use of the activated model, as before, and the proof
+already stored with the configuration keeps its own configuration fingerprint. Any mismatch (first
+start, product update, changed endpoint, model or credential) discards the
+record and the model is inactive until a person activates it again; so does Deactivate and a failed
+check that invalidated the observation. Saving the configuration again keeps every activation whose
+per-model binding and credential are unchanged and discards only the models whose binding changed or
+that were removed (only the basic-chat proof is carried, never a feature proof). Evidence is `gateway.activation.persistence`: a count of
+restored records and a count discarded per closed reason (`first-start`, `unreadable`, `format-changed`,
+`foreign-installation`, `product-changed`, `configuration-changed`, `credential-changed`, `deactivated`,
+`invalidated`, `capacity`). The record stores at most 512 activations (exactly what a restart reads back; the
+rest is counted under `capacity`), and a change that failed midway persists what it removed but never what it
+added. The credential is stored as a per-installation scrypt derivation, never a plain hash, and a
+record whose removal cannot be written is withdrawn whole and reported as a failed Deactivate.
 
 ## Context
 
@@ -71,9 +96,10 @@ Replacing configuration resets the coarse
 verification state and clears the field observations of every provider that was changed or removed;
 an unchanged provider keeps its observations under the new generation, including when the list was
 only reordered (D3). Observations intentionally survive separate HTTP requests in the current
-process, but not a process restart; because a replacement resets the coarse verification state,
-no chat model is checked after a restart or a replacement until the person activates it in
-Settings > Models (amended 2026-11-16). Successful
+process; a basic-chat activation also survives a restart while its persisted binding holds (amended
+2026-11-28). Because a replacement resets the coarse verification state, no chat model is checked
+after a restart or a replacement until the person activates it in Settings > Models (amended
+2026-11-16); a matching restart restores the activation without a check. Successful
 credential-setup chat checks populate the same generation-bound ledger and are reused. Chat send,
 streaming send, regeneration and grounded questions may join an already running initialization.
 Opening an empty local Chat requires a configured conversation model and remains available while
@@ -472,8 +498,9 @@ connection/process lifetime; `stale` does not create a new age limit for that ob
 - A failed persistence attempt leaves the generation-bound observation available for an identical
   retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
-- No chat model is checked at initialization (amended 2026-11-16). After a restart or a connection
-  replacement every affected model is inactive until the person activates it in Settings > Models;
+- No chat model is checked at initialization (amended 2026-11-16). After a first start, a product
+  update or a connection replacement every affected model is inactive until the person activates it
+  in Settings > Models (a restart alone keeps an activated model activated, amended 2026-11-28);
   successful credential-setup checks still count as activation. The person can deactivate an
   activated model there again: deactivation forgets the observation of the current generation without
   a provider request, so Chat no longer offers or elects the model and a send or coding start is

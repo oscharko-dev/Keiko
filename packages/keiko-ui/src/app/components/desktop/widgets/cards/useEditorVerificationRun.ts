@@ -25,6 +25,11 @@ import {
   isEditorVerificationEvent,
   isEditorVerificationRun,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import {
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
+} from "../../../../../lib/browser-stream-capacity";
+import { reportClientDiagnostic } from "../../../../../lib/client-diagnostics";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
   fetchVerificationCatalog,
@@ -398,13 +403,53 @@ function waitForSharedSource(): Promise<boolean> {
   sharedSourceReadyPromise = new Promise<boolean>((resolve) => {
     resolveSharedSourceReady = resolve;
   });
+  return sharedSourceReadyPromise;
+}
+
+// The handshake deadline starts when a slot admitted the connection, never while the stream still
+// queues for one: a waiting stream is shown as waiting, not torn down as failed to start.
+function armSharedSourceReadyTimer(): void {
+  if (sharedSourceReadyTimer !== null) clearTimeout(sharedSourceReadyTimer);
   sharedSourceReadyTimer = setTimeout(() => {
     if (sharedSourceOpen) return;
     // Neither an initial handshake nor a replacement connection may remain "reconnecting"
     // forever. Preserve cached Problems rows, surface failed health, and stop this bounded cycle.
     terminallyReconcileSourceFailure();
   }, EVENT_SOURCE_READY_TIMEOUT_MS);
-  return sharedSourceReadyPromise;
+}
+
+const WAITING_FOR_CONNECTION_LABEL = "Verification: waiting for a free connection";
+// The status each waiting root had before the wait, so a wait that ends, with or without an
+// admission, puts back exactly what it replaced.
+const waitingRoots = new Map<string, SharedRunState>();
+// A wait episode is on: a root that starts a run during it joins it.
+let waitEpisodeActive = false;
+
+// Only roots that depend on the stream (a run starting, or one whose stream must reconnect) show
+// the wait; a subscribed root with nothing to run never does.
+function joinWait(root: string): void {
+  const entry = projectStates.get(root);
+  if (entry === undefined || waitingRoots.has(root)) return;
+  waitingRoots.set(root, entry.pendingState ?? entry.state);
+  emit(root, entry, { running: true, label: WAITING_FOR_CONNECTION_LABEL });
+}
+
+function showWaiting(): void {
+  waitEpisodeActive = true;
+  for (const root of sourceDependentRoots()) joinWait(root);
+}
+
+// A status another event already replaced is left alone: only the wait's own label is undone.
+function endWaiting(): void {
+  for (const [root, previous] of waitingRoots) {
+    const entry = projectStates.get(root);
+    const current = entry?.pendingState ?? entry?.state;
+    if (entry !== undefined && current?.label === WAITING_FOR_CONNECTION_LABEL) {
+      emit(root, entry, previous);
+    }
+  }
+  waitingRoots.clear();
+  waitEpisodeActive = false;
 }
 
 function reconnectDelay(): number {
@@ -428,25 +473,57 @@ function scheduleSharedSourceReconnect(): void {
   }, delay);
 }
 
+// Releases the connection the shared verification stream holds outside the shared stream pool.
+let sharedSourceAdmission: DirectStreamAdmission | null = null;
+
+function releaseSharedSourceBudget(): void {
+  const admission = sharedSourceAdmission;
+  sharedSourceAdmission = null;
+  admission?.release();
+}
+
 function handleSharedSourceLoss(source: EventSource): void {
   if (sharedSource !== source) return;
   if (sharedSourceOpen) rememberUncertainRoots();
   sharedSource = null;
   sharedSourceOpen = false;
   source.close();
+  releaseSharedSourceBudget();
   setDependentSourceHealth("reconnecting");
   scheduleSharedSourceReconnect();
 }
 
 function createSharedSource(): void {
-  if (sharedSource !== null || !hasActiveRun()) return;
+  if (sharedSource !== null || sharedSourceAdmission?.active === true || !hasActiveRun()) return;
+  // The stream opens only once an origin-wide connection slot admits it (see the capacity module).
+  // An essential stream that never yields: it exists only while a run is active, and a closed
+  // stream would lose the run's terminal event, which the server cannot replay.
+  sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, {
+    nonReplayable: true,
+    onWaiting: (waiting) => {
+      if (waiting) showWaiting();
+      else endWaiting();
+    },
+  });
+  void waitForSharedSource();
+}
+
+function connectSharedSource(): void {
+  if (sharedSource !== null || !hasActiveRun()) {
+    queueMicrotask(releaseSharedSourceBudget);
+    return;
+  }
   let source: EventSource | null;
   try {
     source = createSameOriginApiEventSource(EVENTS_URL);
   } catch {
+    reportClientDiagnostic("[keiko] editor verification stream could not be created", {
+      errorKind: "unavailable",
+    });
     source = null;
   }
   if (source === null) {
+    queueMicrotask(releaseSharedSourceBudget);
     setDependentSourceHealth("reconnecting");
     scheduleSharedSourceReconnect();
     return;
@@ -467,6 +544,7 @@ function createSharedSource(): void {
   // Reconnects are opened by a timer rather than a caller awaiting openSharedSource(), so the
   // recovery cycle keeps a bounded handshake timeout even when a run is already active.
   void waitForSharedSource();
+  armSharedSourceReadyTimer();
 }
 
 function openSharedSource(): Promise<boolean> {
@@ -481,6 +559,7 @@ function closeSharedSource(): void {
   clearSharedSourceReconnectTimer();
   sharedSourceReconnectAttempts = 0;
   source?.close();
+  releaseSharedSourceBudget();
   settleSharedSourceReady(false);
 }
 
@@ -570,6 +649,7 @@ function startRun(root: string, kinds: readonly VerificationKind[], targetPath?:
   entry.cancelRequested = false;
   if (sharedSourceReconnectAttempts > 0) setVerificationSourceHealth(root, "reconnecting");
   emit(root, entry, { running: true, label: "Verification: starting…" });
+  if (waitEpisodeActive) joinWait(root);
   void startAfterStreamReady(root, kinds, entry, entry.startToken, targetPath);
 }
 
@@ -639,6 +719,8 @@ export function resetEditorVerificationRunStateForTests(): void {
   projectStates.clear();
   projectIdByRunId.clear();
   rootsAwaitingFreshTerminal.clear();
+  waitingRoots.clear();
+  waitEpisodeActive = false;
   totalListenerCount = 0;
 }
 

@@ -6,11 +6,12 @@
 // identity lane on purpose, against a DISPOSABLE HOME it creates itself — never the developer's.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
   existsSync,
+  readdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -18,21 +19,35 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import type {
   GitDeliveryRepoPolicyPack,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { createNodeGitMutationAdapter, readGitStageSupport } from "./git-mutation-node.js";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  createGitReadSession,
+  createNodeGitMutationAdapter,
+  type GitCleanupIncompleteReport,
+  readGitStageSupport,
+  type GitStageSupport,
+} from "./git-mutation-node.js";
+import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import type {
   GitLocalMutationAdapter,
   GitVerifiedCommitPrecondition,
 } from "./git-mutation-adapter.js";
-import { readGitIndexTreeDigest } from "./git-worktree-snapshot-node.js";
+import {
+  readGitBlobTextsWithin,
+  readGitBlobTextWithin,
+  readGitIndexTreeDigest,
+} from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { createInMemoryGitMutationJournal, runGitMutation } from "./git-mutation-orchestrator.js";
+
+type GitDeliveryExecutionResultLike = Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>;
 
 let root: string;
 let signingRoot: string;
@@ -112,6 +127,933 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   rmSync(signingRoot, { recursive: true, force: true });
+});
+
+describe("node git mutation adapter — an interactive commit stays on the branch it was prepared for", () => {
+  function preparedAdapter(
+    branchName: string | undefined,
+    whileDeciding: () => void,
+  ): GitLocalMutationAdapter {
+    return createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      preparedCheckout: { branchName },
+      // The trusted branch-protection verdict is read asynchronously: the checkout moves meanwhile.
+      signingRequiredByBranchProtection: (): Promise<boolean> => {
+        whileDeciding();
+        return Promise.resolve(false);
+      },
+    });
+  }
+
+  it("refuses the commit when the checkout moved to another branch while signing was decided", async () => {
+    // Signing is not asked for by the person, so the branch-protection verdict decides.
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const prepared = git(["branch", "--show-current"]).trim();
+    const ad = preparedAdapter(prepared, () => {
+      git(["checkout", "-q", "-b", "protected-branch"]);
+    });
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "must not land", allowEmpty: false });
+
+    expect(committed.outcome).toBe("failed");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("fails the commit when the checkout read throws after the decision", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    // The checkout moves to a branch git accepts but the read refuses to name: only the read
+    // fails, the commit itself would succeed on it, so a pass here would land a commit.
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => {
+      git(["checkout", "-q", "-b", "feature/ünsafe"]);
+    });
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "must not land", allowEmpty: false });
+
+    expect(committed.outcome).toBe("failed");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("moves only the prepared branch when the checkout switches right before the ref update", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "base.txt"), "base\n", "utf8");
+    git(["add", "base.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    const prepared = git(["branch", "--show-current"]).trim();
+    const baseSha = git(["rev-parse", "HEAD"]).trim();
+    let authorizations = 0;
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      preparedCheckout: { branchName: prepared },
+      // The last authorization check runs after the final checkout read and right before the ref
+      // update: the checkout switches exactly there, past every read of the checkout.
+      beforeCommitRefUpdate: (): boolean => {
+        authorizations += 1;
+        if (authorizations === 2) git(["checkout", "-q", "-b", "protected-branch"]);
+        return true;
+      },
+    });
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "bound", allowEmpty: false });
+
+    expect(authorizations).toBe(2);
+    expect(committed.outcome).toBe("succeeded");
+    expect(git(["branch", "--show-current"]).trim()).toBe("protected-branch");
+    // The commit and its signing decision belong to the prepared branch; the branch the checkout
+    // moved to is untouched.
+    expect(git(["rev-parse", `refs/heads/${prepared}~1`]).trim()).toBe(baseSha);
+    expect(git(["log", "-1", "--format=%s", `refs/heads/${prepared}`]).trim()).toBe("bound");
+    expect(git(["rev-parse", "refs/heads/protected-branch"]).trim()).toBe(baseSha);
+  });
+
+  it("commits the first commit of an unborn prepared branch", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    expect((await ad.commit({ message: "root", allowEmpty: false })).outcome).toBe("succeeded");
+    expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    expect(git(["log", "-1", "--format=%P"]).trim()).toBe("");
+  });
+
+  it("refuses an empty commit unless it is allowed", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+
+    expect((await ad.commit({ message: "nothing", allowEmpty: false })).outcome).toBe("failed");
+    expect((await ad.commit({ message: "empty ok", allowEmpty: true })).outcome).toBe("succeeded");
+    expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("2");
+  });
+
+  it.each(["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])(
+    "refuses a commit while %s is present",
+    async (name) => {
+      git(["config", "commit.gpgsign", "false"]);
+      writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+      git(["add", "a.txt"]);
+      git(["commit", "-q", "-m", "base"]);
+      const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+      writeFileSync(join(root, ".git", name), `${git(["rev-parse", "HEAD"]).trim()}\n`);
+
+      expect((await ad.commit({ message: "mid", allowEmpty: true })).outcome).toBe("failed");
+      expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    },
+  );
+
+  it("refuses the commit and writes nothing when the sequencer state cannot be read", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    let failedReads = 0;
+    const unreadable: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      // Only the sequencer-state read uses this port, so every resolution of it fails.
+      realPath: () => {
+        failedReads += 1;
+        throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      },
+    };
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      preparedCheckout: { branchName: git(["branch", "--show-current"]).trim() },
+      metadataFs: unreadable,
+    });
+    const objectsBefore = git(["count-objects", "-v"]);
+
+    const committed = await ad.commit({ message: "must not land", allowEmpty: true });
+
+    expect(failedReads).toBeGreaterThan(0);
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("precondition-failed");
+    expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    expect(git(["count-objects", "-v"])).toBe(objectsBefore);
+  });
+
+  // The plumbing commit must record what `git commit` records: the same identity, the same dates
+  // from the same environment and the same message bytes after Git's own cleanup.
+  it.each([
+    ["plain", "subject"],
+    ["trailing blanks and tabs", "subject  \t\n\nbody line \n"],
+    ["blank runs and edges", "\n\n  lead\n\n\n\nbody\r\n\n\n"],
+    ["a carriage return line", "subject\r\n\r\nbody\r\n"],
+    ["non-ASCII", "Änderung   \n\nKörper"],
+  ])("records the same commit object as git commit for %s", async (_name, message) => {
+    git(["config", "commit.gpgsign", "false"]);
+    const env = {
+      PATH: process.env.PATH ?? "",
+      GIT_AUTHOR_NAME: "Author Env",
+      GIT_AUTHOR_EMAIL: "author@env.example",
+      GIT_AUTHOR_DATE: "2026-01-02T03:04:05Z",
+      GIT_COMMITTER_NAME: "Committer Env",
+      GIT_COMMITTER_EMAIL: "committer@env.example",
+      GIT_COMMITTER_DATE: "2026-02-03T04:05:06Z",
+    };
+    const branch = git(["branch", "--show-current"]).trim();
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: env,
+      now: () => Date.now(),
+      preparedCheckout: { branchName: branch },
+    });
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    expect((await ad.commit({ message, allowEmpty: false })).outcome).toBe("succeeded");
+    const bound = git(["cat-file", "commit", "HEAD"]);
+
+    git(["update-ref", "-d", `refs/heads/${branch}`]);
+    // The reference is the plain `git commit` of the same adapter lane (no prepared checkout).
+    const plain = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: env,
+      now: () => Date.now(),
+    });
+    expect((await plain.commit({ message, allowEmpty: false })).outcome).toBe("succeeded");
+
+    // Dates come from the same lane; only a second boundary between the two runs may differ.
+    const undated = (object: string): string => object.replace(/ \d+ [+-]\d{4}$/gmu, " <date>");
+    expect(undated(bound)).toBe(undated(git(["cat-file", "commit", "HEAD"])));
+  });
+
+  it("signs the bound commit as git commit would, and fails closed when signing fails", async () => {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+    writeFileSync(join(root, "b.txt"), "more\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["b.txt"] })).outcome).toBe("succeeded");
+
+    expect((await ad.commit({ message: "signed", allowEmpty: false })).outcome).toBe("succeeded");
+    expectLastCommitSigned(root);
+
+    const tip = git(["rev-parse", "HEAD"]).trim();
+    git(["config", "user.signingkey", join(signingRoot, "missing-key.pub")]);
+    writeFileSync(join(root, "c.txt"), "again\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["c.txt"] })).outcome).toBe("succeeded");
+
+    expect((await ad.commit({ message: "unsignable", allowEmpty: false })).outcome).toBe("failed");
+    expect(git(["rev-parse", "HEAD"]).trim()).toBe(tip);
+  });
+
+  it("commits on the prepared branch when the checkout did not move", async () => {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "lands", allowEmpty: false });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(git(["log", "--oneline"])).toContain("lands");
+  });
+});
+
+describe("node git mutation adapter — the bound commit leaves the repository as git commit does", () => {
+  const SCENARIO_ENV = { PATH: process.env.PATH ?? "" };
+  let commitSequence = 0;
+  const tempRepos: string[] = [];
+
+  afterEach(() => {
+    for (const repo of tempRepos.splice(0)) rmSync(repo, { recursive: true, force: true });
+  });
+
+  function gitIn(repo: string, args: readonly string[]): string {
+    return execFileSync("git", [...args], { cwd: repo, encoding: "utf8" });
+  }
+
+  function newRepo(): string {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-bound-")));
+    tempRepos.push(repo);
+    gitIn(repo, ["init", "-q", "-b", "main"]);
+    gitIn(repo, ["config", "user.email", "test@keiko.example"]);
+    gitIn(repo, ["config", "user.name", "Keiko Test"]);
+    gitIn(repo, ["config", "commit.gpgsign", "false"]);
+    return repo;
+  }
+
+  function adapterFor(
+    repo: string,
+    bound: boolean,
+    extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
+  ): GitLocalMutationAdapter {
+    return createNodeGitMutationAdapter({
+      workspace: workspaceInfo(repo),
+      processEnv: SCENARIO_ENV,
+      now: () => Date.now(),
+      ...(bound ? { preparedCheckout: { branchName: "main" } } : {}),
+      ...extra,
+    });
+  }
+
+  function seedBase(repo: string): void {
+    writeFileSync(join(repo, "base.txt"), "base\n", "utf8");
+    gitIn(repo, ["add", "base.txt"]);
+    gitIn(repo, ["commit", "-q", "-m", "base"]);
+  }
+
+  async function commitOn(
+    repo: string,
+    bound: boolean,
+    message: string,
+    extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
+  ): Promise<GitDeliveryExecutionResultLike> {
+    const ad = adapterFor(repo, bound, extra);
+    writeFileSync(
+      join(repo, "a.txt"),
+      `${String(message.length)}-${String(++commitSequence)}\n`,
+      "utf8",
+    );
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    return ad.commit({ message, allowEmpty: false });
+  }
+
+  function reflogs(repo: string): { branch: string[]; head: string[] } {
+    const lines = (ref: string): string[] =>
+      gitIn(repo, ["reflog", "--format=%gs", ref]).trim().split("\n");
+    return { branch: lines("refs/heads/main"), head: lines("HEAD") };
+  }
+
+  it.each([
+    ["a normal commit", true, "subject  \n\nbody", "commit: subject"],
+    [
+      "a normal commit with a multi-line first paragraph",
+      true,
+      "first\nsecond\n\nbody",
+      "commit: first",
+    ],
+    ["an indented continuation line", true, "first\n  second\nthird", "commit: first"],
+    [
+      "the root commit of an unborn branch",
+      false,
+      "root subject\n",
+      "commit (initial): root subject",
+    ],
+    ["a message with leading blank lines", true, "\n\n  lead\nbody\n", "commit: lead"],
+  ])("writes the reflog git commit writes for %s", async (_name, born, message, expected) => {
+    const plainRepo = newRepo();
+    const boundRepo = newRepo();
+    if (born) {
+      seedBase(plainRepo);
+      seedBase(boundRepo);
+    }
+
+    expect((await commitOn(plainRepo, false, message)).outcome).toBe("succeeded");
+    expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
+
+    expect(reflogs(boundRepo)).toEqual(reflogs(plainRepo));
+    // What real git writes, not only what the two lanes agree on: the first line, on both refs.
+    expect(reflogs(plainRepo).branch[0]).toBe(expected);
+    expect(reflogs(boundRepo).branch[0]).toBe(expected);
+    expect(reflogs(boundRepo).head[0]).toBe(expected);
+  });
+
+  it("leaves the same merge state files as git commit after a squash merge", async () => {
+    async function squashAndCommit(bound: boolean): Promise<string[]> {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["checkout", "-q", "-b", "side"]);
+      writeFileSync(join(repo, "side.txt"), "side\n", "utf8");
+      gitIn(repo, ["add", "side.txt"]);
+      gitIn(repo, ["commit", "-q", "-m", "side"]);
+      gitIn(repo, ["checkout", "-q", "main"]);
+      gitIn(repo, ["merge", "--squash", "side"]);
+      writeFileSync(join(repo, ".git", "MERGE_MSG"), "stale\n", "utf8");
+      writeFileSync(join(repo, ".git", "MERGE_MODE"), "", "utf8");
+      expect(existsSync(join(repo, ".git", "SQUASH_MSG"))).toBe(true);
+      const ad = adapterFor(repo, bound);
+      expect((await ad.commit({ message: "squashed", allowEmpty: false })).outcome).toBe(
+        "succeeded",
+      );
+      return readdirSync(join(repo, ".git")).filter((name) => /^(MERGE_|SQUASH_)/u.test(name));
+    }
+
+    const plain = await squashAndCommit(false);
+    expect(plain).toEqual([]);
+    expect(await squashAndCommit(true)).toEqual(plain);
+  });
+
+  it("reports a merge state file that cannot be removed without replacing the success", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    writeFileSync(join(repo, ".git", "SQUASH_MSG"), "squash\n", "utf8");
+    const reports: GitCleanupIncompleteReport[] = [];
+
+    const committed = await commitOn(repo, true, "lands", {
+      onCleanupIncomplete: (report) => reports.push(report),
+      removePath: () => {
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      },
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(reports).toEqual([
+      {
+        caller: "commit-state",
+        quarantines: 0,
+        temporaryIndex: false,
+        lock: false,
+        descriptors: 0,
+        refLocks: 0,
+        directories: 0,
+        stateFiles: 1,
+      },
+    ]);
+  });
+
+  // The message bytes git commit -m records, for every effective cleanup mode: the bound lane must
+  // produce exactly them (the cleanup is made by Git itself, never by a hand-written copy of it).
+  const CLEANUP_MESSAGES = [
+    "plain",
+    "  lead  \n\n\n\nbody  \n\n",
+    "# comment\nbody\n# x\n",
+    ";semi\n#hash\nbody",
+    "sub\n\n  \n\ttab\t\n",
+    "a\r\nb\r\n",
+    "\n\nlead\nbody",
+    "tail   ",
+    "a\n\n#c\n\n\nb",
+    "//s\nb",
+  ];
+  // Messages that only `auto` (Git picks a character that starts no line) can commit.
+  const AUTO_ONLY_MESSAGES = ["#a\n#b", "# one\nbody\n; two", "#a\n;b\nbody"];
+
+  function commitBodies(repo: string): string[] {
+    return gitIn(repo, ["rev-list", "--reverse", "HEAD"])
+      .trim()
+      .split("\n")
+      .map((sha) => gitIn(repo, ["cat-file", "commit", sha]).split("\n\n").slice(1).join("\n\n"));
+  }
+
+  type CommentSettings = readonly (readonly [string, string])[];
+  const CLEANUP_CASES: readonly (readonly [string, CommentSettings])[] = [
+    ["default", []],
+    ["whitespace", []],
+    ["scissors", []],
+    ["strip", []],
+    ["strip", [["core.commentChar", ";"]]],
+    ["strip", [["core.commentChar", "auto"]]],
+    ["default", [["core.commentChar", "auto"]]],
+    ["verbatim", [["core.commentChar", "auto"]]],
+    ["strip", [["core.commentString", "auto"]]],
+    ["strip", [["core.commentString", "//"]]],
+    // Git 2.56 reads a multi-character core.commentChar as a comment string.
+    ["strip", [["core.commentChar", "ab"]]],
+    ["default", [["core.commentChar", "ab"]]],
+    // Both keys set: the one defined last wins.
+    [
+      "strip",
+      [
+        ["core.commentString", "//"],
+        ["core.commentChar", ";"],
+      ],
+    ],
+    [
+      "strip",
+      [
+        ["core.commentChar", ";"],
+        ["core.commentString", "//"],
+      ],
+    ],
+    ["verbatim", []],
+  ];
+  const INDENTED_COMMENT_MESSAGE = "a\n  #x\n ;y\nb";
+  const MARKER_MESSAGES = ["xab-less", "a\nabx\nb"];
+
+  it.each(CLEANUP_CASES)(
+    "records the message bytes of git commit -m for commit.cleanup=%s (comment settings %j)",
+    async (mode, settings) => {
+      // The oracle is real `git commit -m` run directly, so the lanes cannot agree on a wrong answer.
+      const gitRepo = newRepo();
+      const plainRepo = newRepo();
+      const boundRepo = newRepo();
+      for (const repo of [gitRepo, plainRepo, boundRepo]) {
+        seedBase(repo);
+        gitIn(repo, ["config", "commit.cleanup", mode]);
+        for (const setting of settings) gitIn(repo, ["config", ...setting]);
+      }
+      const messages = [
+        ...CLEANUP_MESSAGES,
+        INDENTED_COMMENT_MESSAGE,
+        ...MARKER_MESSAGES,
+        ...(settings.some(([, value]) => value === "auto") ? AUTO_ONLY_MESSAGES : []),
+      ];
+      for (const [index, message] of messages.entries()) {
+        writeFileSync(join(gitRepo, "a.txt"), `${String(index)}\n`, "utf8");
+        gitIn(gitRepo, ["add", "a.txt"]);
+        gitIn(gitRepo, ["commit", "-q", "-m", message]);
+        expect((await commitOn(plainRepo, false, message)).outcome).toBe("succeeded");
+        expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
+      }
+
+      expect(commitBodies(boundRepo)).toEqual(commitBodies(gitRepo));
+      expect(commitBodies(plainRepo)).toEqual(commitBodies(gitRepo));
+      expect(reflogs(boundRepo)).toEqual(reflogs(gitRepo));
+      expect(commitBodies(boundRepo)).toHaveLength(messages.length + 1);
+    },
+  );
+
+  // Refusals Git itself makes (exit 128) in every cleanup mode, whatever the mode would clean. A
+  // config Git cannot parse breaks every Git command, so the lane fails on its first read, before it
+  // ever reaches the cleanup: it still refuses and writes nothing, but with no cleanup cause.
+  const ALL_TEN = ["x", "#a", ";b", "@c", "!d", "$e", "%f", "^g", "&h", "|i", ":j", "k"].join("\n");
+  const MODES = ["default", "whitespace", "scissors", "verbatim", "strip"];
+  const REFUSED_SETTINGS: readonly (readonly [string, (repo: string) => void, string, boolean])[] =
+    [
+      [
+        "auto with all ten candidates used (commentChar)",
+        (r): void => {
+          gitIn(r, ["config", "core.commentChar", "auto"]);
+        },
+        ALL_TEN,
+        true,
+      ],
+      [
+        "auto with all ten candidates used (commentString)",
+        (r): void => {
+          gitIn(r, ["config", "core.commentString", "auto"]);
+        },
+        ALL_TEN,
+        true,
+      ],
+      [
+        "a core.commentChar with no value",
+        (r): void => {
+          appendFileSync(join(r, ".git", "config"), "[core]\n\tcommentChar\n");
+        },
+        "a\n#x\nb",
+        false,
+      ],
+      [
+        "an empty core.commentChar",
+        (r): void => {
+          gitIn(r, ["config", "core.commentChar", ""]);
+        },
+        "a\n#x\nb",
+        false,
+      ],
+      [
+        "an empty core.commentString",
+        (r): void => {
+          gitIn(r, ["config", "core.commentString", ""]);
+        },
+        "a\n#x\nb",
+        false,
+      ],
+    ];
+
+  it.each(
+    REFUSED_SETTINGS.flatMap(([name, setup, message, cleanupCause]) =>
+      MODES.map((mode) => [name, mode, setup, message, cleanupCause] as const),
+    ),
+  )(
+    "refuses like git for %s under commit.cleanup=%s",
+    async (_name, mode, setup, message, cleanupCause) => {
+      const gitRepo = newRepo();
+      const boundRepo = newRepo();
+      for (const repo of [gitRepo, boundRepo]) {
+        seedBase(repo);
+        gitIn(repo, ["config", "commit.cleanup", mode]);
+        writeFileSync(join(repo, "a.txt"), "x\n", "utf8");
+        gitIn(repo, ["add", "a.txt"]);
+        setup(repo);
+      }
+      expect(() => gitIn(gitRepo, ["commit", "-q", "-m", message])).toThrow();
+
+      const tipOf = (repo: string): string =>
+        readFileSync(join(repo, ".git", "refs", "heads", "main"), "utf8");
+      const tipBefore = tipOf(boundRepo);
+      const causes: string[] = [];
+      const refused = await adapterFor(boundRepo, true, {
+        onCommitRefused: (report) => {
+          causes.push(report.cause);
+        },
+      }).commit({ message, allowEmpty: false });
+
+      expect(refused.outcome).toBe("failed");
+      if (cleanupCause) {
+        expect(refused.errorCode).toBe("precondition-failed");
+        expect(causes).toEqual(["cleanup-unavailable"]);
+      }
+      expect(tipOf(boundRepo)).toBe(tipBefore);
+    },
+  );
+
+  it("refuses an invalid commit.cleanup on both lanes without writing anything", async () => {
+    for (const bound of [false, true]) {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["config", "commit.cleanup", "bogus"]);
+      const causes: string[] = [];
+      const ad = adapterFor(repo, bound, { onCommitRefused: (r) => causes.push(r.cause) });
+      writeFileSync(join(repo, "a.txt"), "x\n", "utf8");
+      expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+      // The bound lane reports the closed cause; the plain lane lets Git refuse it and writes nothing.
+      const refused = await ad.commit({ message: "m", allowEmpty: false });
+      expect(refused.outcome).toBe("failed");
+      expect(refused.errorCode).toBe("precondition-failed");
+      expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+      if (bound) expect(causes).toEqual(["cleanup-unavailable"]);
+    }
+  });
+
+  // The limit is on the effective message (after the cleanup), 65,535 bytes without its line break.
+  it.each([true, false])(
+    "accepts 65,535 bytes after cleanup and refuses 65,536 (bound lane: %s)",
+    async (bound) => {
+      const repo = newRepo();
+      seedBase(repo);
+      const causes: string[] = [];
+      const extra = {
+        onCommitRefused: (r: { cause: string }): void => {
+          causes.push(r.cause);
+        },
+      };
+
+      expect((await commitOn(repo, bound, "x".repeat(65_535), extra)).outcome).toBe("succeeded");
+      // 65,536 raw bytes whose trailing blanks are cleaned away fit once cleaned.
+      expect((await commitOn(repo, bound, `${"y".repeat(65_533)}   `, extra)).outcome).toBe(
+        "succeeded",
+      );
+      const before = gitIn(repo, ["rev-list", "--count", "HEAD"]).trim();
+      const refused = await commitOn(repo, bound, "z".repeat(65_536), extra);
+
+      expect(refused.outcome).toBe("failed");
+      expect(refused.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["message-too-large"]);
+      expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe(before);
+    },
+  );
+
+  it("treats an update-ref that fails after the branch names the new commit as a success", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const causes: string[] = [];
+    const lateFailure: SpawnFn = (command, args, options) => {
+      const child = nodeSpawnFn(command, args, options);
+      if (!args.includes("update-ref")) return child;
+      // The real update lands; only the exit code the adapter sees is a failure.
+      return new Proxy(child, {
+        get(target, property): unknown {
+          const value: unknown = Reflect.get(target, property, target);
+          if (property !== "on") return typeof value === "function" ? value.bind(target) : value;
+          return (event: string, listener: (...args: unknown[]) => void): ChildProcess =>
+            target.on(event, (...received: unknown[]) => {
+              if (event === "close") listener(1, received[1]);
+              else listener(...received);
+            });
+        },
+      });
+    };
+
+    const committed = await commitOn(repo, true, "lands anyway", {
+      spawn: lateFailure,
+      onCommitRefused: (report) => causes.push(report.cause),
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    // The late error is not invisible: the success carries a closed note the UI shows.
+    expect(committed.completionNote).toBe("recorded-despite-late-error");
+    expect(committed.externalId).toBe(gitIn(repo, ["rev-parse", "HEAD"]).trim());
+    expect(gitIn(repo, ["log", "-1", "--format=%s"]).trim()).toBe("lands anyway");
+    expect(causes).toEqual(["landed-after-failure"]);
+  });
+
+  // A port that fails the way the Node port does: the real lstat error codes of one entry.
+  function statFaultOn(name: string, code: string): WorkspaceFs {
+    return {
+      ...nodeWorkspaceFs,
+      stat: (path): ReturnType<WorkspaceFs["stat"]> => {
+        if (path.endsWith(`${sep}${name}`)) throw Object.assign(new Error(code), { code });
+        return nodeWorkspaceFs.stat(path);
+      },
+    };
+  }
+
+  it("counts an unreadable merge state file instead of reading it as absent", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    writeFileSync(join(repo, ".git", "SQUASH_MSG"), "squash\n", "utf8");
+    const reports: GitCleanupIncompleteReport[] = [];
+
+    const committed = await commitOn(repo, true, "lands", {
+      metadataFs: statFaultOn("SQUASH_MSG", "EACCES"),
+      onCleanupIncomplete: (report) => reports.push(report),
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(reports.map((report) => [report.caller, report.stateFiles])).toEqual([
+      ["commit-state", 1],
+    ]);
+  });
+
+  it("keeps the error class when the merge state cannot be examined at all", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const reports: GitCleanupIncompleteReport[] = [];
+    let refUpdates = 0;
+    const committed = await commitOn(repo, true, "lands", {
+      // The last authorization runs right before the ref update: from there on the gitdir cannot
+      // be resolved, so the cleanup after the commit cannot examine the merge state.
+      beforeCommitRefUpdate: (): boolean => {
+        refUpdates += 1;
+        return true;
+      },
+      metadataFs: {
+        ...nodeWorkspaceFs,
+        realPath: (path) => {
+          if (refUpdates >= 2) throw Object.assign(new Error("EIO"), { code: "EIO" });
+          return nodeWorkspaceFs.realPath(path);
+        },
+      },
+      onCleanupIncomplete: (report) => reports.push(report),
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.stateFiles).toBe(1);
+    expect(reports[0]?.error).toBeInstanceOf(Error);
+  });
+
+  it("cuts a long reflog subject by code points, never inside a surrogate pair", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const message = `${"x".repeat(1_023)}\u{1F600}\u{1F600}`;
+
+    expect((await commitOn(repo, true, message)).outcome).toBe("succeeded");
+
+    const subject = reflogs(repo).branch[0] ?? "";
+    expect(subject).toBe(`commit: ${"x".repeat(1_023)}\u{1F600}`);
+    expect(Buffer.from(subject, "utf8").toString("utf8")).toBe(subject);
+    expect(subject).not.toContain("\uFFFD");
+  });
+
+  it("commits a message of 60 KiB through stdin, byte for byte as git cleans it", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const message = `subject\n\n${"x".repeat(60_000)}`;
+
+    expect((await commitOn(repo, true, message)).outcome).toBe("succeeded");
+
+    expect(gitIn(repo, ["cat-file", "commit", "HEAD"]).endsWith(`\n\n${message}\n`)).toBe(true);
+  });
+
+  describe("refusals carry their own cause and code", () => {
+    interface Refusal {
+      readonly result: GitDeliveryExecutionResultLike;
+      readonly causes: string[];
+    }
+
+    async function refused(
+      repo: string,
+      message: string,
+      allowEmpty: boolean,
+      extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
+    ): Promise<Refusal> {
+      const causes: string[] = [];
+      const ad = adapterFor(repo, true, {
+        onCommitRefused: (report) => causes.push(report.cause),
+        ...extra,
+      });
+      return { result: await ad.commit({ message, allowEmpty }), causes };
+    }
+
+    it("names a checkout that is not on the prepared branch", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["checkout", "-q", "-b", "elsewhere"]);
+      const { result, causes } = await refused(repo, "m", true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["not-on-prepared-branch"]);
+    });
+
+    it("names a sequencer operation in progress", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      writeFileSync(join(repo, ".git", "MERGE_HEAD"), "x\n", "utf8");
+      const { result, causes } = await refused(repo, "m", true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["sequencer-in-progress"]);
+    });
+
+    it("names an unreadable sequencer state and keeps the cause", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const reports: { cause: string; error?: unknown }[] = [];
+      const { result } = await refused(repo, "m", true, {
+        metadataFs: statFaultOn("MERGE_HEAD", "EACCES"),
+        onCommitRefused: (report) => reports.push(report),
+      });
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(reports.map((report) => report.cause)).toEqual(["sequencer-unreadable"]);
+      expect(reports[0]?.error).toBeInstanceOf(Error);
+    });
+
+    it("does not read an unreadable MERGE_HEAD as no merge in progress", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      writeFileSync(join(repo, ".git", "MERGE_HEAD"), "x\n", "utf8");
+      const before = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+      const { result, causes } = await refused(repo, "m", true, {
+        metadataFs: statFaultOn("MERGE_HEAD", "EIO"),
+      });
+      expect(result.outcome).toBe("failed");
+      expect(causes).toEqual(["sequencer-unreadable"]);
+      expect(gitIn(repo, ["rev-parse", "HEAD"]).trim()).toBe(before);
+    });
+
+    it("keeps a git failure that is not a moved branch out of `conflict`", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const before = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+      let authorizations = 0;
+      const { result, causes } = await refused(repo, "mine", true, {
+        // A held ref lock makes `update-ref` fail while the branch itself did not move.
+        beforeCommitRefUpdate: (): boolean => {
+          authorizations += 1;
+          if (authorizations === 2)
+            writeFileSync(join(repo, ".git", "refs", "heads", "main.lock"), "");
+          return true;
+        },
+      });
+      rmSync(join(repo, ".git", "refs", "heads", "main.lock"), { force: true });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["git-command-failed"]);
+      expect(gitIn(repo, ["rev-parse", "HEAD"]).trim()).toBe(before);
+    });
+
+    it("refuses the same oversized message on the plain lane", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const causes: string[] = [];
+      const ad = adapterFor(repo, false, {
+        onCommitRefused: (report) => causes.push(report.cause),
+      });
+      const result = await ad.commit({ message: "x".repeat(70_000), allowEmpty: true });
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["message-too-large"]);
+      expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    });
+
+    it("never lets a throwing log port replace the refusal", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result } = await refused(repo, " \n", true, {
+        onCommitRefused: () => {
+          throw new Error("port failed");
+        },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+    });
+
+    it("never moves the branch a symbolic prepared branch points to", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["branch", "other"]);
+      // `refs/heads/task` is a symref to `refs/heads/other`, and the checkout is on it: the branch the
+      // signing decision was made for is not the ref an update would move.
+      gitIn(repo, ["symbolic-ref", "refs/heads/task", "refs/heads/other"]);
+      gitIn(repo, ["symbolic-ref", "HEAD", "refs/heads/task"]);
+      const otherBefore = gitIn(repo, ["rev-parse", "refs/heads/other"]).trim();
+      const { result, causes } = await refused(repo, "mine", true, {
+        preparedCheckout: { branchName: "task" },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+      // The checkout reads as the branch the symref resolves to, so it is not the prepared one.
+      expect(causes).toEqual(["not-on-prepared-branch"]);
+      expect(gitIn(repo, ["rev-parse", "refs/heads/other"]).trim()).toBe(otherBefore);
+      expect(gitIn(repo, ["symbolic-ref", "refs/heads/task"]).trim()).toBe("refs/heads/other");
+    });
+
+    it("refuses a destination that turns symbolic after the commit object was written", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["branch", "other"]);
+      const otherBefore = gitIn(repo, ["rev-parse", "refs/heads/other"]).trim();
+      let authorizations = 0;
+      const { result, causes } = await refused(repo, "mine", true, {
+        // The first authorization runs after the checkout was proved and long before the final read of
+        // the branch: the branch becomes a symref there, and that final read must see it.
+        beforeCommitRefUpdate: (): boolean => {
+          authorizations += 1;
+          if (authorizations === 1)
+            gitIn(repo, ["symbolic-ref", "refs/heads/main", "refs/heads/other"]);
+          return true;
+        },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["ref-symbolic"]);
+      expect(gitIn(repo, ["rev-parse", "refs/heads/other"]).trim()).toBe(otherBefore);
+    });
+
+    it("names an empty message", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result, causes } = await refused(repo, " \n\t\n", true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["empty-message"]);
+    });
+
+    it("names a commit that would change nothing", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result, causes } = await refused(repo, "m", false);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["nothing-to-commit"]);
+    });
+
+    it("names a message too large for the bounded input", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result, causes } = await refused(repo, "x".repeat(70_000), true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["message-too-large"]);
+    });
+
+    it("answers `conflict` and writes nothing when the prepared branch moves before the ref update", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const before = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+      let authorizations = 0;
+      let racer = "";
+      const { result, causes } = await refused(repo, "mine", true, {
+        // The second authorization runs after the commit object exists and right before the ref
+        // update: the branch itself moves exactly there.
+        beforeCommitRefUpdate: (): boolean => {
+          authorizations += 1;
+          if (authorizations === 2) {
+            gitIn(repo, ["commit", "-q", "--allow-empty", "-m", "racer"]);
+            racer = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+          }
+          return true;
+        },
+      });
+
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("conflict");
+      expect(causes).toEqual(["ref-moved"]);
+      expect(racer).not.toBe(before);
+      expect(gitIn(repo, ["rev-parse", "refs/heads/main"]).trim()).toBe(racer);
+      expect(gitIn(repo, ["log", "-1", "--format=%s", "refs/heads/main"]).trim()).toBe("racer");
+    });
+  });
 });
 
 describe("node git mutation adapter — successful local mutations", () => {
@@ -216,14 +1158,14 @@ describe("node git mutation adapter — verified unstage", () => {
     git(["add", "b.txt"]);
     const headSha = git(["rev-parse", "HEAD"]).trim();
     return {
-      headSha,
+      head: { kind: "born", sha: headSha },
       stagedTreeDigest: await readGitIndexTreeDigest({
         workspace: info,
         processEnv: { PATH: process.env.PATH ?? "" },
       }),
       branchName: "work",
       baseRef: "base",
-      baseSha: headSha,
+      base: { kind: "born", sha: headSha },
     };
   }
 
@@ -390,6 +1332,197 @@ describe("node git mutation adapter — multi-step recovery through the real bou
     });
     expect(partial.outcome).toBe("partial");
     expect(partial.partialDetail).toEqual({ attemptedUnitCount: 2, succeededUnitCount: 1 });
+  });
+});
+
+// Windows lab (1.5.10): every Git process costs 70 to 130 ms there, and each governed step used to
+// probe the repository's promisor remotes again before its own process. The probe is the guard's
+// `git config --get-regexp ^remote\..*\.(promisor|partialclonefilter)$`.
+describe("node git mutation adapter — one promisor verdict per operation", () => {
+  const PROMISOR_PROBE = String.raw`^remote\..*\.(promisor|partialclonefilter)$`;
+
+  // The host's own git decides whether a negative verdict may be held (git 2.45 or later), so the
+  // pins below fix the version the adapter sees: the cached-verdict path and the re-probe path are
+  // each under test on every host, whatever git is installed.
+  const GUARD_ENFORCING_BANNER = "git version 2.50.0";
+  const GUARD_IGNORING_BANNER = "git version 2.43.0";
+
+  function countingAdapter(
+    options: { readonly readSession?: boolean; readonly versionBanner?: string } = {},
+  ): {
+    readonly adapter: GitLocalMutationAdapter;
+    readonly probes: () => number;
+    readonly processes: () => number;
+  } {
+    let probes = 0;
+    let processes = 0;
+    const spawn: SpawnFn = (command, args, spawnOptions) => {
+      // The installed git's version is read once per spawn function, never per step or operation:
+      // it is what makes a negative promisor verdict safe to hold for the whole operation.
+      if (args[0] !== "version") processes += 1;
+      if (args.includes(PROMISOR_PROBE)) probes += 1;
+      if (args[0] === "version") {
+        const banner = options.versionBanner ?? GUARD_ENFORCING_BANNER;
+        return nodeSpawnFn(
+          process.execPath,
+          ["-e", `console.log(${JSON.stringify(banner)})`],
+          spawnOptions,
+        );
+      }
+      return nodeSpawnFn(command, args, spawnOptions);
+    };
+    return {
+      adapter: createNodeGitMutationAdapter({
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+        now: () => Date.now(),
+        spawn,
+        ...(options.readSession === true ? { readSession: createGitReadSession() } : {}),
+      }),
+      probes: () => probes,
+      processes: () => processes,
+    };
+  }
+
+  function dirtyRepositoryTwoCommitsDeep(): string {
+    const { base } = seedBaseCommit();
+    writeFileSync(join(root, "f.txt"), "v2\n", "utf8");
+    git(["commit", "-am", "v2"]);
+    writeFileSync(join(root, "f.txt"), "dirty\n", "utf8");
+    return base;
+  }
+
+  it("probes once for a two-step operation, where it probed before each step", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const { adapter: counted, probes, processes } = countingAdapter();
+    const recovered = await counted.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    expect(recovered.outcome).toBe("succeeded");
+    expect(processes()).toBe(3);
+    expect(probes()).toBe(1);
+  });
+
+  it("probes before each effect on a git that does not enforce the lazy-fetch guard", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const {
+      adapter: counted,
+      probes,
+      processes,
+    } = countingAdapter({
+      versionBanner: GUARD_IGNORING_BANNER,
+    });
+    const recovered = await counted.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    expect(recovered.outcome).toBe("succeeded");
+    // Stash and reset are two effects: each is preceded by its own probe, so the probes are the
+    // processes beyond the two steps.
+    expect(probes()).toBe(2);
+    expect(processes()).toBe(2 + probes());
+  });
+
+  it("probes again for the next operation of the same adapter", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const { adapter: counted, probes } = countingAdapter();
+    await counted.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    expect(probes()).toBe(1);
+    // A promisor remote configured between two operations is seen by the second one.
+    git(["config", "remote.origin.url", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    await counted.switchBranch({ branchName: "main" });
+    await counted.switchBranch({ branchName: "main" });
+    expect(probes()).toBe(3);
+  });
+
+  it("shares the verdict of a scope the caller owns across the operations inside it", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const { adapter: scoped, probes } = countingAdapter({ readSession: true });
+    await scoped.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    await scoped.switchBranch({ branchName: "main" });
+    expect(probes()).toBe(1);
+  });
+});
+
+describe("many blob texts in a few processes", () => {
+  function blob(bytes: Uint8Array): string {
+    return execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: bytes,
+      encoding: "utf8",
+    }).trim();
+  }
+
+  it("reads exactly what one blob read answers, whatever the bytes are", async () => {
+    const ids = [
+      blob(new TextEncoder().encode("plain\nlines\n")),
+      blob(new TextEncoder().encode("ünïcödé ✓ 😀\n")),
+      blob(Uint8Array.from([0x61, 0xff, 0xfe, 0x62, 0x0a])),
+      blob(Uint8Array.from([0x61, 0x00, 0x62])),
+      blob(new Uint8Array(0)),
+      blob(new TextEncoder().encode("x".repeat(5000))),
+    ];
+    let processes = 0;
+    const spawn: SpawnFn = (command, args, options) => {
+      processes += 1;
+      return nodeSpawnFn(command, args, options);
+    };
+    const deps = {
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      spawn,
+      readSession: createGitReadSession(),
+    };
+    const many = await readGitBlobTextsWithin(deps, ids, 4096);
+    const batched = processes;
+    for (const id of ids)
+      expect(many.get(id), id).toEqual(await readGitBlobTextWithin(deps, id, 4096));
+    expect(many.get(ids[5] ?? "")).toBeUndefined();
+    // The promisor probe, the sizes, the batches halved around the one byte sequence a UTF-8
+    // decoder cannot carry through, and that blob by itself.
+    expect(batched).toBeLessThanOrEqual(10);
+  });
+
+  it("starts the same number of processes for three blobs as for three hundred", async () => {
+    const few = Array.from({ length: 3 }, (_, at) =>
+      blob(new TextEncoder().encode(`few ${String(at)}\n`)),
+    );
+    const many = Array.from({ length: 300 }, (_, at) =>
+      blob(new TextEncoder().encode(`many ${String(at)}\n`)),
+    );
+    let processes = 0;
+    const spawn: SpawnFn = (command, args, options) => {
+      processes += 1;
+      return nodeSpawnFn(command, args, options);
+    };
+    const deps = { workspace: info, processEnv: { PATH: process.env.PATH ?? "" }, spawn };
+    await readGitBlobTextsWithin(deps, few, 4096);
+    const forFew = processes;
+    processes = 0;
+    await readGitBlobTextsWithin(deps, many, 4096);
+    expect(processes).toBe(forFew);
+  });
+
+  it("refuses a blob that does not exist as an unreadable read", async () => {
+    await expect(
+      readGitBlobTextsWithin(
+        { workspace: info, processEnv: { PATH: process.env.PATH ?? "" } },
+        ["a".repeat(40)],
+        4096,
+      ),
+    ).rejects.toMatchObject({ reason: "exit-nonzero" });
   });
 });
 
@@ -581,14 +1714,14 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     rmSync(normalizationHome, { recursive: true, force: true });
   });
 
-  function stageSupported(): Promise<boolean> {
+  function stageSupported(paths: readonly string[] = ["a.txt"]): Promise<GitStageSupport> {
     return readGitStageSupport(
       {
         workspace: info,
         processEnv: { PATH: process.env.PATH ?? "", HOME: normalizationHome },
         now: () => Date.now(),
       },
-      ["a.txt"],
+      paths,
     );
   }
 
@@ -601,27 +1734,27 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     git(["config", "core.autocrlf", "false"]);
     git(["config", "core.safecrlf", "false"]);
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   it("admits a file Git stores unchanged under an outer autocrlf that is not overridden", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   it("admits a file whose every line break is CRLF under an outer autocrlf", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   it("refuses a file with mixed line breaks under an outer autocrlf", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("content-conversion");
   });
 
   // Audit of #4491: Git keeps the bytes of a path whose index entry already stores a CR, so a mixed
@@ -632,17 +1765,18 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     git(["-c", "core.autocrlf=false", "add", "a.txt"]);
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\n", "utf8");
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   // Git still honours the legacy `crlf` attribute (`crlf=input` acts as `eol=lf`): a raw stage of a
-  // CRLF file there would differ from what Git checks against, so it is refused like `text`/`eol`.
+  // CRLF file there would differ from what Git checks against, so it stays refused. `text` and `eol`
+  // are admitted since #4491 and judged by their round trip (git-stage-node.test.ts).
   it("refuses exact staging when the legacy crlf attribute asks for a conversion", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = false\n");
     writeFileSync(join(root, ".gitattributes"), "*.txt crlf=input\n", "utf8");
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("attribute-line-ending");
   });
 
   it("refuses a CRLF file when the repository-local scope enables autocrlf=input", async () => {
@@ -651,7 +1785,7 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     git(["config", "core.safecrlf", "false"]);
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("content-conversion");
   });
 
   // PR #4568 review: a configured value may hold a newline. Read as lines, the continuation of a
@@ -666,7 +1800,7 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     expect(git(["config", "--get", "filter.lab.clean"])).toContain("\ncore.autocrlf false");
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("content-conversion");
   });
 
   // PR #4568 audit: a configured filter driver whose name cannot be overridden on the command line
@@ -676,13 +1810,13 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     appendFileSync(join(root, ".git", "config"), '[filter "a=b"]\n\tclean = cat\n', "utf8");
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
 
-    await expect(stageSupported()).resolves.toBe(false);
+    await expect(stageSupported()).resolves.toBe("filter-driver");
   });
 
   it("refuses exact staging while core.safecrlf resolves to anything but false", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = warn\n");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("config-unsupported");
   });
 
   // Review finding on PR #4568: the mode a verified staging hashed under is read once, so a change
@@ -699,14 +1833,14 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     writeFileSync(join(root, "b.txt"), "one\r\ntwo\r\n", "utf8");
     const headSha = git(["rev-parse", "HEAD"]).trim();
     const verified: GitVerifiedCommitPrecondition = {
-      headSha,
+      head: { kind: "born", sha: headSha },
       stagedTreeDigest: await readGitIndexTreeDigest({
         workspace: info,
         processEnv: { PATH: process.env.PATH ?? "" },
       }),
       branchName: "work",
       baseRef: "base",
-      baseSha: headSha,
+      base: { kind: "born", sha: headSha },
     };
     const index = git(["ls-files", "--stage"]);
     let flipped = false;
@@ -739,6 +1873,301 @@ describe("node git mutation adapter — stage normalization follows the effectiv
       "utf8",
     );
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("config-unsupported");
+  });
+
+  // #4491: the refusal names ONE closed cause. An attribute rule that matches only Markdown refuses
+  // the Markdown file while a TypeScript file stages, in a repository whose autocrlf and safecrlf are
+  // unset everywhere (the config hint the model used to receive could not have helped).
+  describe("names the cause of a refusal", () => {
+    beforeEach(() => {
+      writeHomeGitConfig("[user]\n\tname = x\n");
+      writeFileSync(join(root, "doc.md"), "# doc\n", "utf8");
+      writeFileSync(join(root, "code.ts"), "export {};\n", "utf8");
+    });
+
+    it("refuses an attribute rule for *.md only and stages *.ts", async () => {
+      writeFileSync(join(root, ".gitattributes"), "*.md filter=lfs\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-filter");
+      expect(await stageSupported(["code.ts"])).toBe("supported");
+      expect(await stageSupported(["code.ts", "doc.md"])).toBe("attribute-filter");
+    });
+
+    it("reads a rule that lives only in .git/info/attributes", async () => {
+      appendFileSync(join(root, ".git", "info", "attributes"), "*.md ident\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-ident");
+      expect(await stageSupported(["code.ts"])).toBe("supported");
+    });
+
+    it("names a working-tree-encoding rule", async () => {
+      writeFileSync(join(root, ".gitattributes"), "*.md working-tree-encoding=UTF-16\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-encoding");
+    });
+
+    it("names a line-ending rule outside the admitted values", async () => {
+      writeFileSync(join(root, ".gitattributes"), "*.md eol=bogus\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-line-ending");
+    });
+
+    it("names a configuration Git cannot read as a verified staging admits", async () => {
+      git(["config", "core.autocrlf", "bogus"]);
+
+      expect(await stageSupported(["code.ts"])).toBe("config-unsupported");
+    });
+
+    it("names a filter driver that cannot be neutralised before any attribute", async () => {
+      appendFileSync(join(root, ".git", "config"), '[filter "a=b"]\n\tclean = cat\n', "utf8");
+      writeFileSync(join(root, ".gitattributes"), "*.md filter=lfs\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("filter-driver");
+    });
+
+    it("names a file whose line breaks would not round-trip", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      writeFileSync(join(root, "code.ts"), "a\r\nb\n", "utf8");
+
+      expect(await stageSupported(["code.ts"])).toBe("content-conversion");
+    });
+  });
+});
+
+// ─── Signing follows Git's effective `commit.gpgsign` (ADR-0006, #4491) ─────────────────────────
+//
+// A person who never set up commit signing gets the commit Git itself would make: unsigned, with
+// neither `--gpg-sign` nor `--no-gpg-sign` on the argv. A person who did gets a signed commit, and a
+// signer that cannot sign fails visibly instead of falling back to an unsigned commit. An unreadable
+// or malformed value fails closed toward signing.
+describe("node git mutation adapter — signing follows the effective commit.gpgsign", () => {
+  function lastSignatureState(): string {
+    return git(["log", "-1", "--format=%G?"]).trim();
+  }
+
+  async function stagedCommit(): Promise<Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>> {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = adapter();
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    return ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  }
+
+  it("signs and reports `configured` when the repository enables signing", async () => {
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("configured");
+    expectLastCommitSigned(root);
+  });
+
+  it("commits unsigned, as Git itself would, when commit.gpgsign is not set anywhere", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(lastSignatureState()).toBe("N");
+  });
+
+  it("commits unsigned when commit.gpgsign is false", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(lastSignatureState()).toBe("N");
+  });
+
+  it("reads Git boolean spellings: `off` does not sign, `yes` does", async () => {
+    git(["config", "commit.gpgsign", "off"]);
+    expect((await stagedCommit()).signing).toBe("not-configured");
+    expect(lastSignatureState()).toBe("N");
+
+    git(["config", "commit.gpgsign", "yes"]);
+    const signed = await adapter().commit({ message: "feat: second", allowEmpty: true });
+    expect(signed.signing).toBe("configured");
+    expectLastCommitSigned(root);
+  });
+
+  it("never falls back to an unsigned commit when the configured signer fails", async () => {
+    git(["config", "user.signingkey", join(root, "missing-key.pub")]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("signature-failed");
+    expect(committed.signing).toBe("configured");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("fails closed on a malformed value: it attempts to sign and commits nothing unsigned", async () => {
+    git(["config", "commit.gpgsign", "maybe"]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.signing).toBe("unknown-fail-closed");
+    expect(committed.outcome).toBe("failed");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+});
+
+describe("node git mutation adapter — signing scopes and branch protection", () => {
+  let scopeHome: string;
+
+  beforeEach(() => {
+    scopeHome = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-scope-home-")));
+  });
+
+  afterEach(() => {
+    rmSync(scopeHome, { recursive: true, force: true });
+  });
+
+  function scopedAdapter(required?: boolean): GitLocalMutationAdapter {
+    return createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "", HOME: scopeHome },
+      now: () => Date.now(),
+      ...(required === undefined
+        ? {}
+        : { signingRequiredByBranchProtection: () => Promise.resolve(required) }),
+    });
+  }
+
+  async function commitWith(
+    ad: GitLocalMutationAdapter,
+  ): Promise<Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>> {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    return ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  }
+
+  it("follows Git: a repository commit.gpgsign=false beats a global true, so the commit is unsigned", async () => {
+    writeFileSync(join(scopeHome, ".gitconfig"), "[commit]\n\tgpgsign = true\n", "utf8");
+    git(["config", "commit.gpgsign", "false"]);
+
+    const committed = await commitWith(scopedAdapter());
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("N");
+  });
+
+  it("signs when the true value comes from an included file", async () => {
+    const included = join(scopeHome, "signing.inc");
+    writeFileSync(included, "[commit]\n\tgpgsign = true\n", "utf8");
+    git(["config", "--unset", "commit.gpgsign"]);
+    git(["config", "include.path", included]);
+
+    const committed = await commitWith(scopedAdapter());
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("configured");
+    expectLastCommitSigned(root);
+  });
+
+  it("signs an unset commit.gpgsign when branch protection requires signatures", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+
+    const committed = await commitWith(scopedAdapter(true));
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("required-by-branch-protection");
+    expectLastCommitSigned(root);
+  });
+
+  it("fails visibly, and commits nothing unsigned, when a required signature cannot be made", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    git(["config", "user.signingkey", join(root, "missing-key.pub")]);
+
+    const committed = await commitWith(scopedAdapter(true));
+
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("signature-failed");
+    expect(committed.signing).toBe("required-by-branch-protection");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("commits unsigned when commit.gpgsign is unset and branch protection does not require it", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+
+    const committed = await commitWith(scopedAdapter(false));
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("N");
+  });
+});
+
+// A blob a UTF-8 decoder cannot carry through (a binary file) cannot be told from its batch answer,
+// so the batch is halved around it. That isolation is paid from a budget: a selection of nothing but
+// binaries must cost no more than the one-by-one read always did.
+describe("blob texts of binary selections", () => {
+  function counting(): {
+    readonly deps: Parameters<typeof readGitBlobTextsWithin>[0];
+    readonly argvs: string[][];
+  } {
+    const argvs: string[][] = [];
+    const spawn: SpawnFn = (command, args, options) => {
+      argvs.push([...args]);
+      return nodeSpawnFn(command, args, options);
+    };
+    return {
+      deps: {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+        spawn,
+        readSession: createGitReadSession(),
+      },
+      argvs,
+    };
+  }
+
+  function binary(seed: number): string {
+    return execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: Uint8Array.from([0x89, 0x50, 0xff, 0xfe, seed % 256, Math.floor(seed / 256)]),
+      encoding: "utf8",
+    }).trim();
+  }
+
+  function text(seed: number): string {
+    return execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: `text ${String(seed)}\n`,
+      encoding: "utf8",
+    }).trim();
+  }
+
+  it.each([1, 2, 3, 20])(
+    "never costs more for %i binary blobs than reading them one by one",
+    async (count) => {
+      const ids = Array.from({ length: count }, (_, at) => binary(at));
+      const old = counting();
+      for (const id of ids) await readGitBlobTextWithin(old.deps, id, 4096);
+      const oldProcesses = old.argvs.length;
+      const batched = counting();
+      const texts = await readGitBlobTextsWithin(batched.deps, ids, 4096);
+      expect(batched.argvs.length).toBeLessThanOrEqual(oldProcesses);
+      for (const id of ids)
+        expect(texts.get(id), id).toBe(await readGitBlobTextWithin(old.deps, id, 4096));
+    },
+  );
+
+  it("isolates a few binary blobs among many texts without a process per blob", async () => {
+    const ids = Array.from({ length: 60 }, (_, at) => (at % 20 === 7 ? binary(at) : text(at)));
+    const { deps, argvs } = counting();
+    const texts = await readGitBlobTextsWithin(deps, ids, 4096);
+    expect(texts.size).toBe(60);
+    expect(argvs.length).toBeLessThan(60);
+  });
+
+  it("asks for the sizes of many blobs in runs the stdin bound carries", async () => {
+    const ids = Array.from({ length: 450 }, (_, at) => text(at));
+    const { deps, argvs } = counting();
+    await readGitBlobTextsWithin(deps, ids, 4096);
+    expect(argvs.filter((argv) => argv.includes("--batch-check"))).toHaveLength(2);
   });
 });

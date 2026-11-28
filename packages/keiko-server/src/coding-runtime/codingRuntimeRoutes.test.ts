@@ -631,6 +631,75 @@ describe("coding runtime routes", () => {
     },
   );
 
+  // The Workbench showed one repository while the server's active workspace was another: the
+  // refusal reaches the browser as a 409 with its own closed code, never as a generic 400.
+  it("answers a selection mismatch as a conflict with its own closed code and refusal line", async () => {
+    const session = pairedAppSession();
+    const records: Record<string, unknown>[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event as never) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        start: (body: unknown) => Promise<Readonly<Record<string, unknown>>>;
+      }
+    ).start = () =>
+      Promise.resolve({ ok: false as const, failureCode: "workspace-selection-mismatch" });
+    const refused = await handleCreateCodingRuntimeRun(
+      context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie, "start-corr-mm"),
+      deps,
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body).toEqual({
+      error: {
+        code: "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH",
+        message: "Runtime request was rejected.",
+        correlationId: "start-corr-mm",
+      },
+    });
+    const line = records.find(
+      (record) =>
+        (record.extra as { reason?: string } | undefined)?.reason ===
+        "workspace-selection-mismatch",
+    );
+    expect(line).toMatchObject({ correlationId: "start-corr-mm", errorKind: "conflict" });
+  });
+
+  // A window opened before an upgrade sends no repository. The refusal is a 409 with its own closed
+  // code and a sentence that names the next step, which is all such a window can show.
+  it("answers a start without a stated repository as a conflict that says to reload", async () => {
+    const session = pairedAppSession();
+    const records: Record<string, unknown>[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event as never) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        start: (body: unknown) => Promise<Readonly<Record<string, unknown>>>;
+      }
+    ).start = () =>
+      Promise.resolve({ ok: false as const, failureCode: "expected-workspace-missing" });
+    const refused = await handleCreateCodingRuntimeRun(
+      context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie, "start-corr-ew"),
+      deps,
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body).toEqual({
+      error: {
+        code: "CODING_RUNTIME_EXPECTED_WORKSPACE_MISSING",
+        message: "This window is out of date. Reload this window, then start again.",
+        correlationId: "start-corr-ew",
+      },
+    });
+    const line = records.find(
+      (record) =>
+        (record.extra as { reason?: string } | undefined)?.reason === "expected-workspace-missing",
+    );
+    expect(line).toMatchObject({ correlationId: "start-corr-ew", errorKind: "conflict" });
+  });
+
   // A retry mints a NEW run against the predecessor named in the URL; when the runtime refuses it
   // after minting, every cause line is keyed to the new run. Keyed on the URL's predecessor, the
   // refusal line and the cause again shared no key (review of PR #3452).
@@ -1733,6 +1802,10 @@ describe("coding runtime routes", () => {
           codingRuntimeOrchestrator: { status: () => liveStatus(state) },
         }),
       );
+      // U-37: whatever the server confirms must be accepted by the browser's own contract check.
+      expect(validateCodingWorkbenchRuntimeReadiness(result.body)).toMatchObject({ ok: true });
+      if (state === "recovery-required") expect(result.body).not.toHaveProperty("liveRunAnchored");
+      else expect(result.body).toMatchObject({ liveRunAnchored: true });
       return (result.body as { effectiveMode?: string }).effectiveMode;
     };
 

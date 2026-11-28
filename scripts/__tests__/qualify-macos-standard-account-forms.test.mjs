@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 import {
   DISPOSABLE_ACCOUNT_VARIABLE,
+  EXPECTED_WORKSPACE_SINCE,
   FORMS,
   FormsRefusal,
   MARKED_OUTCOMES,
@@ -22,7 +23,9 @@ import {
   nodeUserInstallScript,
   parseFormsArgs,
   standaloneAssetUrls,
+  startStatesRepository,
 } from "../testing/qualify-macos-standard-account-forms.mjs";
+import { startRun } from "../testing/coding-workbench-lab/wb-run.mjs";
 
 // #4520: the three macOS delivery forms, installed and started as a standard account. These pins
 // keep the qualification a proof that can fail: it certifies only a standard account without sudo,
@@ -55,6 +58,47 @@ const MARKED = {
 function fakeRun(outputs) {
   return (command, args) => outputs[`${command} ${args.join(" ")}`] ?? { status: 1, stdout: "" };
 }
+
+describe("the start request speaks the protocol of the version under proof", () => {
+  it("states the repository from the first version that requires it", () => {
+    expect(EXPECTED_WORKSPACE_SINCE).toBe("1.5.11");
+    expect(startStatesRepository("1.5.11")).toBe(true);
+    expect(startStatesRepository("1.5.12")).toBe(true);
+    expect(startStatesRepository("1.6.0")).toBe(true);
+    expect(startStatesRepository("2.0.0")).toBe(true);
+  });
+
+  it("leaves the field out for a published release that refuses it", () => {
+    expect(startStatesRepository("1.5.10")).toBe(false);
+    expect(startStatesRepository("1.4.9")).toBe(false);
+    expect(startStatesRepository("0.9.99")).toBe(false);
+  });
+
+  const recordingSession = () => {
+    const bodies = [];
+    return {
+      bodies,
+      request: (_method, _path, body) => {
+        bodies.push(body);
+        return Promise.resolve({ status: 201, json: { runId: "run-1" }, correlationId: "c" });
+      },
+    };
+  };
+  const task = { text: "t", mode: { id: "governed-assist", label: "Ask" }, model: "m" };
+
+  it("states the repository by default and refuses a current start without one", async () => {
+    const session = recordingSession();
+    await startRun(session, { ...task, repository: "/repo" });
+    expect(session.bodies[0].expectedWorkspace).toEqual({ root: "/repo" });
+    await expect(startRun(session, task)).rejects.toThrow("must state its repository");
+  });
+
+  it("sends no repository field to an older release", async () => {
+    const session = recordingSession();
+    await startRun(session, { ...task, repository: "/repo", statesRepository: false });
+    expect(Object.keys(session.bodies[0])).not.toContain("expectedWorkspace");
+  });
+});
 
 describe("parseFormsArgs", () => {
   it("takes the version and the evidence folder and defaults the rest", () => {

@@ -90,19 +90,104 @@ export const CODING_WORKBENCH_NATIVE_JIRA_REVIEW_MAX_NAMES = 64;
 export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES = 64;
 export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS = 2_048;
 
+/** Why a governed verification names no command yet; a plain sentence on the card, never empty. */
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS = [
+  "targeted-test",
+  "package-selection",
+  "host-setup",
+] as const;
+export type CodingWorkbenchVerificationPreviewDeferral =
+  (typeof CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS)[number];
+
+/** Closed reasons a preview could not be produced; the card falls back to the class label. */
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_UNAVAILABLE_REASONS = [
+  "workspace-unresolved",
+  "no-runnable-step",
+  "preview-failed",
+] as const;
+export type CodingWorkbenchVerificationPreviewUnavailableReason =
+  (typeof CODING_WORKBENCH_VERIFICATION_PREVIEW_UNAVAILABLE_REASONS)[number];
+
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS = 8;
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS = 1_024;
+
+/**
+ * What a governed verification ask (`test`, `typecheck`, `lint`, `build`) would run, resolved from
+ * the project the way the runner plans it. The command lines are MODEL-INFLUENCED project content
+ * shown to the person who approves: they carry only the content (credential-floor) projection,
+ * travel only on the authenticated review channel, and never reach evidence or the Activity Log.
+ * A line longer than the cap is cut and ends in an ellipsis, and `truncated` says so.
+ */
+export type CodingWorkbenchVerificationPreview =
+  | {
+      readonly status: "commands";
+      readonly commands: readonly string[];
+      readonly truncated: boolean;
+    }
+  | {
+      readonly status: "deferred";
+      readonly reason: CodingWorkbenchVerificationPreviewDeferral;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: CodingWorkbenchVerificationPreviewUnavailableReason;
+    };
+
+export const CODING_WORKBENCH_GIT_BRANCH_REVIEW_NAME_MAX_CHARS = 255;
+
+/** The task branch a pending `git-branch` approval would create and switch to. */
+export interface CodingWorkbenchGitBranchReview {
+  readonly branchName: string;
+}
+
+/**
+ * A staged rename in a commit review: the path the change lands on (one of `paths`) and the path it
+ * came from. Each name is bounded on its own, so a rename between two paths that both fit the path
+ * bound is never refused for the length of a joined label; the UI renders the arrow.
+ */
+export interface CodingWorkbenchReviewRename {
+  readonly path: string;
+  readonly from: string;
+}
+
 export interface CodingWorkbenchRuntimePendingApprovalReview {
   /** Binds the review to the exact pending permission the operator is deciding about. */
   readonly requestId: string;
   /** Present only for a native OpenCode action; edits carry their paths in `paths` as well. */
   readonly nativeAction?: CodingWorkbenchNativeActionReview;
+  /** Present only for a governed verification ask; carries no paths. */
+  readonly verificationPreview?: CodingWorkbenchVerificationPreview;
+  /**
+   * Present only for a governed task-branch ask (`git-branch`, #4491 U-27): the branch Approve
+   * would create and switch to, so the person sees what they approve. A ref name, not a secret;
+   * it carries no paths.
+   */
+  readonly gitBranch?: CodingWorkbenchGitBranchReview;
   /** Workspace-relative, deduplicated, in the order the changeset declared them. */
   readonly paths: readonly string[];
   /** True when the changeset declared more files than `paths` carries. */
   readonly pathsTruncated: boolean;
+  /**
+   * The scope the model asked for, when it differs from the files it expanded to (U-28): a Git
+   * stage or unstage request may name directories or `.`, and `paths` then lists only the first
+   * files of that expansion. At most 50 entries, each a contained relative path or `.`. Absent for
+   * an edit changeset, whose `paths` are the request.
+   */
+  readonly requested?: readonly string[];
+  /**
+   * Only for a commit review: the staged renames among the listed `paths`, each with the path it
+   * came from. Absent when no listed path is a rename.
+   */
+  readonly renames?: readonly CodingWorkbenchReviewRename[];
   /** Files the changeset declares — may exceed `paths.length` when truncated. */
   readonly fileCount: number;
   readonly addedLines: number;
   readonly deletedLines: number;
+  /**
+   * True when a file was too large to count: `addedLines` and `deletedLines` then cover the other
+   * files only. An honest marker, never a silent zero.
+   */
+  readonly countsUnavailable?: boolean;
   /** Authenticated, transient human review only; never the durable runtime/event projection. */
   readonly draftDelivery?: CodingRuntimeDeliveryReview;
   readonly verifiedCommit?: { readonly result: VerifiedCommitResult; readonly message: string };
@@ -163,12 +248,17 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "requestId",
         "paths",
         "pathsTruncated",
+        "requested",
+        "renames",
         "fileCount",
         "addedLines",
         "deletedLines",
+        "countsUnavailable",
         "verifiedCommit",
         "draftDelivery",
         "nativeAction",
+        "verificationPreview",
+        "gitBranch",
       ],
       "pendingApprovalReview",
     ),
@@ -179,17 +269,34 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
-  else if (value.draftDelivery === undefined) validateReviewPaths(value.paths, errors);
-  else validateDraftReview(value, errors);
+  validateReviewSubject(value, errors);
   if (typeof value.pathsTruncated !== "boolean") {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
   }
+  if (value.requested !== undefined) validateRequestedScope(value.requested, errors);
+  if (value.renames !== undefined) validateReviewRenames(value, errors);
+  validateReviewCounts(value, errors);
+  if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
+}
+
+/** What the review is about: a native action, a verification preview, a branch, paths or a draft. */
+function validateReviewSubject(value: Record<string, unknown>, errors: string[]): void {
+  if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
+  else if (value.verificationPreview !== undefined)
+    validateVerificationPreviewReview(value, errors);
+  else if (value.gitBranch !== undefined) validateGitBranchReview(value, errors);
+  else if (value.draftDelivery === undefined)
+    validateReviewPaths(value.paths, errors, value.verifiedCommit !== undefined);
+  else validateDraftReview(value, errors);
+}
+
+function validateReviewCounts(value: Record<string, unknown>, errors: string[]): void {
   validateReviewCount(value.fileCount, "fileCount", errors);
   validateReviewCount(value.addedLines, "addedLines", errors);
   validateReviewCount(value.deletedLines, "deletedLines", errors);
+  if (value.countsUnavailable !== undefined && typeof value.countsUnavailable !== "boolean")
+    errors.push("pendingApprovalReview.countsUnavailable must be a boolean");
   validateReviewFileCountConsistency(value, errors);
-  if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
 }
 
 function validateNativeActionReview(pending: Record<string, unknown>, errors: string[]): void {
@@ -212,6 +319,93 @@ function validateNativeActionReview(pending: Record<string, unknown>, errors: st
   }
   // Edit asks also carry their contained paths; other native actions carry none.
   if (pending.paths.length > 0) validateReviewPaths(pending.paths, errors);
+}
+
+function validateGitBranchReview(pending: Record<string, unknown>, errors: string[]): void {
+  if (
+    pending.draftDelivery !== undefined ||
+    pending.verifiedCommit !== undefined ||
+    !Array.isArray(pending.paths) ||
+    pending.paths.length > 0
+  )
+    errors.push("a git branch review carries no paths, delivery or commit authority");
+  const value = pending.gitBranch;
+  if (!isRecord(value)) {
+    errors.push("gitBranch must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["branchName"], "gitBranch"));
+  if (
+    !validateUntrustedDisplayText(
+      value.branchName,
+      CODING_WORKBENCH_GIT_BRANCH_REVIEW_NAME_MAX_CHARS,
+    )
+  )
+    errors.push("gitBranch.branchName must be bounded display text");
+}
+
+function validateVerificationPreviewReview(
+  pending: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    pending.draftDelivery !== undefined ||
+    pending.verifiedCommit !== undefined ||
+    !Array.isArray(pending.paths) ||
+    pending.paths.length > 0
+  )
+    errors.push("a verification preview review carries no paths, delivery or commit authority");
+  const value = pending.verificationPreview;
+  if (!isRecord(value)) {
+    errors.push("verificationPreview must be an object");
+    return;
+  }
+  const shape =
+    typeof value.status === "string" && Object.hasOwn(PREVIEW_SHAPES, value.status)
+      ? PREVIEW_SHAPES[value.status]
+      : undefined;
+  if (shape === undefined) {
+    errors.push("verificationPreview.status is invalid");
+    return;
+  }
+  errors.push(...exactKeys(value, shape.keys, "verificationPreview"));
+  if (!shape.valid(value)) errors.push(shape.message);
+}
+
+interface PreviewShape {
+  readonly keys: readonly string[];
+  readonly valid: (value: Record<string, unknown>) => boolean;
+  readonly message: string;
+}
+
+const PREVIEW_SHAPES: Readonly<Record<string, PreviewShape | undefined>> = {
+  commands: {
+    keys: ["status", "commands", "truncated"],
+    valid: (value) => validPreviewCommands(value.commands) && typeof value.truncated === "boolean",
+    message: "verificationPreview.commands must be 1 to 8 bounded display lines",
+  },
+  deferred: {
+    keys: ["status", "reason"],
+    valid: (value) => isOneOf(value.reason, CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS),
+    message: "verificationPreview.reason is invalid",
+  },
+  unavailable: {
+    keys: ["status", "reason"],
+    valid: (value) =>
+      isOneOf(value.reason, CODING_WORKBENCH_VERIFICATION_PREVIEW_UNAVAILABLE_REASONS),
+    message: "verificationPreview.reason is invalid",
+  },
+};
+
+function validPreviewCommands(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS &&
+    value.every((line) =>
+      validateUntrustedDisplayText(line, CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS),
+    )
+  );
 }
 
 function validNativeResources(value: unknown): boolean {
@@ -307,7 +501,48 @@ function validateReviewFileCountConsistency(
   }
 }
 
-function validateReviewPaths(value: unknown, errors: string[]): void {
+function validateReviewRenames(pending: Record<string, unknown>, errors: string[]): void {
+  const { renames, paths } = pending;
+  if (pending.verifiedCommit === undefined || !Array.isArray(renames) || !Array.isArray(paths)) {
+    errors.push("pendingApprovalReview.renames belongs to a commit review and must be an array");
+    return;
+  }
+  if (renames.length === 0 || renames.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS) {
+    errors.push("pendingApprovalReview.renames must be a bounded, non-empty array");
+    return;
+  }
+  const seen = new Set<unknown>();
+  renames.forEach((rename: unknown, index) => {
+    const valid =
+      isRecord(rename) &&
+      exactKeys(rename, ["path", "from"], "rename").length === 0 &&
+      paths.includes(rename.path) &&
+      !seen.has(rename.path) &&
+      isReviewableRepositoryPath(rename.from);
+    if (!valid) errors.push(`pendingApprovalReview.renames[${String(index)}] is invalid`);
+    if (isRecord(rename)) seen.add(rename.path);
+  });
+}
+
+function validateRequestedScope(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    errors.push("pendingApprovalReview.requested must be a non-empty array");
+    return;
+  }
+  if (value.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS) {
+    errors.push("pendingApprovalReview.requested exceeds the request bound");
+    return;
+  }
+  if (new Set(value).size !== value.length) {
+    errors.push("pendingApprovalReview.requested must be unique");
+  }
+  value.forEach((entry, index) => {
+    if (entry !== "." && !isReviewablePath(entry))
+      errors.push(`pendingApprovalReview.requested[${String(index)}] is not a contained path`);
+  });
+}
+
+function validateReviewPaths(value: unknown, errors: string[], fromRepository = false): void {
   if (!Array.isArray(value) || value.length === 0) {
     errors.push("pendingApprovalReview.paths must be a non-empty array");
     return;
@@ -320,7 +555,7 @@ function validateReviewPaths(value: unknown, errors: string[]): void {
     errors.push("pendingApprovalReview.paths must be unique");
   }
   value.forEach((path, index) => {
-    if (!isReviewablePath(path)) {
+    if (!(fromRepository ? isReviewableRepositoryPath(path) : isReviewablePath(path))) {
       errors.push(`pendingApprovalReview.paths[${String(index)}] is not a contained relative path`);
     }
   });
@@ -336,6 +571,32 @@ function isReviewablePath(value: unknown): boolean {
     validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
     !value.includes(":") &&
     isPortableWorkspaceRelativePath(value)
+  );
+}
+
+/**
+ * A staged path as the repository spells it. The commit review lists paths the person's own Git
+ * reported, never a model-selected changeset, and Git names any byte sequence a POSIX filesystem
+ * holds: a colon or a backslash is an ordinary character there, and Git itself never emits a
+ * Windows separator or drive. Those two stay legal, and so does a name that merely begins with `~`
+ * or `X:` (an Office lock file `~$report.docx`, a file `C:notes`); everything that makes a path
+ * escape does not: absolute, home-anchored (`~/`) or drive-anchored (`C:/`), NUL, empty/dot/dot-dot segments (a backslash also splits a
+ * segment, so `..\x` is refused), a leading backslash (a UNC or `\\?\` name, refused outright as
+ * the fail-closed choice: no real repository path starts that way), invisible format characters
+ * and anything past the length bound. The path is display text only: the card shows it and no
+ * file operation ever resolves it, so this check keeps the card honest and not the filesystem safe.
+ *
+ * DISPLAY ONLY: these paths must never be joined onto a root, opened, staged or otherwise resolved;
+ * `~$report.docx` and `C:notes` are legal here precisely because nothing resolves them.
+ */
+function isReviewableRepositoryPath(value: unknown): boolean {
+  return (
+    validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
+    !value.includes("\0") &&
+    !value.startsWith("/") &&
+    !value.startsWith("\\") &&
+    !/^(?:[A-Za-z]:[/\\]|~(?:[/\\]|$))/u.test(value) &&
+    !value.split(/[/\\]/u).some((segment) => segment === "" || segment === "." || segment === "..")
   );
 }
 

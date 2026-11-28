@@ -37,6 +37,15 @@ Accepted
 > reconciliation FIFO and targets only other panes with a committed file open. Each pane runtime
 > retains ownership of dirty checks, disk refresh, cache state, and Monaco adoption.
 
+> **Amended by the origin-wide stream ceiling (#4491).** The bridge's session-scoped SSE stream is
+> admitted as an essential stream and never yields its connection slot. The server treats a dropped
+> bridge as an unavailable session, an action issued during a gap would find no bridge, and the
+> stream has no replay for the frames a gap would lose.
+> It is a non-replayable stream: while it waits for a slot, replayable streams of a visible
+> document (or of its own document) yield to it. The four slots are shared by every document of
+> the origin, so non-replayable streams another, hidden document holds reduce what a visible tab
+> can hold; the exact limit is named in `docs/observability/README.md`.
+
 ## Context
 
 Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #1391 ([ADR-0059](ADR-0059-agent-editor-public-contracts.md)), and #1392 ([ADR-0060](ADR-0060-agent-editor-session-registry-and-queue.md)) together define: a frozen, schema-versioned wire contract; server-side BFF preflight and queueing; and a live SSE bridge liveness mechanism. Issue #1393 closes the remaining browser-side gap: three action types — `moveTab`, `splitPane`, and `setSelection` — are stubbed in `EditorRuntimeWidget.executeAgentAction` to respond `status: "failed"` with the message `"Action must be executed by the editor layout controller."` This message is accurate but leaves those three protocol-level actions permanently unexecuted.

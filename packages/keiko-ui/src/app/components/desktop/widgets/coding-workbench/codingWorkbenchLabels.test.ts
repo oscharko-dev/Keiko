@@ -23,7 +23,6 @@ import {
   changesetDeliveryAlert,
   eventDetail,
   eventOffersErrorReport,
-  eventOffersRunCheck,
   eventTitle,
   generatingRunState,
   modelSourceLabel,
@@ -443,25 +442,24 @@ describe("eventDetail auxiliary outcome", () => {
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
     expect(eventDetail(settled, t)).toBe(key);
   });
-  // #4491 night walk: the card of a run that ended without a passing check after its last change
-  // is titled by that gap; "Coding run failed" above "the changes were not checked" contradicted
-  // a model that reported its tests green.
-  it("titles a verification gap by what is missing", () => {
+  // Follows the 2026-11-28 owner decision: no special "Changes not checked" title exists any more.
+  // A run that settled failed on a verification gap (a failed check, a check that could not start, a
+  // spent budget, or an old stored row) is the ordinary failed run, with its detail sentence.
+  it("titles a verification gap as the ordinary failed run", () => {
     const settled = runtimeEvent({
       kind: "status",
       state: "failed",
       failureCode: "verification-not-evidenced",
     });
-    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runUnverified");
-    // Moved from the F9 cause table above: the card still names its closed cause.
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
     expect(eventDetail(settled, t)).toBe(
       "codingWorkbench.event.failure.verification-not-evidenced",
     );
-    expect(translateCodingWorkbench("en", "codingWorkbench.event.runUnverified")).toBe(
-      "Changes not checked",
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.runFailed")).toBe(
+      "Coding run failed",
     );
-    expect(translateCodingWorkbench("de", "codingWorkbench.event.runUnverified")).toBe(
-      "Änderungen nicht geprüft",
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.runFailed")).toBe(
+      "Coding-Lauf fehlgeschlagen",
     );
   });
 });
@@ -556,6 +554,7 @@ describe("runStatusAnnouncement run phase", () => {
     gateway: true,
     verifier: true,
     tool: true,
+    subagents: true,
     model: true,
   } as const satisfies Record<CodingWorkbenchRunPhase, true>;
   const running: CodingWorkbenchRuntimeState = {
@@ -929,6 +928,21 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     };
   }
 
+  // U-39 (#4491): a branch changed outside Keiko in the same repository must not read as another
+  // repository. Only the selection refusal changes, and only once a changed branch is known.
+  it("names a branch changed outside Keiko for the selection refusal, and only for it", () => {
+    const mismatch = failedMutationState(undefined, "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH");
+    expect(visibleAlert(mismatch, tv, false, null, null, "perf/green")).toBe(
+      'codingWorkbench.alert.startRefusedBranchChanged {"branch":"perf/green","code":"CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH"}',
+    );
+    expect(visibleAlert(mismatch, tv, false, null, null, null)).toContain(
+      "codingWorkbench.alert.startRefusedSelectionMismatch",
+    );
+    expect(visibleAlert(failedMutationState(), tv, false, null, null, "perf/green")).not.toContain(
+      "BranchChanged",
+    );
+  });
+
   it("selects the visible mutation before a concurrent resource failure for reporting", () => {
     const state = failedMutationState("mutation-support-id");
     const resourceError = {
@@ -953,6 +967,38 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).toContain("codingWorkbench.alert.actionFailedCode");
     expect(alert).toContain("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
     expect(alert).not.toContain("codingWorkbench.alert.actionFailedSupportId");
+  });
+
+  // U-55: after a server restart the open tab's session repair is refused with the authority code
+  // while the window is known to be unpaired. The pairing note already says so; a second red alert
+  // naming a code the person cannot act on is noise. A paired window keeps the alert.
+  it("shows no runtime-failure alert for the authority refusal of an unpaired window", () => {
+    const unpaired = { ...failedMutationState("ui-correlation-9"), pairing: "unpaired" as const };
+    expect(visibleAlert(unpaired, tv, false)).toBeNull();
+    expect(visibleAlertFailure(unpaired)).toBeNull();
+    const paired = { ...unpaired, pairing: "paired" as const };
+    expect(visibleAlert(paired, tv, false)).toContain("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
+    expect(visibleAlertFailure(paired)).not.toBeNull();
+  });
+
+  it("also keeps a refused read of an unpaired window out of the alerts", () => {
+    const refused = {
+      code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+      message: "Runtime request was rejected.",
+      retryable: false,
+    };
+    const base = createInitialCodingWorkbenchRuntimeState();
+    const state = { ...base, run: { status: "error" as const, value: null, error: refused } };
+    expect(visibleAlert({ ...state, pairing: "paired" }, tv, false)).toContain("runRefreshFailed");
+    expect(visibleAlert({ ...state, pairing: "unpaired" }, tv, false)).toBeNull();
+  });
+
+  it("keeps every other refusal visible while the window is unpaired", () => {
+    const other = {
+      ...failedMutationState(undefined, "CODING_RUNTIME_MODEL_UNAVAILABLE"),
+      pairing: "unpaired" as const,
+    };
+    expect(visibleAlert(other, tv, false)).toContain("startRefusedModelUnavailable");
   });
 
   it("appends the correlation id as a copyable support id when the transport carried one", () => {
@@ -985,6 +1031,115 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).toContain(code);
     expect(alert).toContain("ui-correlation-3");
   });
+
+  // #4491: every other closed start-refusal code the server answers names its own cause and the
+  // next step instead of "review the live state and retry".
+  it.each([
+    ["CODING_RUNTIME_ACTIVE_RUN_CONFLICT", "codingWorkbench.alert.startRefusedActiveRun"],
+    ["CODING_RUNTIME_RECOVERY_REQUIRED", "codingWorkbench.alert.startRefusedRecoveryRequired"],
+    ["CODING_RUNTIME_ISSUE_CONTEXT_UNAVAILABLE", "codingWorkbench.alert.startRefusedIssueContext"],
+    ["CODING_RUNTIME_TASK_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_WORKSPACE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_PROJECT_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_BRANCH_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_SCOPE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_BUDGET_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_SOURCE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_AUTHORITY_EXPIRED", "codingWorkbench.alert.startRefusedAuthorityExpired"],
+    ["CODING_RUNTIME_AUTHORITY_REPLAYED", "codingWorkbench.alert.startRefusedAuthorityReplayed"],
+    [
+      "CODING_RUNTIME_AUTHORITY_BUDGET_EXCEEDED",
+      "codingWorkbench.alert.startRefusedAuthorityBudget",
+    ],
+    [
+      "CODING_RUNTIME_APPROVAL_ACTIVATION_FAILED",
+      "codingWorkbench.alert.startRefusedApprovalActivation",
+    ],
+    ["CODING_RUNTIME_REPLAY_CAP_EXHAUSTED", "codingWorkbench.alert.startRefusedReplayCap"],
+    ["CODING_RUNTIME_EDITS_BLOCKED", "codingWorkbench.alert.startRefusedEditsBlocked"],
+    [
+      "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH",
+      "codingWorkbench.alert.startRefusedSelectionMismatch",
+    ],
+    [
+      "CODING_RUNTIME_EXPECTED_WORKSPACE_MISSING",
+      "codingWorkbench.alert.startRefusedExpectedWorkspaceMissing",
+    ],
+    ["CODING_RUNTIME_INVALID_INTENT", "codingWorkbench.event.failure.invalid-intent"],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_ACL",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_DIRECTORY",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_CAPABILITY",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GATEWAY_CONNECT",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GATEWAY_ADMIT",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_NO_DESKTOP",
+      "codingWorkbench.event.failure.runtime-supervisor-no-desktop",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_IMAGE_PATH",
+      "codingWorkbench.event.failure.runtime-supervisor-image-path",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_REFUSED",
+      "codingWorkbench.event.failure.runtime-supervisor-refused",
+    ],
+  ])("explains a refused start with code %s through %s", (code, key) => {
+    expect(visibleAlert(failedMutationState("ui-correlation-5", code), tv, false)).toContain(key);
+  });
+
+  // #4491: a mapped key is no dead end: in both languages it resolves to its own sentence, never the
+  // generic fallback.
+  it.each(["en", "de"] as const)(
+    "resolves every refused-start code to its own %s text",
+    (locale) => {
+      const real: CodingWorkbenchTranslate = (key, values) =>
+        translateCodingWorkbench(locale, key, values);
+      const generic = real("codingWorkbench.alert.actionFailedCode", { code: "X" });
+      const codes = [
+        "ACTIVE_RUN_CONFLICT",
+        "RECOVERY_REQUIRED",
+        "ISSUE_CONTEXT_UNAVAILABLE",
+        "TASK_DRIFT",
+        "AUTHORITY_EXPIRED",
+        "AUTHORITY_REPLAYED",
+        "AUTHORITY_BUDGET_EXCEEDED",
+        "APPROVAL_ACTIVATION_FAILED",
+        "REPLAY_CAP_EXHAUSTED",
+        "EDITS_BLOCKED",
+        "WORKSPACE_SELECTION_MISMATCH",
+        "INVALID_INTENT",
+        "RUNTIME_SUPERVISOR_GRANTS_ACL",
+        "RUNTIME_SUPERVISOR_GRANTS_DIRECTORY",
+        "RUNTIME_SUPERVISOR_GRANTS_CAPABILITY",
+        "RUNTIME_SUPERVISOR_GATEWAY_CONNECT",
+        "RUNTIME_SUPERVISOR_GATEWAY_ADMIT",
+        "RUNTIME_SUPERVISOR_NO_DESKTOP",
+        "RUNTIME_SUPERVISOR_IMAGE_PATH",
+        "RUNTIME_SUPERVISOR_REFUSED",
+      ].map((name) => `CODING_RUNTIME_${name}`);
+      for (const code of codes) {
+        const alert = visibleAlert(failedMutationState(undefined, code), real, false);
+        expect(alert, code).not.toBe("");
+        expect(alert, code).not.toBe(generic.replace("X", code));
+        expect(alert, code).not.toContain("codingWorkbench.");
+      }
+    },
+  );
 
   // #3603: a model refused because its window cannot hold a coding run's prompt, or because that
   // window is still being verified, says so instead of "the model is unavailable".
@@ -1336,8 +1491,9 @@ describe("runtimeUnavailableMessageKey", () => {
   );
 });
 
-// #4491: the verification-not-evidenced card names the gap the settlement carries, offers the check
-// and never the error report; every other failed run keeps the report.
+// #4491, amended by the 2026-11-28 owner decision: the verification-not-evidenced card names the gap
+// the settlement carries and never offers the error report or a check button; every other failed run
+// keeps the report.
 describe("verification gap on a failed run", () => {
   const failed = (extra: Record<string, unknown>): CodingWorkbenchRuntimeSseEvent =>
     runtimeEvent({ kind: "status", state: "failed", ...extra, eventKind: undefined });
@@ -1359,22 +1515,59 @@ describe("verification gap on a failed run", () => {
     );
   });
 
-  it("offers the check, not the error report, exactly on verification-not-evidenced", () => {
+  it("offers no error report exactly on verification-not-evidenced", () => {
     const gap = failed({
       failureCode: "verification-not-evidenced",
       verificationGap: "check-failed",
     });
-    expect(eventOffersRunCheck(gap, true)).toBe(true);
-    expect(eventOffersRunCheck(gap, false)).toBe(false);
     expect(eventOffersErrorReport(gap)).toBe(false);
     const other = failed({ failureCode: "runtime-failed" });
-    expect(eventOffersRunCheck(other, true)).toBe(false);
     expect(eventOffersErrorReport(other)).toBe(true);
-    expect(
-      eventOffersRunCheck(
-        failed({ failureCode: "verification-not-evidenced", state: "cancelled" }),
-        true,
-      ),
-    ).toBe(false);
   });
+});
+
+// U-53: a per-agent model the repository named but the gateway does not serve is refused; the
+// person is told, with a count and never a model name, in the run's details.
+describe("a refused repository agent model fact (U-53)", () => {
+  const fact = (count: number): CodingWorkbenchRuntimeSseEvent =>
+    runtimeEvent({ eventKind: "native-agent-models-refused", refusedAgentModelCount: count });
+
+  it.each([
+    ["en", 1, "1 agent model setting in the configuration was not used"],
+    ["en", 2, "2 agent model settings in the configuration were not used"],
+    ["de", 1, "1 Agenten-Modelleinstellung in der Konfiguration wurde nicht verwendet"],
+    ["de", 2, "2 Agenten-Modelleinstellungen in der Konfiguration wurden nicht verwendet"],
+  ] as const)("says in %s how many were not used (%i)", (language, count, text) => {
+    const translate: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench(language, key, values);
+    const detail = eventDetail(fact(count), translate);
+    expect(detail).toContain(text);
+    expect(detail).toMatch(/[Gg]ateway/u);
+    // The count merges the global and the repository configuration, and a refused override leaves
+    // an earlier admitted model in place: the line names neither a source nor a fixed fallback.
+    expect(detail).not.toMatch(/repository|Repository/u);
+    expect(detail).not.toMatch(/run's model|Modell des Laufs/u);
+    expect(eventTitle(fact(count), translate)).not.toContain("codingWorkbench.");
+  });
+
+  // The event carries only a count: an agent name that fails the name check is refused before its
+  // model is looked up, so the notice must not claim the model is the cause (#4573 thread).
+  it.each([
+    ["en", "name is invalid, or", "names a model that Keiko's gateway does not serve"],
+    [
+      "de",
+      "Agentenname ungültig, oder",
+      "nennt ein Modell, das das Keiko-Gateway nicht bereitstellt",
+    ],
+  ] as const)(
+    "names the invalid agent name as a cause in %s, not only the model",
+    (language, nameCause, modelCause) => {
+      const translate: CodingWorkbenchTranslate = (key, values) =>
+        translateCodingWorkbench(language, key, values);
+      for (const count of [1, 3]) {
+        expect(eventDetail(fact(count), translate)).toContain(nameCause);
+        expect(eventDetail(fact(count), translate)).toContain(modelCause);
+      }
+    },
+  );
 });

@@ -23,8 +23,10 @@ import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   buildVerificationPlan,
+  DEFAULT_VERIFICATION_LIMITS,
   detectScripts,
   planDirectTargetedTests,
+  scriptTableDigest,
 } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import * as sandbox from "@oscharko-dev/keiko-sandbox";
@@ -41,6 +43,7 @@ import {
   type NetworkIsolationProbe,
   planIsolationProbe,
   windowsStepRunDeps,
+  type ExecuteVerificationArgs,
 } from "./verificationExecution.js";
 
 function note(message: string): void {
@@ -161,6 +164,7 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
         plan,
         workspace,
         signal: new AbortController().signal,
+        approvedScriptsDigest: scriptTableDigest(catalog.scripts),
       });
       expect(report.results).toHaveLength(1);
       if (probe.available) {
@@ -200,6 +204,7 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
         plan,
         workspace,
         signal: new AbortController().signal,
+        approvedScriptsDigest: scriptTableDigest(detectScripts(workspace).scripts),
       });
       expect(await readFile(outside, "utf8")).toBe("unchanged");
       if (probe.available) {
@@ -644,5 +649,198 @@ describe("planIsolationProbe (#4496)", () => {
   it("leaves every other backend's run as the probe found it", () => {
     const probe = { available: true, backend: "container-docker" } as const;
     expect(windowsStepRunDeps(probe, undefined, NONE)).toEqual({ enforcedNetworkAvailable: true });
+  });
+});
+
+describe("executeVerificationEnforced — the Windows step Node.js of a run (#4491)", () => {
+  it("copies the install's step Node.js only once the run holds its workspace, and removes the copy", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-step-node-run-")));
+    try {
+      const order: string[] = [];
+      const supervisor: WindowsStepSupervisor = {
+        acquire: () => ({ path: "supervisor.exe", drives: [], release: () => 0, refused: () => 0 }),
+        readRoots: [],
+        profile: String.raw`C:\Users\dev`,
+        admitReadRoot: (directory) => directory,
+        stepNode: {
+          directory: "/install/step-node",
+          executable: "/install/step-node/node.exe",
+          record: () => undefined,
+        },
+      };
+      const run = (): Promise<unknown> =>
+        executeVerificationEnforced({
+          plan: { workspaceRoot: root, steps: [] },
+          workspace: detectWorkspaceAt(root),
+          signal: new AbortController().signal,
+          isolation: {
+            probe: { available: true, backend: "windows-appcontainer" },
+            durationMs: 0,
+            windowsStep: { supervisor },
+          },
+          stepNodeCopy: {
+            pin: () => ({ sha256: "ab", sizeBytes: 1, sourceSha256: "", patchSha256s: [] }),
+            makeDirectory: () => {
+              order.push("copy");
+              return Promise.resolve(join(root, "unused"));
+            },
+            copyFile: () => Promise.resolve(),
+            sizeOf: () => Promise.resolve(1),
+            sha256: () => Promise.resolve("ab"),
+            removeDirectory: () => {
+              order.push("remove");
+              return Promise.resolve();
+            },
+          },
+        });
+      await run();
+      // The copy is made inside the run's exclusive scope and removed when the run ends.
+      expect(order).toEqual(["copy", "remove"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("executeVerificationEnforced — an offered step Node.js is pinned or the run is refused (#4491)", () => {
+  const PIN = { sha256: "ab", sizeBytes: 1, sourceSha256: "", patchSha256s: [] };
+
+  function supervisorWith(offered: boolean): WindowsStepSupervisor {
+    return {
+      acquire: () => ({ path: "supervisor.exe", drives: [], release: () => 0, refused: () => 0 }),
+      readRoots: [],
+      profile: String.raw`C:\Users\dev`,
+      admitReadRoot: (directory) => directory,
+      ...(offered
+        ? {
+            stepNode: {
+              directory: "/install/step-node",
+              executable: "/install/step-node/node.exe",
+              record: () => undefined,
+            },
+          }
+        : {}),
+    };
+  }
+
+  async function runWith(
+    offered: boolean,
+    copy: Partial<NonNullable<ExecuteVerificationArgs["stepNodeCopy"]>>,
+    records: ServerDiagnosticRecord[] = [],
+  ): ReturnType<typeof executeVerificationEnforced> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-step-node-pin-")));
+    try {
+      return await executeVerificationEnforced({
+        plan: { workspaceRoot: root, steps: [] },
+        workspace: detectWorkspaceAt(root),
+        signal: new AbortController().signal,
+        diagnostics: { record: (record): void => void records.push(record) },
+        isolation: {
+          probe: { available: true, backend: "windows-appcontainer" },
+          durationMs: 0,
+          windowsStep: { supervisor: supervisorWith(offered) },
+        },
+        stepNodeCopy: {
+          pin: () => PIN,
+          makeDirectory: () => Promise.resolve(join(root, "unused")),
+          copyFile: () => Promise.resolve(),
+          sizeOf: () => Promise.resolve(1),
+          sha256: () => Promise.resolve("ab"),
+          removeDirectory: () => Promise.resolve(),
+          ...copy,
+        },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ["a size mismatch", { sizeOf: (): Promise<number> => Promise.resolve(2) }, "size"],
+    ["a hash mismatch", { sha256: (): Promise<string> => Promise.resolve("cd") }, "hash"],
+    [
+      "a failed copy",
+      { copyFile: (): Promise<void> => Promise.reject(new Error("denied")) },
+      "copy-failed",
+    ],
+    ["no pin", { pin: (): undefined => undefined }, "no-pin"],
+  ] as const)(
+    "refuses the run on %s, with a closed reason and a body-free diagnostic",
+    async (_n, copy, outcome) => {
+      const records: ServerDiagnosticRecord[] = [];
+      await expect(runWith(true, copy, records)).rejects.toMatchObject({
+        reason: "step-node-pin-mismatch",
+        outcome,
+        code: "VERIFICATION_RUNNER_UNAVAILABLE",
+      });
+      expect(records).toHaveLength(1);
+      expect(JSON.stringify(records)).not.toContain("/install/step-node");
+    },
+  );
+
+  it("keeps the fallback only when no step Node.js was ever offered", async () => {
+    const { report } = await runWith(false, { sha256: () => Promise.resolve("cd") });
+    expect(report.results).toEqual([]);
+  });
+
+  it("never lets a failed removal of the copy replace the run's result, and reports it", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const { report } = await runWith(
+      true,
+      { removeDirectory: () => Promise.reject(new Error("busy")) },
+      records,
+    );
+    expect(report.results).toEqual([]);
+    expect(records).toHaveLength(1);
+  });
+});
+
+describe("executeVerificationEnforced — every server execution is bound to approved scripts", () => {
+  async function run(
+    scripts: Record<string, string>,
+    digest: string | undefined,
+  ): Promise<{
+    readonly report: Awaited<ReturnType<typeof executeVerificationEnforced>>["report"];
+    readonly outcomes: string[];
+  }> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-binding-")));
+    const outcomes: string[] = [];
+    try {
+      await writeFile(join(root, "package.json"), JSON.stringify({ name: "x", scripts }));
+      const step = {
+        kind: "test" as const,
+        scriptName: "test",
+        command: "npm",
+        args: ["test"],
+        limits: { ...DEFAULT_VERIFICATION_LIMITS, maxMemoryBytes: undefined },
+      };
+      const { report } = await executeVerificationEnforced({
+        plan: { workspaceRoot: root, steps: [step] },
+        workspace: detectWorkspaceAt(root),
+        signal: new AbortController().signal,
+        isolation: { probe: { available: true, backend: "seatbelt" }, durationMs: 0 },
+        ...(digest === undefined ? {} : { approvedScriptsDigest: digest }),
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      });
+      return { report, outcomes };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("denies a package-script step that carries no digest, and reports why", async () => {
+    const { report, outcomes } = await run({ test: "echo hi" }, undefined);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("approval-missing");
+    expect(outcomes).toEqual(["refused:approval-missing"]);
+  });
+
+  it("denies scripts that differ from the approval and reports `scripts-changed`", async () => {
+    const { report, outcomes } = await run(
+      { test: "echo stolen" },
+      scriptTableDigest({ test: "echo approved" }),
+    );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(outcomes).toEqual(["scripts-changed"]);
   });
 });

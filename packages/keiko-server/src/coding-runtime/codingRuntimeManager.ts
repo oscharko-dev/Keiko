@@ -37,6 +37,7 @@ import type {
   CodingWorkbenchPolicyResourceScope,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchVerificationPreview,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchSupervisedActionKind,
   CodingWorkbenchSupervisedPolicyReason,
@@ -288,6 +289,11 @@ export interface CodingRuntimeApprovalDeclineRequest {
   readonly runId: string;
   readonly requestId: string;
   readonly actionKind: CodingWorkbenchSupervisedActionKind;
+  /**
+   * `queue-full`: the ask was refused because the run's approval queue was full. It ends the
+   * proposal's wait like a decline but is never recorded as a person's "no".
+   */
+  readonly cause?: "queue-full" | undefined;
 }
 
 export type CodingRuntimeApprovalIssueResult =
@@ -304,6 +310,25 @@ export type CodingRuntimeApprovalIssueResult =
       readonly retryable: false;
     };
 
+/** Maps a verifier id and the run's correlation id to the approval card's preview. */
+/** What a pending verification ask shows, and the digest of the plan that was shown. */
+export interface CodingVerificationPreviewResult {
+  readonly preview: CodingWorkbenchVerificationPreview;
+  /** Set only when command lines were shown; the approval is then bound to it. */
+  readonly planDigest?: string | undefined;
+}
+
+export type CodingVerificationPreviewPort = (
+  verifierId: string,
+  runId: string,
+  ask: {
+    /** The ask's own tool call, which a shown command is bound to. */
+    readonly actionId?: string | undefined;
+    /** The package folder the ask named; absent means the workspace root. */
+    readonly packageDir?: string | undefined;
+  },
+) => CodingVerificationPreviewResult;
+
 export interface CodingRuntimeManagerDeps {
   readonly supervisor?: RuntimeProcessSupervisor | undefined;
   readonly processEnv: NodeJS.ProcessEnv;
@@ -311,6 +336,11 @@ export interface CodingRuntimeManagerDeps {
   readonly nowIso?: (() => string) | undefined;
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
+  /**
+   * What a pending governed verification ask would run, for the approval card (ADR-0124 D6). Reads
+   * the project, never executes or logs; absent leaves the card on its class label.
+   */
+  readonly verificationPreview?: CodingVerificationPreviewPort | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly onSandboxAttestation?:
     ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
@@ -490,6 +520,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly nowIso: () => string;
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
+  readonly verificationPreview: CodingVerificationPreviewPort | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly onSandboxAttestation:
     ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
@@ -625,6 +656,7 @@ interface ActiveRuntime {
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly issuedTaskApprovalMetadata: Map<string, IssuedTaskApprovalMetadata>;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
+  readonly verificationPreview: CodingVerificationPreviewPort | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
   readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
@@ -791,6 +823,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     nowIso: deps.nowIso ?? ((): string => new Date().toISOString()),
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     codingToolApprovals: deps.codingToolApprovals,
+    verificationPreview: deps.verificationPreview,
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     onSandboxAttestation: deps.onSandboxAttestation,
     diagnostics: deps.diagnostics,
@@ -1131,10 +1164,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   }
 
   public declineApproval(request: CodingRuntimeApprovalDeclineRequest): boolean {
-    const declineProposal = this.deps.codingToolApprovals?.declineProposal;
+    const approvals = this.deps.codingToolApprovals;
+    const settle =
+      request.cause === "queue-full" ? approvals?.refuseProposal : approvals?.declineProposal;
     if (this.active?.context.runId !== request.runId || !isOwnedGitApproval(request)) return false;
-    if (declineProposal === undefined) return false;
-    declineProposal(request.runId, request.requestId);
+    if (settle === undefined) return false;
+    settle(request.runId, request.requestId);
     return true;
   }
 
@@ -1472,18 +1507,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active: ActiveRuntime,
     failureCode: CodingRuntimeFailureCode,
   ): Promise<CodingRuntimeStartResult> {
-    active.stopRequested = true;
-    active.status = "stopping";
-    const receipt = await this.revokeAndTerminate(active);
-    if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
-      await this.enterRecoveryRequired(active);
-      return failure("runtime-reap-unproven", false);
-    }
-    active.status = "stopped";
-    if (this.active === active) this.active = undefined;
+    const observed = failure(failureCode, codexRetryable(failureCode));
+    const teardown = await this.teardownFailedStart(active);
+    if (!teardown.ok) return failure("runtime-reap-unproven", false);
     return this.recordLaunchFailure(
       request,
-      failure(failureCode, failureCode === "start-aborted" || failureCode === "start-timeout"),
+      teardown.joined ? refusedLaunchFailure(active, observed) : observed,
     );
   }
 
@@ -1505,12 +1534,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.startupOutput?.close();
     active.startupOutput = undefined;
     active.stdoutParser = undefined;
-    if (
-      handshakeFailure === undefined &&
-      this.active === active &&
-      !active.stopRequested &&
-      active.status === "starting"
-    ) {
+    if (handshakeFailure === undefined && this.startStillOwned(active)) {
       active.status = "ready";
       this.startLifecycleMonitor(active);
       this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
@@ -1519,16 +1543,45 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (handshakeFailure === undefined || this.active !== active) {
       return refusedLaunchFailure(active, failure("runtime-crashed", false));
     }
+    const teardown = await this.teardownFailedStart(active);
+    if (!teardown.ok) return failure("runtime-reap-unproven", false);
+    return refusedLaunchFailure(active, handshakeFailure);
+  }
+
+  // The runtime's exit already started its own teardown (handleExit publishes it on `stopPromise`).
+  // A start failure that arrives while it runs (the closed stdout rejects the handshake before the
+  // exit is known on a real host) folds onto it: a second reap would find the tree no longer
+  // supervisor-owned and read as unproven, and the supervisor's refusal would lose to it.
+  private startStillOwned(active: ActiveRuntime): boolean {
+    return this.active === active && !active.stopRequested && active.status === "starting";
+  }
+
+  // The one teardown of a failed start. It is claimed and published on `stopPromise` before the
+  // first await, exactly as stop() and the exit handler do, so a Stop arriving while the start's
+  // cleanup runs awaits this teardown instead of reaping the same tree a second time (which would
+  // read as unproven). A start that finds a teardown already claimed folds onto it.
+  private async teardownFailedStart(
+    active: ActiveRuntime,
+  ): Promise<{ readonly ok: boolean; readonly joined: boolean }> {
+    const inFlight = active.tearingDown ? active.stopPromise : undefined;
+    if (inFlight !== undefined) return { ok: (await inFlight).ok, joined: true };
+    active.tearingDown = true;
+    const teardown = this.runFailedStartTeardown(active);
+    active.stopPromise = teardown;
+    return { ok: (await teardown).ok, joined: false };
+  }
+
+  private async runFailedStartTeardown(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
     active.stopRequested = true;
     active.status = "stopping";
     const receipt = await this.revokeAndTerminate(active);
     if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
       await this.enterRecoveryRequired(active);
-      return failure("runtime-reap-unproven", false);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     active.status = "stopped";
-    this.active = undefined;
-    return refusedLaunchFailure(active, handshakeFailure);
+    if (this.active === active) this.active = undefined;
+    return { ok: true, status: "stopped" };
   }
 
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
@@ -1543,7 +1596,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     let barrierComplete = true;
     try {
       if (!(await this.deps.revokeRuntime(active.context.runId))) barrierComplete = false;
-    } catch {
+    } catch (error) {
+      recordLaunchStepFailure(this.deps, active.context.runId, "revoke-runtime", error);
       barrierComplete = false;
     }
     const supervisedApprovalsInvalidated = invalidateApprovalBarrier(
@@ -1571,7 +1625,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     try {
       if (!(await this.deps.abortInFlightActions(active.context.runId))) barrierComplete = false;
-    } catch {
+    } catch (error) {
+      recordLaunchStepFailure(this.deps, active.context.runId, "abort-in-flight-actions", error);
       barrierComplete = false;
     }
     if (!this.disposeLifecycleMonitor(active)) barrierComplete = false;
@@ -2601,7 +2656,12 @@ function createActiveRuntime(
   tree: RuntimeProcessTree,
   deps: Pick<
     NormalizedCodingRuntimeManagerDeps,
-    "approvalStore" | "codingToolApprovals" | "now" | "nowIso" | "resolveWorkspaceRootAccess"
+    | "approvalStore"
+    | "codingToolApprovals"
+    | "verificationPreview"
+    | "now"
+    | "nowIso"
+    | "resolveWorkspaceRootAccess"
   >,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
   codexLifecycleAdapter?: CodexLifecycleAdapter,
@@ -2614,6 +2674,7 @@ function createActiveRuntime(
     approvalStore: deps.approvalStore,
     issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: deps.codingToolApprovals,
+    verificationPreview: deps.verificationPreview,
     nowMs: deps.now,
     nowIso: deps.nowIso,
     resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
@@ -2656,6 +2717,7 @@ function createInactiveRuntime(
     approvalStore,
     issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: undefined,
+    verificationPreview: undefined,
     nowMs,
     nowIso,
     resolveWorkspaceRootAccess,
@@ -2887,16 +2949,38 @@ function validatePreparedCodexStateRoot(
 
 function qualifyCodexEgress(
   request: CodingRuntimeLaunchRequest,
-  deps: Pick<NormalizedCodingRuntimeManagerDeps, "qualifyCodexEgress">,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "qualifyCodexEgress" | "diagnostics" | "now">,
 ): { readonly ok: true; readonly value: ReviewedCodexEgressPolicy } | FailureResult {
   try {
     const policy = deps.qualifyCodexEgress?.(request);
     return policy !== undefined && validCodexEgressPolicy(policy)
       ? { ok: true, value: policy }
       : failure("egress-unqualified", false);
-  } catch {
+  } catch (error) {
+    recordLaunchStepFailure(deps, request.runId, "qualify-codex-egress", error);
     return failure("egress-unqualified", false);
   }
+}
+
+/** The step of a launch or shutdown that threw, body-free, so the refusal it caused is explained. */
+function recordLaunchStepFailure(
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "diagnostics" | "now">,
+  runId: string,
+  step: "revoke-runtime" | "abort-in-flight-actions" | "qualify-codex-egress",
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(deps.now()).toISOString(),
+    operation: "coding-runtime.lifecycle-step",
+    source: "coding-runtime-manager.lifecycle-step",
+    errorClass: contentFreeErrorClass(error),
+    message: "server-operation-failed",
+    code: `step=${step}`,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
 }
 
 function validCodexEgressPolicy(policy: ReviewedCodexEgressPolicy): boolean {
@@ -3011,6 +3095,10 @@ function isLoopbackUrl(raw: string): boolean {
   } catch {
     return false;
   }
+}
+
+function codexRetryable(code: CodingRuntimeFailureCode): boolean {
+  return code === "start-aborted" || code === "start-timeout";
 }
 
 function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureResult {
@@ -3286,10 +3374,10 @@ function sidecarRuntimeEvent(
       retryable: false,
     });
   }
-  if (!observeCodingToolApproval(active, event, request.actionKind)) {
+  const shown = shownVerification(event, active);
+  if (!observeAskWithReview(active, event, request.actionKind, shown)) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event));
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
@@ -3371,8 +3459,11 @@ function rememberApprovalReview(
 
 function approvalReviewFacts(
   event: SidecarPermissionEvent,
+  shown: CodingVerificationPreviewResult | undefined,
 ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
   if (event.nativeAction !== undefined) return nativeActionReviewFacts(event);
+  if (event.actionKind === "verification-command") return verificationReviewFacts(event, shown);
+  if (event.actionKind === "git-branch") return gitBranchReviewFacts(event);
   if (event.actionKind !== "file-edit") return undefined;
   const declared = event.allowedRelativePaths ?? [];
   const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
@@ -3390,6 +3481,60 @@ function approvalReviewFacts(
   }).ok
     ? pending
     : undefined;
+}
+
+/**
+ * The command lines a governed verification ask would run (ADR-0124 D6): the person decides about
+ * what Approve runs, not a bare class label. Transient review-channel state only, like the native
+ * action facts; the preview port is body-free in every log and the ask itself stays content-free.
+ */
+function shownVerification(
+  event: SidecarPermissionEvent,
+  active: Pick<ActiveRuntime, "context" | "verificationPreview">,
+): CodingVerificationPreviewResult | undefined {
+  const port = active.verificationPreview;
+  if (event.actionKind !== "verification-command" || port === undefined) return undefined;
+  if (event.commandLabel === undefined) return undefined;
+  return port(event.commandLabel, active.context.runId, {
+    actionId: event.actionId,
+    packageDir: event.packageDir,
+  });
+}
+
+/**
+ * The task branch a governed `git-branch` ask would create (#4491 U-27): the person approves a named
+ * branch, not a bare class label. The name was bound to the approved digest at the protocol
+ * boundary; it rides the authenticated review channel only and never reaches the Activity Log.
+ */
+function gitBranchReviewFacts(
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (event.branchName === undefined) return undefined;
+  return {
+    requestId: event.requestId,
+    gitBranch: { branchName: event.branchName },
+    paths: [],
+    pathsTruncated: false,
+    fileCount: 0,
+    addedLines: 0,
+    deletedLines: 0,
+  };
+}
+
+function verificationReviewFacts(
+  event: SidecarPermissionEvent,
+  shown: CodingVerificationPreviewResult | undefined,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (shown === undefined) return undefined;
+  return {
+    requestId: event.requestId,
+    verificationPreview: shown.preview,
+    paths: [],
+    pathsTruncated: false,
+    fileCount: 0,
+    addedLines: 0,
+    deletedLines: 0,
+  };
 }
 
 /**
@@ -3614,6 +3759,34 @@ function invalidVerificationApprovalEvent(
     : undefined;
 }
 
+// The policy rebuilds the card from its own closed facts; the call the ask holds back is the one
+// fact it does not know, so it is carried over exactly or not at all.
+function withAskedCallId(
+  request: CodingWorkbenchPermissionRequest,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchPermissionRequest {
+  return event.callId === undefined ? request : { ...request, callId: event.callId };
+}
+
+/**
+ * The one place a pending ask is observed and its review remembered, shared by the generic and the
+ * Supervised workspace path (U-27): without the review a task-branch card has no name and no
+ * enabled Approve. A branch ask whose name cannot be verified returns false BEFORE anything is
+ * registered: it fails closed instead of showing a card nobody can approve.
+ */
+function observeAskWithReview(
+  active: ActiveRuntime,
+  event: SidecarPermissionEvent,
+  actionKind: CodingWorkbenchSupervisedActionKind | undefined,
+  shown?: CodingVerificationPreviewResult,
+): boolean {
+  const review = approvalReviewFacts(event, shown);
+  if (event.actionKind === "git-branch" && review === undefined) return false;
+  if (!observeCodingToolApproval(active, event, actionKind, shown)) return false;
+  rememberApprovalReview(active.pendingApprovalReviews, review);
+  return true;
+}
+
 function supervisedMutationEvent(
   active: ActiveRuntime,
   sequence: number,
@@ -3644,11 +3817,11 @@ function supervisedMutationEvent(
     operatorStopped: false,
   });
   if (decision.status === "approval-required" && decision.permissionRequest !== undefined) {
-    if (!observeCodingToolApproval(active, event, actionKind)) {
+    if (!observeAskWithReview(active, event, actionKind)) {
       return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
     }
     return runtimeEvent(active, sequence, "permission-requested", {
-      permissionRequest: decision.permissionRequest,
+      permissionRequest: withAskedCallId(decision.permissionRequest, event),
     });
   }
   if (decision.status === "allowed")
@@ -3709,6 +3882,7 @@ function observeCodingToolApproval(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind | undefined,
+  shown?: CodingVerificationPreviewResult,
 ): boolean {
   const bridge = active.codingToolApprovals;
   if (
@@ -3738,6 +3912,10 @@ function observeCodingToolApproval(
     proof: { approvalId: event.approvalId, approvalDigest: event.approvalDigest },
     expiresAt: event.expiresAt,
     nowMs: active.nowMs(),
+    // An ask that showed command lines binds its approval to them (ADR-0124 D6).
+    ...(shown === undefined
+      ? {}
+      : { planShown: shown.preview.status === "commands", planDigest: shown.planDigest }),
   });
 }
 
@@ -3998,6 +4176,7 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.policyReason === undefined ? {} : { policyReason: event.policyReason }),
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
+    ...(event.callId === undefined ? {} : { callId: event.callId }),
     ...(event.nativeAction === undefined
       ? {}
       : {

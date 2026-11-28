@@ -3,9 +3,17 @@ import { mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  HUMAN_WRITE_WAIT_MS,
+  nativeWriteGateWaiters,
+  runNativeWorkspaceWrite,
+} from "../coding-runtime/nativeWriteGate.js";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
@@ -932,6 +940,93 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(content).toContain("export function readConfig(value: string): string {");
     expect(content).toContain('export const marker = readConfig("a");');
     expect(content).not.toContain("parseConfig");
+  });
+
+  it("lands a replace apply made during a runtime revert write after that write", async () => {
+    const file = await previewForApply();
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+      await writeFile(join(root, "src", "a.ts"), "export const fromRuntime = 1;\n", "utf8");
+    });
+    await entered;
+
+    const applying = handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    for (let turn = 0; turn < 5; turn += 1) await new Promise<void>((done) => setImmediate(done));
+    // Waiting behind the runtime's write: the person's replace has not touched the file yet.
+    await expect(readFile(join(root, "src", "a.ts"), "utf8")).resolves.toContain("parseConfig");
+    release();
+    await native;
+    const result = await applying;
+
+    // The replace was previewed against the file as it was, so it now conflicts with what the
+    // runtime wrote instead of overwriting it: the runtime's write came first, never in between.
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 0, conflictCount: 1 });
+    await expect(readFile(join(root, "src", "a.ts"), "utf8")).resolves.toBe(
+      "export const fromRuntime = 1;\n",
+    );
+  });
+
+  it("answers a replace apply with a retryable 409 and writes nothing when a runtime write never ends", async () => {
+    const file = await previewForApply();
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+    });
+    await entered;
+
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let result: Awaited<ReturnType<typeof handleEditorWorkspaceReplaceApply>>;
+    try {
+      const applying = handleEditorWorkspaceReplaceApply(
+        {
+          ...postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+          correlationId: "req-replace-gate-busy-01",
+        },
+        deps(),
+      );
+      while (nativeWriteGateWaiters() === 0) await new Promise<void>((done) => setImmediate(done));
+      await vi.advanceTimersByTimeAsync(HUMAN_WRITE_WAIT_MS);
+      result = await applying;
+    } finally {
+      vi.useRealTimers();
+      resetServerLogger();
+    }
+
+    expect(sink.events).toMatchObject([
+      {
+        op: "coding-runtime.revert.refused",
+        correlationId: "req-replace-gate-busy-01",
+        extra: { operation: "write", reason: "write-gate-timeout" },
+      },
+    ]);
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "BUSY" } });
+    await expect(readFile(join(root, "src", "a.ts"), "utf8")).resolves.toContain("parseConfig");
+    release();
+    await native;
   });
 
   it("keeps exact closed-file content while using the governed patch preflight", async () => {

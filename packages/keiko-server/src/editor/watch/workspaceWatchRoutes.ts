@@ -26,7 +26,7 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../../routes.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../../sse.js";
+import { readyMessage, startSseHeartbeat, openSseResponse } from "../../sse.js";
 import { writeSseFrame } from "../../sse-write.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import type { WorkspaceWatchSubscribeResult } from "./workspaceWatchService.js";
@@ -191,7 +191,7 @@ function openWatchStream(
   controller: AbortController,
   result: Extract<WorkspaceWatchSubscribeResult, { readonly kind: "ok" }>,
 ): typeof STREAMING {
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
   const unsubscribe = result.unsubscribe;
   const stop = (): void => {

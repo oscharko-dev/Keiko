@@ -19,6 +19,7 @@ import type {
   CodingRuntimeRevertRefusal,
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
+  CodingRuntimeStagedRevertOutcome,
   CodingRuntimeTurnOrigin,
 } from "./codingRuntimeRevert.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
@@ -70,7 +71,10 @@ import type {
   GitChangeSnapshotService,
   GitChangeSnapshotCaptureInput,
 } from "../gitChangeSnapshotService.js";
-import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+import type {
+  GitChangeSnapshot,
+  GitChangeSnapshotUnavailableReason,
+} from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
   authorizeGitDeliveryModelEgress,
   type GitDeliveryDescriptionAuthorityPort,
@@ -261,7 +265,7 @@ export interface ProductionRuntimeTurnPort {
     ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
   /** Commits an undo left staged when the post-completion undo window closes (#3904 AC3). */
   readonly commitStagedRevert?:
-    ((runId: string) => Promise<"committed" | "none" | "failed">) | undefined;
+    ((runId: string) => Promise<CodingRuntimeStagedRevertOutcome>) | undefined;
   /**
    * The messages the operator sent into the running turn that the runtime has not handed to the
    * model yet, and the withdrawal or promotion of one (S07, ADR-0137 D10). Absent for a port that
@@ -751,18 +755,36 @@ async function abortCodexTurn(
   ).ok;
 }
 
-async function waitForCodexTerminal(
+// Polls the turn's terminal status on a timer until it reports one or the run is aborted; a timer
+// chain keeps no promise chain growing over a long turn.
+function waitForCodexTerminal(
   control: CodexRuntimeControl,
   runId: string,
   turnId: string,
   signal: AbortSignal,
 ): Promise<CodingRuntimeTaskOutcome> {
-  while (!signal.aborted) {
-    const status = control.terminalStatus(runId, turnId);
-    if (status !== undefined) return terminalOutcome(status);
-    await pollDelay(signal);
-  }
-  return "cancelled";
+  return new Promise((resolve) => {
+    let timeout: NodeJS.Timeout | undefined;
+    const settle = (outcome: CodingRuntimeTaskOutcome): void => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      resolve(outcome);
+    };
+    const onAbort = (): void => {
+      settle("cancelled");
+    };
+    const poll = (): void => {
+      const status = control.terminalStatus(runId, turnId);
+      if (status !== undefined) settle(terminalOutcome(status));
+      else timeout = setTimeout(poll, CODEX_TERMINAL_POLL_MS);
+    };
+    if (signal.aborted) {
+      settle("cancelled");
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    poll();
+  });
 }
 
 function terminalOutcome(
@@ -773,18 +795,6 @@ function terminalOutcome(
   return "failed";
 }
 
-function pollDelay(signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = (): void => {
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    };
-    const timeout = setTimeout(finish, CODEX_TERMINAL_POLL_MS);
-    signal.addEventListener("abort", finish, { once: true });
-  });
-}
-
 export function createProductionRuntimeTaskDispatcher(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
   diagnostics?: ServerDiagnosticSink,
@@ -792,7 +802,7 @@ export function createProductionRuntimeTaskDispatcher(
   return {
     dispatch: (request) => dispatchRuntimeTask(runs, request, diagnostics),
     replace: (request) => replaceRuntimeTask(runs, request, diagnostics),
-    abort: (request) => abortRuntimeTask(runs, request),
+    abort: (request) => abortRuntimeTask(runs, request, diagnostics),
     deliver: (request) => deliverRuntimePrompt(runs, request, diagnostics),
     commands: (runId, correlationId) =>
       runs.get(runId)?.turnPort.listCommands?.(runId, correlationId) ?? Promise.resolve(undefined),
@@ -1216,7 +1226,7 @@ type ReplacementFailureReason =
  * the inputs its prompt carries (a delivery, referenced files) are refused.
  */
 type RuntimeDispatchFailureReason =
-  ReplacementFailureReason | "agent-unsupported" | "inputs-refused";
+  ReplacementFailureReason | "abort-exception" | "agent-unsupported" | "inputs-refused";
 
 function recordRuntimeDispatchFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -1423,6 +1433,7 @@ function inboxRuntimeAction(
 async function abortRuntimeTask(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
   request: CodingRuntimeRunOperation,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<boolean> {
   const record = runs.get(request.runId);
   const reservation = record?.operationGuard.reserve(request);
@@ -1434,7 +1445,8 @@ async function abortRuntimeTask(
       return false;
     }
     return reservation.commit();
-  } catch {
+  } catch (error) {
+    recordRuntimeDispatchFailure(diagnostics, request.runId, "abort-exception", error);
     reservation.release();
     return false;
   } finally {
@@ -1541,6 +1553,15 @@ function minimalWorkspaceInfo(root: string): WorkspaceInfo {
   };
 }
 
+// A HEAD or ref that moved during the capture is proven drift, not a missing capability: it keeps
+// its stale reason so the card shows it. Every other unavailable reason has no draft to show.
+function unavailableCaptureOutcome(
+  reason: GitChangeSnapshotUnavailableReason,
+): ProductionWorkbenchDescriptionOutcome {
+  const drifted = reason === "head-mismatch" || reason === "revision-mismatch";
+  return { reason: drifted ? "stale-snapshot" : "generation-unavailable" };
+}
+
 async function dispatchWorkbenchDescription(
   deps: ProductionWorkbenchDescriptionDeps,
   scope: WorkbenchDescriptionScope,
@@ -1561,10 +1582,9 @@ async function dispatchWorkbenchDescription(
   const capture = await deps.snapshots.capture(captureInput);
   const captured = capture.snapshot;
   if (captured.outcome === "failed") return { reason: "provider-failed" };
-  if (captured.outcome === "unavailable") return { reason: "generation-unavailable" };
-  if (capture.reference === undefined || captured.remoteDigest !== scope.remoteDigest) {
-    return { reason: "generation-unavailable" };
-  }
+  if (captured.outcome === "unavailable") return unavailableCaptureOutcome(captured.reason);
+  if (capture.reference === undefined) return { reason: "generation-unavailable" };
+  if (captured.remoteDigest !== scope.remoteDigest) return { reason: "stale-snapshot" };
   if (captured.baseSha !== scope.baseSha || captured.headSha !== scope.headSha) {
     return { reason: "stale-snapshot" };
   }

@@ -12,6 +12,7 @@ import {
   repairLocalCodingAppSessionForStream,
   reportStreamSessionRecovered,
 } from "./coding-app-session-client";
+import { admitDirectBrowserStream, type DirectStreamAdmission } from "./browser-stream-capacity";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -56,6 +57,9 @@ const lastSeqBySubscriber = new Map<RunEventSubscriber, number>();
 let everObservedEvent = false;
 let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
+let unreadableFrameReported = false;
+// Releases the connection this document's run-event stream holds outside the shared stream pool.
+let sharedEventSourceAdmission: DirectStreamAdmission | null = null;
 let reconnectTimer: number | undefined;
 let reconnectAttempts = 0;
 // Set once an `onerror` in the current failure streak has a session repair in flight OR
@@ -117,6 +121,9 @@ function closeSharedEventSource(): void {
   sharedEventSource?.close();
   sharedEventSource = null;
   sharedEventSourceLive = false;
+  unreadableFrameReported = false;
+  sharedEventSourceAdmission?.release();
+  sharedEventSourceAdmission = null;
 }
 
 function reconnectDelay(): number {
@@ -247,10 +254,46 @@ function endFailureStreak(): void {
 }
 
 function openSharedEventSource(): void {
-  if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
-  closeSharedEventSource();
+  if (
+    subscriberCount() === 0 ||
+    documentHidden() ||
+    sharedEventSource !== null ||
+    sharedEventSourceAdmission?.active === true
+  ) {
+    return;
+  }
+  // Replayable: every subscribed run is re-read from its last cursor on reopening, so this stream
+  // gives its slot to a non-replayable one (editor agent bridge, verification) and reopens later.
+  // Of the replayable streams it yields first: it feeds the Agent run widget, not the Workbench.
+  sharedEventSourceAdmission = admitDirectBrowserStream(connectSharedEventSource, {
+    replayRank: 0,
+    onYield: yieldSharedEventSource,
+  });
+}
+
+// Closes the connection only: the admission stays, so the stream asks for a slot again.
+function yieldSharedEventSource(): void {
+  sharedEventSource?.close();
+  sharedEventSource = null;
+  sharedEventSourceLive = false;
+  unreadableFrameReported = false;
+  notifyAll("connecting", null);
+}
+
+function connectSharedEventSource(): void {
+  if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) {
+    // Nobody needs the stream any more: hand the slot back instead of holding it unused.
+    queueMicrotask(() => {
+      if (subscriberCount() === 0 || documentHidden()) closeSharedEventSource();
+    });
+    return;
+  }
   sharedEventSource = createSameOriginApiEventSource(runEventsUrl());
-  if (sharedEventSource === null) return;
+  if (sharedEventSource === null) {
+    // The slot is stored only after a synchronous admission returns, so release it afterwards.
+    queueMicrotask(closeSharedEventSource);
+    return;
+  }
 
   sharedEventSource.onopen = () => {
     endFailureStreak();
@@ -280,6 +323,13 @@ function openSharedEventSource(): void {
     try {
       parsed = JSON.parse(ev.data as string) as HarnessEvent;
     } catch {
+      // One line per stream, not per frame: a broken producer must not flood the activity log.
+      if (!unreadableFrameReported) {
+        unreadableFrameReported = true;
+        reportClientDiagnostic("[keiko] run events stream frame unreadable", {
+          errorKind: "validation-failed",
+        });
+      }
       return;
     }
     notifyRun(parsed);

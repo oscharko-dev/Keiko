@@ -70,8 +70,9 @@ async function runHistoryRoute(work: () => Promise<RouteResult>): Promise<RouteR
 async function rootScope(
   deps: UiHandlerDeps,
   rootInput: string | null,
+  correlationId: string | undefined,
 ): Promise<EditorLocalHistoryRootScope> {
-  const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
   return scopeFromRealRoot(deps, root.realRoot);
 }
 
@@ -97,18 +98,20 @@ async function fileScope(
   deps: UiHandlerDeps,
   rootInput: string | null,
   pathInput: string | null,
+  correlationId: string | undefined,
 ): Promise<{ readonly scope: EditorLocalHistoryRootScope; readonly relativePath: string }> {
-  // KEIKO-0927: resolveContainedEditorFilePath already resolves rootInput once (no resolvedRoot
-  // is passed here, so it falls back to its own resolveRoot call). Deriving the scope from its
-  // returned realRoot via scopeFromRealRoot -- instead of the previous rootScope(deps,
-  // file.realRoot), which re-resolved by treating file.realRoot as if it were a fresh rootInput
-  // -- keeps this to a single resolveRoot call per request, matching authorizedEntry. Both
-  // containment guards (deny-list + realpath) still run inside resolveContainedEditorFilePath.
+  // KEIKO-0927: the root is resolved once, under the request's correlation id, and handed to
+  // resolveContainedEditorFilePath, which then skips its own fallback resolution. Deriving the
+  // scope from the returned realRoot via scopeFromRealRoot keeps this to a single resolveRoot
+  // call per request, matching authorizedEntry. Both containment guards (deny-list + realpath)
+  // still run inside resolveContainedEditorFilePath.
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
   const file = await resolveContainedEditorFilePath(
     deps.store,
     rootInput,
     pathInput,
     deps.redactor,
+    root,
   );
   return { scope: scopeFromRealRoot(deps, file.realRoot), relativePath: file.relativePath };
 }
@@ -149,7 +152,7 @@ async function authorizedEntry(
   // resolveContainedEditorFilePath. If the same rootInput ever resolves to a DIFFERENT
   // realRoot between the two calls (a race we already treat as identity drift), the mismatch
   // is caught by the scopeMatches check below.
-  const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, ctx.correlationId);
   const scope = scopeFromRealRoot(deps, root.realRoot);
   const store = historyStore(deps);
   const entry = store.entry(scope, ctx.params.entryRef ?? "");
@@ -183,7 +186,7 @@ export async function handleListEditorLocalHistory(
     const rootInput = ctx.url.searchParams.get("root");
     const pathInput = ctx.url.searchParams.get("path");
     if (pathInput !== null) {
-      const resolved = await fileScope(deps, rootInput, pathInput);
+      const resolved = await fileScope(deps, rootInput, pathInput, ctx.correlationId);
       return {
         status: 200,
         body: {
@@ -192,7 +195,7 @@ export async function handleListEditorLocalHistory(
         },
       };
     }
-    const scope = await rootScope(deps, rootInput);
+    const scope = await rootScope(deps, rootInput, ctx.correlationId);
     return { status: 200, body: { session: "active", entries: historyStore(deps).list(scope) } };
   });
 }

@@ -71,8 +71,14 @@ describe("draft delivery approval request", () => {
         expiresAtMs: Date.parse("2026-09-25T12:00:00.000Z"),
       }),
     } as unknown as DraftDeliveryService;
-    requestDraftDeliveryApproval(service, "delivery-1", (event) => void events.push(event));
+    requestDraftDeliveryApproval(
+      service,
+      "delivery-1",
+      (event) => void events.push(event),
+      "call_delivery_1",
+    );
     expect(events[0]?.permissionRequest).toMatchObject({
+      callId: "call_delivery_1",
       actionKind,
       scopeLabel: "workspace-scope",
       policyReason: "approval-required",

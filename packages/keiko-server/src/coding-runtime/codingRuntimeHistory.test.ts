@@ -464,6 +464,7 @@ describe("paired coding conversation history", () => {
         requestId: "atomic-history-start",
         taskIntent: "Keep this intent",
         requestedMode: "governed-assist" as const,
+        expectedWorkspace: { root: "/workspace" },
       };
       expect(() => {
         history.begin(request, activeWorkspace(), "atomic-history-run");
@@ -494,6 +495,7 @@ describe("paired coding conversation history", () => {
         requestId: "title-request",
         taskIntent: intent,
         requestedMode: "governed-assist" as const,
+        expectedWorkspace: { root: "/workspace" },
       },
       activeWorkspace(),
       "title-run",
@@ -512,7 +514,12 @@ describe("paired coding conversation history", () => {
     const history = new CodingRuntimeHistory(store, () => operator, undefined);
     const begin = (runId: string, taskIntent: string): string => {
       history.begin(
-        { requestId: `${runId}-request`, taskIntent, requestedMode: "governed-assist" as const },
+        {
+          requestId: `${runId}-request`,
+          taskIntent,
+          requestedMode: "governed-assist" as const,
+          expectedWorkspace: { root: "/workspace" },
+        },
         activeWorkspace(),
         runId,
       );
@@ -536,6 +543,7 @@ describe("paired coding conversation history", () => {
       requestId: "atomic-history-start",
       taskIntent: "Original intent",
       requestedMode: "governed-assist" as const,
+      expectedWorkspace: { root: "/workspace" },
     };
     history.begin(request, activeWorkspace(), "atomic-first-run");
     const task = history.forRun("atomic-first-run");
@@ -565,6 +573,7 @@ describe("paired coding conversation history", () => {
         requestId: "history-start-one",
         taskIntent: "PRIVATE_TASK",
         requestedMode: "governed-assist",
+        expectedWorkspace: { root: "/workspace" },
       },
       activeWorkspace(),
       "history-run-one",
@@ -798,6 +807,7 @@ describe("forking a task through Coding History", () => {
     requestId: "history-fork-start",
     taskIntent: "PRIVATE_FORK_INTENT",
     requestedMode: "governed-assist" as const,
+    expectedWorkspace: { root: "/workspace" },
   };
 
   function sourceWithTurns(history: CodingRuntimeHistory): string {

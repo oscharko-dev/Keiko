@@ -14,7 +14,10 @@ import {
   isFolderWorkspace,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { CODING_RUNTIME_PATCH_BUDGET_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+  validateCodingWorkbenchIssueBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type {
   CodingWorkbenchActionClass,
@@ -55,7 +58,7 @@ import {
 // tool-call count only stops a runaway loop, because a long ordinary run makes several hundred to
 // more than a thousand calls.
 const MINUTE_MS = 60_000;
-export const MAX_RUNTIME_MAX_DURATION_MINUTES = 480;
+export { MAX_RUNTIME_MAX_DURATION_MINUTES };
 export const DEFAULT_RUNTIME_MAX_DURATION_MINUTES = 480;
 const RUNTIME_MAX_TOOL_CALLS = 10_000;
 const POSITIVE_DECIMAL_INTEGER = /^[1-9]\d*$/u;

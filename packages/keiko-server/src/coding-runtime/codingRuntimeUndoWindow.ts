@@ -7,7 +7,10 @@ import {
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeHoldResult } from "./codingRuntimeManager.js";
-import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
+import type {
+  CodingRuntimeRevertState,
+  CodingRuntimeStagedRevertOutcome,
+} from "./codingRuntimeRevert.js";
 
 /**
  * The post-completion undo window (#3904 AC3, owner decision 2026-10-24). A native run that
@@ -30,7 +33,7 @@ export const UNDO_WINDOW_CLOSE_REASONS = [
 export type UndoWindowCloseReason = (typeof UNDO_WINDOW_CLOSE_REASONS)[number];
 
 /** What closing did with an undo the human left staged. */
-export type UndoWindowStagedOutcome = "committed" | "none" | "failed";
+export type UndoWindowStagedOutcome = CodingRuntimeStagedRevertOutcome;
 
 const CODING_RUNTIME_UNDO_WINDOW_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -57,7 +60,7 @@ const CODING_RUNTIME_UNDO_WINDOW_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["committed", "none", "failed"],
+      values: ["committed", "none", "failed", "unsettled"],
     },
     stopped: { type: "boolean", dataClass: "closed-enum", required: false },
     windowMs: { type: "integer", dataClass: "duration", required: false },
@@ -153,7 +156,10 @@ export class CodingRuntimeUndoWindow {
   private async undoable(runId: string): Promise<boolean> {
     try {
       const state = await this.deps.revertState(runId);
-      return state !== undefined && (state.staged || state.fileCount > 0);
+      return (
+        state !== undefined &&
+        (state.staged || state.fileCount > 0 || (state.indexPathCount ?? 0) > 0)
+      );
     } catch (error) {
       // A turn whose changes cannot be read offers no undo; the run is stopped as before.
       recordUndoWindowHoldFailed(this.deps.activityLog, runId, error);
@@ -253,7 +259,11 @@ function recordUndoWindowClosed(
   activityLog: ServerLogSink | undefined,
   facts: ClosedWindowFacts,
 ): void {
-  const healthy = facts.failure === undefined && facts.stopped && facts.stagedRevert !== "failed";
+  const healthy =
+    facts.failure === undefined &&
+    facts.stopped &&
+    facts.stagedRevert !== "failed" &&
+    facts.stagedRevert !== "unsettled";
   undoWindowLog(activityLog).write(
     activityLogEvent(
       CODING_RUNTIME_UNDO_WINDOW_OPERATION,

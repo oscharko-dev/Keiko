@@ -922,6 +922,19 @@ export interface UsageMetadata {
    * reasoning itself, so its share of the completion stays measurable (#3878).
    */
   readonly reasoningBytes?: number | undefined;
+  /**
+   * The prompt's size including prompt-cache tokens the provider reports beside, not inside,
+   * `prompt_tokens` (`cache_read_input_tokens`, `prompt_tokens_details.cached_tokens`). Present only
+   * when it exceeds `promptTokens`; the gateway calibrates its admission from it, never from the
+   * smaller figure that leaves the cached prefix out.
+   */
+  readonly totalPromptTokens?: number | undefined;
+  /**
+   * True when the provider reported top-level prompt-cache tokens that fit inside `prompt_tokens`,
+   * so it cannot be told whether `prompt_tokens` includes them. The gateway does not calibrate
+   * from such a report.
+   */
+  readonly promptCacheLayoutAmbiguous?: true | undefined;
 }
 
 // ─── Normalised response ──────────────────────────────────────────────────────
@@ -942,10 +955,30 @@ export type FinishReason =
  */
 export type GatewayOutputRepairOutcome = "recovered" | "exhausted-again" | "empty-again" | "failed";
 
+/**
+ * What the provider's own usage record says about an answer that ended without text or a tool call
+ * (O-11). `provider-reported-output`: it reported completion tokens above zero, so it generated
+ * output that never reached Keiko (a tool call its parser dropped, for example);
+ * `no-provider-output`: it reported zero completion tokens; `usage-unavailable`: it reported no
+ * usage at all, so the two cannot be told apart. A closed word, never content.
+ */
+export const GATEWAY_EMPTY_ANSWER_EVIDENCE = [
+  "provider-reported-output",
+  "no-provider-output",
+  "usage-unavailable",
+] as const;
+
+export type GatewayEmptyAnswerEvidence = (typeof GATEWAY_EMPTY_ANSWER_EVIDENCE)[number];
+
 export interface NormalizedResponse {
   readonly modelId: string;
   readonly content: string;
   readonly finishReason: FinishReason;
+  /**
+   * Set by the gateway when the provider reported no finish reason it recognizes, so `finishReason`
+   * above is the default `stop`, not a measurement. Absent when the provider reported one.
+   */
+  readonly finishReasonUnreported?: true | undefined;
   readonly toolCalls: readonly NormalizedToolCall[];
   readonly structuredOutput: Record<string, unknown> | null;
   readonly usage: UsageMetadata;

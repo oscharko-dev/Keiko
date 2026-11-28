@@ -261,6 +261,11 @@ function WorkbenchDescriptionCard({
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (status === undefined) return null;
+  // "generation-unavailable" only says a draft cannot be written in this context (no remote, no
+  // snapshot, nothing configured): nothing a person can act on, so no blocked card (U-50). Real
+  // failures, lapses and denials keep theirs.
+  const reason = status.reason;
+  if (reason === "generation-unavailable") return null;
   const reviewTarget = descriptionReviewTarget(status, delivery);
   const draftTarget = descriptionDraftTarget(status, delivery, runId);
   return (
@@ -275,9 +280,7 @@ function WorkbenchDescriptionCard({
       >
         {t(`codingWorkbench.descriptionStatus.state.${status.state}`)}
       </output>
-      <p className={styles.helpText}>
-        {t(`codingWorkbench.descriptionStatus.reason.${status.reason}`)}
-      </p>
+      <p className={styles.helpText}>{t(`codingWorkbench.descriptionStatus.reason.${reason}`)}</p>
       <DeliveryFacts facts={descriptionFacts(status, t)} />
       <WorkbenchDescriptionReview
         applicationTarget={reviewTarget}

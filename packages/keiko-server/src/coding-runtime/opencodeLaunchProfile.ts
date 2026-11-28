@@ -8,7 +8,6 @@ import {
   EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 
-import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import {
   openCodeNativeFormatterDisposition,
   openCodeNativeFormatterAdmission,
@@ -33,6 +32,21 @@ const OPENCODE_COMPACTION_MAX_RESERVED_TOKENS = 20_000;
 const OPENCODE_COMPACTION_TAIL_TURNS = 2;
 const OPENCODE_COMPACTION_MIN_RECENT_TOKENS = 2_000;
 const OPENCODE_COMPACTION_MAX_RECENT_TOKENS = 8_000;
+
+/**
+ * The runtime's model-visible tool output cap, at upstream parity (51,200 bytes, 2,000 lines). The
+ * producer keeps the head of a longer result, saves the whole output under its tool-output data
+ * directory and tells the model where. This cap protects the model's context window: one long
+ * command output at the former 256 KiB cap cost about 51k prompt tokens on a 131k window and forced
+ * compaction. It is not the governed IPC body ceiling (`CODING_TOOL_MAX_BODY_BYTES`, a different
+ * direction); Keiko's own tools bound themselves and opt out of the producer's cut (`truncated`).
+ */
+export const OPENCODE_TOOL_OUTPUT_MAX_BYTES = 51_200;
+export const OPENCODE_TOOL_OUTPUT_MAX_LINES = 2_000;
+const OPENCODE_TOOL_OUTPUT = Object.freeze({
+  max_bytes: OPENCODE_TOOL_OUTPUT_MAX_BYTES,
+  max_lines: OPENCODE_TOOL_OUTPUT_MAX_LINES,
+});
 
 /**
  * The one definition of the directory OpenCode loads Keiko's generated plugins and private
@@ -61,6 +75,15 @@ export function openCodePlanDirectory(stateRoot: string): string {
  */
 export function openCodeRepositoryInstructionsPath(stateRoot: string): string {
   return join(openCodeConfigDirectory(stateRoot), "AGENTS.md");
+}
+
+/**
+ * Where the pinned runtime saves the full output of a result it shortened: `<data home>/opencode/
+ * tool-output` under the run's private home (HOME is private and XDG_DATA_HOME is never set). A
+ * native run admits exactly this directory for reads, so the model can open what was cut.
+ */
+export function openCodeToolOutputDirectory(stateRoot: string): string {
+  return join(stateRoot, "home", ".local", "share", "opencode", "tool-output");
 }
 
 /** The further gateway models and per-agent overrides of a native launch (#3903 AC1). */
@@ -313,7 +336,7 @@ Each turn's whole output, reasoning included, must fit the output budget: think 
 
 Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill_discover (lists the approved read-only skills this run may invoke now), keiko_skill (runs one of them by the skillId keiko_skill_discover lists), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
 
-Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths (with unstage: true, giving their staged changes back). keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit to this run's task branch on origin (any Git remote; never a protected branch, never forced, and no issue is needed), and keiko_pull_request proposes a draft pull request title from this run's task branch on a GitHub origin (no issue is needed; an accepted issue only links the pull request; the result names the reason when it cannot) -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. When keiko_git_commit is blocked by the message policy, its result carries a violations array of exact codes (for example missing-conventional-prefix or subject-too-long); read it and fix the message yourself, then call keiko_git_commit again -- never ask the operator which commit format to use. Follow each proposal's actual disposition: proposal tools wait for any required operator decision. If the result carries approvalDisposition: "ready", approval has ALREADY been granted even if its immutable receipt still says approval-required. Continue immediately; do not stop or ask for the same approval again. When the stage or unstage status is ready or approvalDisposition is ready, call keiko_git_execute with its matching kind (stage, unstage, commit, push or pull-request) and proposalId without asking a redundant question. Only a proposal without a ready disposition that still requires approval must wait for the operator's own approval channel before execution. Creating or approving a proposal does not execute it. A denied result authorizes no effect; do not retry a denial blindly or widen authority. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off. keiko_git_sync fetches the upstream remote (pull: false) or fast-forwards the current branch to its upstream (pull: true); it never merges or overwrites local changes and waits for any required operator decision. keiko_git_branch (name) creates a new local task branch at the current commit and switches this run to it; uncommitted changes carry over. Use it when keiko_git_commit is blocked because the run works on a protected branch such as main or dev, then stage and commit again. It refuses a protected, invalid or existing name, and a run that is not on its base branch or not in a Local checkout, and it waits for any required operator decision. These delivery tools need a Git repository: in a plain folder that is not one, each of them refuses with repository-required. That is not a transient error; keep editing and verifying, report the result, and never initialize a repository or run Git another way.
+Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths (a path may name a file or a directory, a directory stages every change below it, "." stages every change, and one request takes at most 50 entries; with unstage: true, giving their staged changes back). keiko_git_status lists at most 50 changed files and says when its list is truncated: then stage the directory instead of listing each file. keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit to this run's task branch on origin (any Git remote; never a protected branch, never forced, and no issue is needed), and keiko_pull_request proposes a draft pull request title from this run's task branch on a GitHub origin (no issue is needed; an accepted issue only links the pull request; the result names the reason when it cannot) -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. When keiko_git_commit is blocked by the message policy, its result carries a violations array of exact codes (missing-conventional-prefix: start the subject with a type such as feat: or fix:, optionally feat(scope):; disallowed-type: use one of feat, fix, chore, docs, refactor, test, build, ci, perf, style or revert; subject-too-long: keep the subject within 72 characters; empty-subject: write a subject; missing-issue-key and missing-signoff: add the issue key or the Signed-off-by trailer the policy names); read it and fix the message yourself, then call keiko_git_commit again with the corrected message -- never ask the operator which commit format to use. Follow each proposal's actual disposition: proposal tools wait for any required operator decision. If the result carries approvalDisposition: "ready", approval has ALREADY been granted even if its immutable receipt still says approval-required. Continue immediately; do not stop or ask for the same approval again. When the stage or unstage status is ready or approvalDisposition is ready, call keiko_git_execute with its matching kind (stage, unstage, commit, push or pull-request) and proposalId without asking a redundant question. Only a proposal without a ready disposition that still requires approval must wait for the operator's own approval channel before execution. Creating or approving a proposal does not execute it. A denied result authorizes no effect; do not retry a denial blindly or widen authority. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off. keiko_git_sync fetches the upstream remote (pull: false) or fast-forwards the current branch to its upstream (pull: true); it never merges or overwrites local changes and waits for any required operator decision. keiko_git_branch (name) creates a new local task branch at the current commit and switches this run to it; uncommitted changes carry over. Use it when keiko_git_commit is blocked because the run works on a protected branch such as main or dev, then stage and commit again. It refuses a protected, invalid or existing name, and a run that is not on its base branch or not in a Local checkout, and it waits for any required operator decision. These delivery tools need a Git repository: in a plain folder that is not one, each of them refuses with repository-required. That is not a transient error; keep editing and verifying, report the result, and never initialize a repository or run Git another way.
 
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 
@@ -425,20 +448,32 @@ function launchEnvironment(
 }
 
 /**
+ * npm's own update check and the implicit post-install audit contact the registry outside the task,
+ * and the notice and funding lines only spend the model's context, so they stay off in every
+ * profile, mode and OS (ADR-0184 D6).
+ */
+const NPM_QUIET_ENVIRONMENT: Readonly<Record<string, string>> = {
+  npm_config_update_notifier: "false",
+  npm_config_fund: "false",
+  npm_config_audit: "false",
+};
+
+/**
  * The pinned runtime checks plugin dependencies before loading even dependency-free custom tools.
  * Registry retries cannot succeed inside the gateway-only network boundary, so its package manager
  * stays offline and absent optional packages fail promptly, without registry egress. A native Full
  * access run keeps internet egress: its package manager resolves the package formatters (prettier,
  * biome, oxfmt) from the registry as standalone does (#3900 AC4), with bounded retries, so an
  * unreachable registry fails promptly too.
+ * Every profile also carries {@link NPM_QUIET_ENVIRONMENT}.
  */
 function packageManagerEnvironment(
   input: OpenCodeLaunchProfileInput,
   formatter: OpenCodeNativeFormatterDisposition,
 ): Readonly<Record<string, string>> {
   return input.toolProfile === "native" && formatter === "enabled"
-    ? { npm_config_fetch_retries: "1", npm_config_fetch_timeout: "15000" }
-    : { npm_config_offline: "true" };
+    ? { ...NPM_QUIET_ENVIRONMENT, npm_config_fetch_retries: "1", npm_config_fetch_timeout: "15000" }
+    : { ...NPM_QUIET_ENVIRONMENT, npm_config_offline: "true" };
 }
 
 /** What the native binding decided for the formatters; absent on the mapped profiles. */
@@ -616,7 +651,7 @@ export function createFixedOpenCodeConfig(
   readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
   readonly provider: Readonly<Record<string, unknown>>;
   readonly compaction: Readonly<Record<string, boolean | number>>;
-  readonly tool_output: Readonly<{ readonly max_bytes: number }>;
+  readonly tool_output: Readonly<{ readonly max_bytes: number; readonly max_lines: number }>;
   readonly tools: Readonly<Record<string, boolean>>;
   readonly permission: Readonly<Record<string, string>>;
 } {
@@ -633,9 +668,9 @@ export function createFixedOpenCodeConfig(
     },
     provider: fixedOpenCodeProvider(contextGeometry),
     compaction: fixedOpenCodeCompaction(contextGeometry),
-    // OpenCode truncates every custom-tool response after execution. Match the already enforced
-    // governed IPC body ceiling so a valid JSON result keeps its continuation and diagnostics.
-    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    // The legacy tool shim cannot opt out of the producer's truncation, so every result is held
+    // to the upstream-parity model-visible cap like any other tool output.
+    tool_output: OPENCODE_TOOL_OUTPUT,
     tools: fixedOpenCodeTools(unavailable),
     permission: fixedOpenCodePermission(unavailable),
   };
@@ -731,7 +766,7 @@ function createGovernedOpenCodeV2Config(
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: openCodeCompaction(contextGeometry),
-    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    tool_output: OPENCODE_TOOL_OUTPUT,
     automations: OPENCODE_AUTOMATIONS_OFF,
     experimental: OPENCODE_CLOSED_EXPERIMENTS,
     permissions,
@@ -795,7 +830,7 @@ function createNativeOpenCodeV2Config(
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     plugins: OPENCODE_NATIVE_PLUGIN_REMOVALS,
     compaction: openCodeCompaction(contextGeometry),
-    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    tool_output: OPENCODE_TOOL_OUTPUT,
     // The producer offers its automation tools unless this is false; an automation wakes the
     // session only in Keiko's wake run, which alone releases the scheduler lease (#4546).
     automations: true,
@@ -833,6 +868,16 @@ function nativePermissionRules(
           {
             action: "external_directory",
             resource: `${openCodePlanDirectory(stateRoot)}/*`,
+            effect: "allow",
+          },
+        ]),
+    // The saved full output of a shortened result: read-only, decided by the policy's read rules.
+    ...(stateRoot === undefined
+      ? []
+      : [
+          {
+            action: "external_directory",
+            resource: `${openCodeToolOutputDirectory(stateRoot)}/*`,
             effect: "allow",
           },
         ]),

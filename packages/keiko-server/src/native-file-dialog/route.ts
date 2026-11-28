@@ -30,10 +30,11 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import { pathIsDenied } from "../files-deny.js";
+import { pathDeniedAsyncRecorded } from "../files-deny.js";
 import { FilesError, metadataIsSafe, readJsonObject, resolveRoot } from "../files.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { eachInSequence } from "../sequential.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import {
   createNativeFileDialogAdapter,
@@ -134,9 +135,14 @@ async function normalizeDefaultPath(value: string | undefined): Promise<string |
 // metadata-redaction safety on the raw path, deny on the raw path, realpath, metadata-redaction
 // safety on the resolved target, deny on the resolved target, expected-kind stat. Reuses
 // files.ts's `metadataIsSafe` rather than re-deriving the redactor no-op check.
-async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise<void> {
+async function validateFileSelection(
+  path: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): Promise<void> {
   if (!metadataIsSafe(path, deps.redactor)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
-  if (pathIsDenied(path)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
+  if (await pathDeniedAsyncRecorded(path, correlationId))
+    throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   let real: string;
   try {
     real = await realpath(path);
@@ -144,7 +150,8 @@ async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }
   if (!metadataIsSafe(real, deps.redactor)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
-  if (pathIsDenied(real)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
+  if (await pathDeniedAsyncRecorded(real, correlationId))
+    throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   const stats = await stat(real).catch(() => {
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   });
@@ -154,9 +161,13 @@ async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise
 // Directory selections reuse the Files BFF root policy VERBATIM so a folder picked natively is
 // accepted under exactly the rules `/api/files/*` applies to roots (absolute, deny raw + real,
 // realpath, redaction-safe).
-async function validateDirectorySelection(path: string, deps: UiHandlerDeps): Promise<void> {
+async function validateDirectorySelection(
+  path: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): Promise<void> {
   try {
-    await resolveRoot(deps.store, path, deps.redactor);
+    await resolveRoot(deps.store, path, deps.redactor, correlationId);
   } catch (error) {
     if (error instanceof FilesError) {
       const denied = error.code === "DENIED";
@@ -170,6 +181,7 @@ async function validateSelection(
   path: string,
   kind: NativeFileDialogSelectionKind,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): Promise<NativeFileDialogSelection> {
   if (path.includes("\0") || path.trim().length === 0) {
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
@@ -179,9 +191,9 @@ async function validateSelection(
     path.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(path) || path.startsWith("\\\\");
   if (!looksAbsolute) throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   if (kind === "directory") {
-    await validateDirectorySelection(path, deps);
+    await validateDirectorySelection(path, deps, correlationId);
   } else {
-    await validateFileSelection(path, deps);
+    await validateFileSelection(path, deps, correlationId);
   }
   return { path, kind };
 }
@@ -228,18 +240,15 @@ async function projectSelections(
   const selections: NativeFileDialogSelection[] = [];
   let firstRejection: SelectionRejection | undefined;
   let rejectedSelectionCount = 0;
-  for (const path of adapterResult.paths) {
+  await eachInSequence(adapterResult.paths, async (path) => {
     try {
-      selections.push(await validateSelection(path, kind, deps));
+      selections.push(await validateSelection(path, kind, deps, correlationId));
     } catch (error) {
-      if (error instanceof SelectionRejection) {
-        firstRejection ??= error;
-        rejectedSelectionCount += 1;
-        continue;
-      }
-      throw error;
+      if (!(error instanceof SelectionRejection)) throw error;
+      firstRejection ??= error;
+      rejectedSelectionCount += 1;
     }
-  }
+  });
   if (selections.length === 0) {
     throw firstRejection ?? new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }

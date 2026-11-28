@@ -14,6 +14,10 @@ import {
   loadLocaleMessages,
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
+import {
+  loadOptionalWidgetMessages,
+  resetLoadedOptionalWidgetMessages,
+} from "@/lib/optional-widget-i18n";
 import type {
   GitHistoryResponse,
   GitRepositoryStatusResponse,
@@ -291,6 +295,7 @@ afterEach(() => {
   vi.clearAllMocks();
   window.localStorage.removeItem(I18N_STORAGE_KEY);
   resetLoadedMessageCatalogs();
+  resetLoadedOptionalWidgetMessages();
 });
 
 describe("GitClientWindow — axe no-violations", () => {
@@ -691,6 +696,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
     it("localizes the branch-switch confirmation in German", async () => {
       await loadLocaleMessages("de");
+      await loadOptionalWidgetMessages("de");
       window.localStorage.setItem(I18N_STORAGE_KEY, "de");
       const user = userEvent.setup();
       render(
@@ -736,6 +742,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
     it("localizes the accessible pagination action in German", async () => {
       await loadLocaleMessages("de");
+      await loadOptionalWidgetMessages("de");
       window.localStorage.setItem(I18N_STORAGE_KEY, "de");
       const user = userEvent.setup();
       const client = makeClient({
@@ -780,6 +787,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   describe("add-repository dialog", () => {
     it("localizes every dialog control in German", async () => {
       await loadLocaleMessages("de");
+      await loadOptionalWidgetMessages("de");
       window.localStorage.setItem(I18N_STORAGE_KEY, "de");
       render(
         <I18nProvider>

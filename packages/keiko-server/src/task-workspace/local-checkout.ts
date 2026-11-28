@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { isNativeWorkspaceWriteRunning } from "../coding-runtime/nativeWriteGate.js";
+import { recordWriteGateBusy } from "../coding-runtime/opencodeRevert.js";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 
 import { gitEnv, GIT_BASE_ARGS, resolveGitExecutable } from "@oscharko-dev/keiko-git";
+import { isGitZeroObjectId } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   LOCAL_CHECKOUT_WORKSPACE_ID_PREFIX,
   TASK_WORKSPACE_SCHEMA_VERSION,
@@ -34,7 +37,9 @@ import {
   requireUnchangedWorkspaceIdentity,
   selectFolderWorkspace,
   type FolderSelectionRequest,
+  type InPlaceViewResult,
 } from "./folder-workspace.js";
+import type { WorkspaceDriftCause } from "./evidence.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type {
@@ -231,26 +236,45 @@ function localHead(root: string): string | undefined {
   return readProductionWorkspaceHead(root, root);
 }
 
+// The unborn current branch of the checkout (a fresh `git init`, #4491): HEAD names `branch` and
+// that ref does not exist yet. The only branch an unborn repository can be opened on.
+function isUnbornCurrentBranch(root: string, branch: string): boolean {
+  try {
+    const state = readProductionWorkspaceGitState(root, root);
+    return state?.headState === "unborn" && state.branch === branch;
+  } catch (cause) {
+    // An unreadable HEAD proves nothing: fail closed with the cause kept for the log line.
+    throw new TaskWorkspaceError(
+      "REPOSITORY_UNREACHABLE",
+      "The local checkout could not be inspected; retry when Git is available.",
+      [],
+      { cause },
+    );
+  }
+}
+
 function localView(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
-): ActiveWorkspaceView | undefined {
+): InPlaceViewResult {
   const persisted = instances.getById(pointer.workspaceId);
-  if (persisted?.executionLocation !== "local") return undefined;
+  if (persisted?.executionLocation !== "local") return { cause: "instance-record-missing" };
   const root = persisted.repositoryRoot;
-  if (!isRegisteredLocalRoot(store, root)) return undefined;
-  if (!isCanonicalLocalRoot(root)) return undefined;
+  if (!isRegisteredLocalRoot(store, root)) return { cause: "root-unregistered" };
+  if (!isCanonicalLocalRoot(root)) return { cause: "root-not-canonical" };
   const state = readProductionWorkspaceGitState(root, root);
-  if (state?.branch !== persisted.taskBranch) return undefined;
+  if (state === undefined) return { cause: "git-state-unreadable" };
+  if (state.branch !== persisted.taskBranch) return { cause: "branch-changed" };
   const identity = gitDirectoryIdentity(root, state.gitDir);
-  if (`${LOCAL_PREFIX}${identity}` !== pointer.workspaceId) return undefined;
+  if (`${LOCAL_PREFIX}${identity}` !== pointer.workspaceId)
+    return { cause: "git-dir-identity-changed" };
   const instance: WorkspaceInstance = {
     ...persisted,
     lastVerifiedAt: new Date().toISOString(),
     lastVerifiedHead: state.head,
   };
-  return { instance, binding: buildBinding(instance), pointer };
+  return { view: { instance, binding: buildBinding(instance), pointer } };
 }
 
 export interface LocalCheckoutLifecycle extends WorkspaceLifecycleService {
@@ -298,8 +322,11 @@ function requireLocalBranch(root: string, branch: string): void {
     throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "The local branch is unavailable.");
   try {
     git(root, "check-ref-format", "--branch", branch);
+    if (isUnbornCurrentBranch(root, branch)) return;
     git(root, "show-ref", "--verify", `refs/heads/${branch}`);
   } catch (error) {
+    // The deliberate REPOSITORY_UNREACHABLE of an unreadable HEAD is not a missing branch.
+    if (error instanceof TaskWorkspaceError) throw error;
     throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "Select an existing local branch.", [], {
       cause: error,
     });
@@ -325,8 +352,17 @@ function requireAvailableBranchObjects(root: string, branch: string): void {
     );
 }
 
-function switchLocalBranch(root: string, branch: string): void {
+function switchLocalBranch(root: string, branch: string, correlationId: string | undefined): void {
   if (currentBranch(root) === branch) return;
+  // The switch rewrites the worktree synchronously, so it cannot wait in the native-write gate: while
+  // a runtime revert write of this checkout is queued or running it refuses (retryable).
+  if (isNativeWorkspaceWriteRunning(root)) {
+    recordWriteGateBusy(undefined, correlationId);
+    throw new TaskWorkspaceError(
+      "BRANCH_CONFLICT",
+      "A Coding run is still writing these files. Try again in a moment.",
+    );
+  }
   if (hasExecutableFilters(root))
     throw new TaskWorkspaceError(
       "BRANCH_CONFLICT",
@@ -393,11 +429,16 @@ function localInstance(
   };
 }
 
+// The log marks only an unborn head; a born one stays unmarked so its lines are unchanged.
+function unbornMarker(head: string | undefined): "unborn" | undefined {
+  return head !== undefined && isGitZeroObjectId(head) ? "unborn" : undefined;
+}
+
 function recordLocalSelection(
   deps: LocalCheckoutEvidenceDeps,
   request: LocalSelectionRequest,
   identity: string,
-  outcome: Pick<WorkspaceSelectionOutcome, "startedAt" | "fromState" | "error">,
+  outcome: Pick<WorkspaceSelectionOutcome, "startedAt" | "fromState" | "error" | "headState">,
 ): void {
   recordWorkspaceSelection(deps, {
     ...outcome,
@@ -413,16 +454,20 @@ function activateLocalCheckout(
   identity: string,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
 ): ActiveWorkspaceView {
-  requireAvailableBranchObjects(request.root, request.branch);
-  switchLocalBranch(request.root, request.branch);
+  // An unborn branch has no tree to hydrate and nothing to switch to: the checkout already stands
+  // on it and its first commit is made through the verified-commit lane (#4491).
+  if (!isUnbornCurrentBranch(request.root, request.branch)) {
+    requireAvailableBranchObjects(request.root, request.branch);
+    switchLocalBranch(request.root, request.branch, request.correlationId);
+  }
   const head = verifiedLocalHead(request.root, identity);
   const atIso = new Date().toISOString();
   const workspaceId = `${LOCAL_PREFIX}${identity}`;
   instances.upsert(localInstance(request, identity, head, atIso, instances.getById(workspaceId)));
   pointerStore.set({ workspaceId, setBy: request.requestedBy, atIso });
-  const active = getActive();
+  const active = getActive(request.correlationId);
   if (active === undefined)
     throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout could not be verified.");
   return active;
@@ -433,7 +478,7 @@ function selectLocalCheckout(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
   deps: LocalCheckoutEvidenceDeps,
 ): ActiveWorkspaceView {
   const startedAt = deps.now();
@@ -445,7 +490,11 @@ function selectLocalCheckout(
     fromState = instances.getById(`${LOCAL_PREFIX}${identity}`)?.lifecycleState;
     requireLocalBranch(request.root, request.branch);
     const active = activateLocalCheckout(request, identity, instances, pointerStore, getActive);
-    recordLocalSelection(deps, request, identity, { startedAt, fromState });
+    recordLocalSelection(deps, request, identity, {
+      startedAt,
+      fromState,
+      headState: unbornMarker(active.instance.lastVerifiedHead),
+    });
     return active;
   } catch (cause) {
     const error =
@@ -485,7 +534,7 @@ function admitLocalTaskBranch(
 function adoptLocalTaskBranch(
   request: TaskBranchAdoption,
   instances: WorkspaceInstanceStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
 ): ActiveWorkspaceView {
   const instance = localCheckoutInstance(instances, request.workspaceId);
   if (
@@ -532,6 +581,7 @@ function logInvalidatedLocalPointer(
   pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
   correlationId: string | undefined,
   startedAt: number,
+  driftCause: WorkspaceDriftCause,
   cause?: unknown,
 ): void {
   const error =
@@ -550,6 +600,7 @@ function logInvalidatedLocalPointer(
     durationMs: Math.max(0, Date.now() - startedAt),
     worktreeCount: 0,
     errorCode: error.code,
+    driftCause,
     error,
   });
 }
@@ -560,7 +611,7 @@ function setActiveWithLocal(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
   activityLog: LocalCheckoutEvidenceDeps,
 ): Promise<ActiveWorkspaceView> {
   const instance = instances.getById(request.workspaceId);
@@ -610,33 +661,52 @@ interface LocalInvalidationLogger {
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
     startedAt: number,
+    driftCause: WorkspaceDriftCause,
     cause?: unknown,
   ) => void;
   readonly clear: () => void;
+}
+
+const MAX_LOGGED_CORRELATIONS = 16;
+
+// An uncorrelated refusal adds nothing once any line exists for the pointer; a correlated one is
+// new unless that exact correlation was logged. Past the bound nothing more is logged.
+function alreadyLogged(logged: ReadonlySet<string>, correlationId: string | undefined): boolean {
+  if (logged.size >= MAX_LOGGED_CORRELATIONS) return true;
+  return correlationId === undefined ? logged.size > 0 : logged.has(correlationId);
 }
 
 function createLocalInvalidationLogger(
   activityLog: WorkspaceActivityLogSeam,
 ): LocalInvalidationLogger {
   let lastInvalidatedPointer: string | null = null;
-  let lastInvalidationCorrelated = false;
+  // The correlation ids already logged for this pointer. A refusal under a new correlation (the
+  // start's own request, after a UI pre-read logged the drift under the route's) is a different
+  // fact to a reader; polling repeats one correlation or none and stays suppressed. Bounded so a
+  // stream of distinct ids cannot grow it or flood the log.
+  const loggedCorrelations = new Set<string>();
   const record = (
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
     startedAt: number,
+    driftCause: WorkspaceDriftCause,
     cause?: unknown,
   ): void => {
     const key = `${pointer.workspaceId}\0${pointer.updatedAt}`;
     const correlated = correlationId !== undefined && correlationId !== UNKNOWN_CORRELATION_ID;
-    if (lastInvalidatedPointer === key && (!correlated || lastInvalidationCorrelated)) return;
+    const sameKey = lastInvalidatedPointer === key;
+    if (!sameKey) loggedCorrelations.clear();
+    if (sameKey && alreadyLogged(loggedCorrelations, correlated ? correlationId : undefined))
+      return;
     lastInvalidatedPointer = key;
-    lastInvalidationCorrelated = correlated;
-    logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
+    loggedCorrelations.add(correlated ? correlationId : "");
+    logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, driftCause, cause);
   };
   return {
     record,
     clear: (): void => {
       lastInvalidatedPointer = null;
+      loggedCorrelations.clear();
     },
   };
 }
@@ -649,7 +719,7 @@ function inPlaceView(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
-): ActiveWorkspaceView | undefined {
+): InPlaceViewResult {
   return pointer.workspaceId.startsWith(FOLDER_PREFIX)
     ? folderView(store, instances, pointer)
     : localView(store, instances, pointer);
@@ -667,16 +737,19 @@ export function withLocalCheckout(
     const pointer = pointerStore.get();
     if (pointer !== undefined && isInPlacePointer(pointer.workspaceId)) {
       const startedAt = Date.now();
-      let active: ActiveWorkspaceView | undefined;
+      let result: InPlaceViewResult;
       try {
-        active = inPlaceView(store, instances, pointer);
+        result = inPlaceView(store, instances, pointer);
       } catch (cause) {
-        invalidationLogger.record(pointer, correlationId, startedAt, cause);
+        invalidationLogger.record(pointer, correlationId, startedAt, "inspection-failed", cause);
         return undefined;
       }
-      if (active === undefined) invalidationLogger.record(pointer, correlationId, startedAt);
-      else invalidationLogger.clear();
-      return active;
+      if ("cause" in result) {
+        invalidationLogger.record(pointer, correlationId, startedAt, result.cause);
+        return undefined;
+      }
+      invalidationLogger.clear();
+      return result.view;
     }
     invalidationLogger.clear();
     return managed.getActive(correlationId);

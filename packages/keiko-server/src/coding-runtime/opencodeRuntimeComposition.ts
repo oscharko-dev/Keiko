@@ -114,10 +114,14 @@ import type {
 import {
   codingToolEditPresentation,
   codingToolGitPresentation,
+  codingToolGitProposalPresentation,
+  codingToolHumanDecisionPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
+  invalidBranchNameToolResult,
 } from "./codingToolFacade.js";
+import { isSafeTaskBranchName } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   isSecureWorkspaceNativeRelativePath,
@@ -188,6 +192,7 @@ import {
   noteOpenCodeEditTargets,
   openCodeNativeCallKey,
   openCodeRevertBlocksTurn,
+  settleUncertainRevertOnTurn,
   recordOpenCodeEditSettled,
   recordOpenCodeTurnImage,
   recordRevertTurnBlocked,
@@ -197,6 +202,11 @@ import {
   type OpenCodeStagedRevert,
 } from "./opencodeRevert.js";
 import {
+  awaitTurnIndexStart,
+  reopenTurnIndex,
+  type TurnIndexStartBound,
+} from "./opencodeTurnIndex.js";
+import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
   type CodingWorkbenchBuiltInAgent,
@@ -204,6 +214,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
+  boundActionId,
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2ApprovalDecision,
   type OpenCodeV2ApprovalOutcome,
@@ -264,6 +275,7 @@ import {
   projectNativeParentHistory,
   interruptNativeTree,
   type NativeSessionTreeRun,
+  type NativeTreeStatusDeps,
 } from "./opencodeNativeSessionTree.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import {
@@ -278,6 +290,7 @@ import {
   openCodeConfigDirectory,
   openCodePlanDirectory,
   openCodeRepositoryInstructionsPath,
+  openCodeToolOutputDirectory,
 } from "./opencodeLaunchProfile.js";
 import type {
   OpenCodeContextGeometry,
@@ -727,6 +740,8 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly toolFacadeOrigin: string;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
+  /** Approval-card preview of a governed verification (ADR-0124 D6); see the manager dep. */
+  readonly verificationPreview?: CodingRuntimeManagerDeps["verificationPreview"];
   readonly governedEventSink: {
     readonly execute: (
       identityKey: string,
@@ -749,6 +764,10 @@ export interface OpenCodeRuntimeCompositionInput {
             }) => void)
           | undefined;
         readonly clear: () => void;
+        /** The run's active subagent count while its own session is idle (U-52). */
+        readonly observeSubagents?: ((count: number) => void) | undefined;
+        /** How many repository agent model settings the run refused, told once armed (U-53). */
+        readonly observeAgentModels?: ((refusedCount: number) => void) | undefined;
         readonly ingest: (
           signal: import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
         ) => boolean;
@@ -952,6 +971,8 @@ interface PreparedRun {
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
+  /** How many per-agent model settings of the repository this run did not use (U-53). */
+  refusedAgentModels?: number | undefined;
   /**
    * The run's effective autonomy mode: the launch environment's, narrowed when the operator resumes
    * the run with a narrower mode (#3897 audit). Native policy decisions always read this value.
@@ -994,6 +1015,10 @@ interface PreparedRun {
   revert?: OpenCodeStagedRevert | undefined;
   /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
   turnImage?: OpenCodeRevertRun["turnImage"];
+  /** The Git index as the newest human turn started and settled (`beginOpenCodeTurnImages`). */
+  turnIndex?: OpenCodeRevertRun["turnIndex"];
+  /** Cuts the wait for the turn's index start when Stop arrives (`armAndPostTurn`). */
+  turnStartStop?: AbortController | undefined;
   /** What the newest turn's own native edits wrote (`recordOpenCodeEditSettled`). */
   agentImages?: OpenCodeAgentImages | undefined;
   /** Admitted plan-note edits awaiting their settlement (`noteAdmittedEditEvidence`). */
@@ -1171,6 +1196,9 @@ function compositionManager(
     ...(input.codingToolApprovals === undefined
       ? {}
       : { codingToolApprovals: input.codingToolApprovals }),
+    ...(input.verificationPreview === undefined
+      ? {}
+      : { verificationPreview: input.verificationPreview }),
     ...input.authorityLifecycle,
   });
 }
@@ -1307,7 +1335,7 @@ function createRunPort(
     diagnostics,
     activityLog,
   );
-  const abortTask = createAbortTask(readyRun, activityLog, withdrawPendingInbox);
+  const abortTask = createAbortTask(readyRun, diagnostics, activityLog, withdrawPendingInbox);
   return {
     submitTask: createSubmitTask(
       readyRun,
@@ -1394,6 +1422,9 @@ function createSubmitTask(
     const run = readyRun(runId);
     // A delivery joins the turn in flight (`deliverPrompt`); it never starts or arms one.
     if (run === undefined || inputs?.delivery !== undefined) return false;
+    // A Stop that begins or ends after this point moves `interruptSeq`; one already running (odd) refuses.
+    const stopEpoch = run.interruptSeq;
+    if (stopEpoch % 2 === 1) return false;
     // A staged undo is finalized by the runtime on the next prompt, which rewrites the history the
     // reconciliation reads append-only; the human restores the undo or stops the run first.
     if (openCodeRevertBlocksTurn(run)) {
@@ -1405,9 +1436,16 @@ function createSubmitTask(
     if (!(await selectPrimaryAgent(run, agent, selectableAgents, diagnostics, activityLog))) {
       return false;
     }
+    // The turn is admitted from here: an uncertain revert record is settled from the files, or ended
+    // as it is, and a record that became an ordinary staged undo blocks the turn like any other.
+    await settleUncertainRevertOnTurn(activityLog, run, runId);
+    if (openCodeRevertBlocksTurn(run)) {
+      recordRevertTurnBlocked(activityLog, runId);
+      return false;
+    }
     if (!(await synchronizeTurnBaseline(run))) return false;
     await refreshedInstructions(run, sinks.refreshInstructions);
-    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin);
+    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin, stopEpoch);
   };
 }
 
@@ -1418,15 +1456,57 @@ async function armAndPostTurn(
   inputs: AdmittedPromptInputs | undefined,
   sinks: Parameters<typeof postTurnPrompt>[4],
   origin: CodingRuntimeTurnOrigin | undefined,
+  stopEpoch: number,
 ): Promise<boolean> {
-  if (!run.runtimeAdapter.armTurn()) return false;
+  // A Stop during any earlier await (agent switch, baseline, instructions) moved the epoch or took
+  // the run down: nothing is armed, indexed or woken for it.
+  if (stopSince(run, stopEpoch) || !run.runtimeAdapter.armTurn()) return false;
+  // A step that continues the turn makes the image the turn last settled on stale.
+  if (origin !== undefined) reopenTurnIndex(run.turnIndex);
   // A scheduled wake posts nothing: the runtime fires the due schedule into the armed turn.
   if (origin === "schedule-wake")
     return startScheduledWakeTurn(run, { activityLog: sinks.activityLog }) && run.ready;
   // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
   // continuation of the human's request keeps that request's images: its undo reaches back to it.
-  if (origin === undefined) beginOpenCodeTurnImages(run);
+  if (origin === undefined && !(await beginNewTurn(run))) return cancelStoppedTurn(run);
+  // A Stop during the index start wait leaves the epoch moved or the run not ready; nothing may
+  // reach the runtime then.
+  if (stopSince(run, stopEpoch)) return cancelStoppedTurn(run);
   return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+}
+
+/** True when a Stop began or ended since `stopEpoch` was read, or the run is no longer ready. */
+function stopSince(run: ReadyRun, stopEpoch: number): boolean {
+  return run.interruptSeq !== stopEpoch || !run.ready;
+}
+
+/** Records the new turn's images and reads its index start; false when Stop ended that wait. */
+async function beginNewTurn(run: ReadyRun): Promise<boolean> {
+  beginOpenCodeTurnImages(run);
+  // The index start is read before the model can stage anything, within a bound Stop can cut.
+  if (run.turnIndex === undefined) return true;
+  // Stop (the operator's or the lifecycle's) ended the wait, or the run went away meanwhile: no
+  // prompt or slash command may reach the runtime. Only an index read that merely ran out of
+  // time continues, with the start reported unavailable.
+  return (await awaitIndexStart(run, run.turnIndex)) !== "capture-aborted";
+}
+
+function cancelStoppedTurn(run: ReadyRun): false {
+  run.runtimeAdapter.cancelTurn();
+  return false;
+}
+
+async function awaitIndexStart(
+  run: ReadyRun,
+  record: NonNullable<ReadyRun["turnIndex"]>,
+): Promise<TurnIndexStartBound | undefined> {
+  const stop = new AbortController();
+  run.turnStartStop = stop;
+  try {
+    return await awaitTurnIndexStart(record, stop.signal);
+  } finally {
+    if (run.turnStartStop === stop) run.turnStartStop = undefined;
+  }
 }
 
 /**
@@ -1853,6 +1933,7 @@ async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
 
 function createAbortTask(
   readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
   withdrawPendingInbox: OpenCodeInboxRunPort["withdrawPendingInbox"],
 ): OpenCodeRunPort["abortTask"] {
@@ -1861,6 +1942,7 @@ function createAbortTask(
     if (run === undefined) return false;
     // Odd while the interrupt runs: a state read it overtakes is not a failure (`revertState`).
     run.interruptSeq += 1;
+    run.turnStartStop?.abort();
     try {
       // The whole native session tree: a background child keeps running when only the parent is
       // interrupted, and its end would start another turn of the parent (`interruptNativeTree`).
@@ -1883,7 +1965,8 @@ function createAbortTask(
         run.runtimeAdapter.cancelTurn();
       }
       return stopped.settled && run.ready;
-    } catch {
+    } catch (error) {
+      recordCompositionDisposalFailure(diagnostics, runId, "task-abort", error);
       run.runtimeAdapter.cancelTurn();
       return false;
     } finally {
@@ -1952,6 +2035,7 @@ function lifecycleAdapter(
       const dispose = run.runtimeAdapter?.monitor(() => {
         run.ready = false;
         run.revertReady = false;
+        run.turnStartStop?.abort();
         onFailure();
       });
       return dispose === undefined
@@ -1960,6 +2044,7 @@ function lifecycleAdapter(
             // Holding a completed run quiesces productive work, retaining only its qualified
             // operator revert client. Failure and disposal invalidate that client separately.
             run.ready = false;
+            run.turnStartStop?.abort();
             dispose();
           };
     },
@@ -1968,7 +2053,10 @@ function lifecycleAdapter(
     // runtime (#3907). Disposal closes it again.
     beginStop: (runId): void => {
       const run = runs.get(runId);
-      if (run !== undefined) run.revertReady = false;
+      if (run === undefined) return;
+      run.revertReady = false;
+      // A turn still waiting for its index start must not post its prompt into a stopping run.
+      run.turnStartStop?.abort();
     },
     dispose: (runId, signal, settlement): Promise<boolean> =>
       disposeRun(input, bridge, runs, runId, signal, settlement),
@@ -1996,6 +2084,7 @@ async function disposeRun(
   if (run !== undefined) {
     run.ready = false;
     run.revertReady = false;
+    run.turnStartStop?.abort();
   }
   try {
     const drained = bridge.close(signal);
@@ -2072,7 +2161,13 @@ function currentDisposal(
 function recordCompositionDisposalFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
-  operation: "prepare-bridge-close" | "prepare-run-root-remove" | "run-dispose",
+  operation:
+    | "prepare-bridge-close"
+    | "prepare-run-root-remove"
+    | "run-dispose"
+    | "task-abort"
+    | "handshake"
+    | "handshake-adapter-close",
   error: unknown,
 ): void {
   const detail = describeError(error);
@@ -2082,7 +2177,10 @@ function recordCompositionDisposalFailure(
     operation: "coding-runtime.opencode-composition",
     source: `opencode-runtime-composition.${operation}`,
     errorClass: contentFreeErrorClass(error),
-    message: operation === "run-dispose" ? "server-operation-failed" : operation,
+    message:
+      operation === "prepare-bridge-close" || operation === "prepare-run-root-remove"
+        ? operation
+        : "server-operation-failed",
     code: operation,
     ...(detail.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
@@ -2171,7 +2269,7 @@ async function materializePrepare(
   persistPreparedRun(runs, request, runRoot, password, configDigest, {
     continuation,
     mcp,
-    media: promptMedia(input),
+    ...preparedFacts(input, agentModels),
   });
   recordNativeFormatterBound(
     input.activityLog,
@@ -2182,6 +2280,17 @@ async function materializePrepare(
   recordAgentModelsBound(input.activityLog, request, agentModels);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
+}
+
+// The prompt media the run's model accepts and the agent model settings it refused (U-53).
+function preparedFacts(
+  input: OpenCodeRuntimeCompositionInput,
+  agentModels: OpenCodeAgentModelBinding | undefined,
+): { readonly media: PromptMediaInputs | undefined; readonly refusedAgentModels?: number } {
+  return {
+    media: promptMedia(input),
+    ...(agentModels === undefined ? {} : { refusedAgentModels: agentModels.refusedCount }),
+  };
 }
 
 /** The launch environment: the profile's, the run's sanitized build settings and the inherited names. */
@@ -2661,9 +2770,10 @@ function persistPreparedRun(
     readonly continuation?: RunContinuation | undefined;
     readonly mcp?: OpenCodeNativeMcpAdmission | undefined;
     readonly media?: PromptMediaInputs | undefined;
+    readonly refusedAgentModels?: number | undefined;
   } = {},
 ): void {
-  const { continuation, mcp, media } = extras;
+  const { continuation, mcp, media, refusedAgentModels } = extras;
   const run = preparedRun(
     request.runId,
     runRoot,
@@ -2679,6 +2789,7 @@ function persistPreparedRun(
     run.mcpOAuth = mcp.oauth;
   }
   if (media !== undefined) run.media = media;
+  run.refusedAgentModels = refusedAgentModels;
   runs.set(request.runId, run);
 }
 
@@ -2876,6 +2987,9 @@ async function handshake(
   const run = runs.get(request.runId);
   if (run === undefined) return { ok: false, reason: "preparation-missing" };
   run.onPermission = request.onPermission;
+  // Held outside the try so a throw after `start()` succeeded still closes it: its event
+  // subscription and reconnect loop would otherwise outlive the failed handshake.
+  let adapter: ReturnType<typeof createOpenCodeRuntimeAdapter> | undefined;
   try {
     const endpoint = parseOpenCodeV2ChildEndpoint(
       await request.startupOutput.nextLine(request.signal),
@@ -2887,7 +3001,7 @@ async function handshake(
       fetch: input.fetch,
       timeoutMs: request.timeoutMs,
     });
-    const adapter = createOpenCodeRuntimeAdapter({
+    adapter = createOpenCodeRuntimeAdapter({
       correlationId: request.runId,
       maxTurnWaitMs: input.maxTurnWaitMs,
       contextGeometry: input.contextGeometry,
@@ -2902,6 +3016,7 @@ async function handshake(
           client,
           tree: (sessionId) => nativeSessionTree(run, sessionId),
           activityLog: input.activityLog,
+          onActiveSubagents: subagentCountSink(input),
         }),
       },
       safety: {
@@ -2913,12 +3028,17 @@ async function handshake(
     });
     const result = await adapter.start();
     if (!result.ok) {
-      await adapter.close();
+      await closeOnce(adapter, () => {
+        adapter = undefined;
+      });
       return { ok: false, reason: result.phase };
     }
     input.safeActivity?.arm(result.sessionId, input.toolProfile);
+    announceRefusedAgentModels(input, run);
     if (runs.get(request.runId) !== run) {
-      await adapter.close();
+      await closeOnce(adapter, () => {
+        adapter = undefined;
+      });
       return { ok: false, reason: "preparation-missing" };
     }
     // #3903 AC3: a kept MCP credential reaches the attested runtime before its first turn.
@@ -2930,9 +3050,51 @@ async function handshake(
     run.ready = true;
     run.revertReady = true;
     return { ok: true };
-  } catch {
+  } catch (error) {
+    recordCompositionDisposalFailure(input.diagnostics, request.runId, "handshake", error);
+    await closeFailedHandshakeAdapter(input.diagnostics, request.runId, adapter);
     return { ok: false, reason: "readiness-failed" };
   }
+}
+
+/**
+ * Closes the handshake's adapter after dropping the catch's reference to it, so a close that throws
+ * is recorded once by the handshake's catch and never closed or reported a second time.
+ */
+async function closeOnce(
+  adapter: { readonly close: () => Promise<void> },
+  release: () => void,
+): Promise<void> {
+  release();
+  await adapter.close();
+}
+
+async function closeFailedHandshakeAdapter(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  adapter: { readonly close: () => Promise<void> } | undefined,
+): Promise<void> {
+  try {
+    await adapter?.close();
+  } catch (error) {
+    recordCompositionDisposalFailure(diagnostics, runId, "handshake-adapter-close", error);
+  }
+}
+
+// The person is told, once the run is armed, how many repository agent models it did not use (U-53).
+function announceRefusedAgentModels(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+): void {
+  const refused = run.refusedAgentModels ?? 0;
+  if (refused > 0) input.safeActivity?.observeAgentModels?.(refused);
+}
+
+// The run's native session tree reports its active subagent count to the run's observer (U-52).
+function subagentCountSink(
+  input: OpenCodeRuntimeCompositionInput,
+): NativeTreeStatusDeps["onActiveSubagents"] {
+  return input.safeActivity?.observeSubagents;
 }
 
 // eslint-disable-next-line max-lines-per-function -- ordered V2 readiness ports bind one attested child.
@@ -4425,6 +4587,7 @@ async function handleNativePolicyRequest(
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
     planRoot: openCodePlanDirectory(run.runRoot),
+    toolOutputRoot: openCodeToolOutputDirectory(run.runRoot),
     request,
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
@@ -5160,6 +5323,77 @@ function parseV2PermissionRequest(
   return value?.action === "permission-request" ? value : undefined;
 }
 
+// The task branch a governed branch ask names, when it names one at all.
+function branchAskName(value: Readonly<Record<string, unknown>>): string | undefined {
+  const metadata = v2Record(v2Record(value.properties)?.metadata);
+  return metadata?.actionKind === "git-branch" && typeof metadata.branchName === "string"
+    ? metadata.branchName
+    : undefined;
+}
+
+function boundBranchAskActionId(
+  run: PreparedRun,
+  value: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const { actionId } = value;
+  if (run.sessionId === undefined) return undefined;
+  return boundActionId(actionId, run.sessionId, v2Record(value.properties)?.id)
+    ? actionId
+    : undefined;
+}
+
+function recordBranchAskPrecheckFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "opencode-runtime-composition.branch-ask-precheck",
+    errorClass: contentFreeErrorClass(error),
+    message: "tool-facade-failed",
+  });
+}
+
+// A task branch Keiko would refuse anyway is answered as that refusal, never asked of a person and
+// never mistaken for a human denial: an unsafe name (U-27), and any refusal the run's own state
+// already settles, such as a run that is not on its base branch (U-32). The step after an approval
+// stays the authoritative check; this only withholds a card that could not change the outcome.
+function branchAskRefusal(
+  run: PreparedRun | undefined,
+  value: Readonly<Record<string, unknown>>,
+  deps: ToolBridgeExecutionDeps,
+): OpenCodeToolBridgeResponse | undefined {
+  const name = branchAskName(value);
+  if (run === undefined || name === undefined) return undefined;
+  let refusal: CodingToolResult | undefined;
+  try {
+    refusal = isSafeTaskBranchName(name)
+      ? deps.facade.branchAsk?.refusal(name)
+      : invalidBranchNameToolResult();
+  } catch (error) {
+    // Fail closed toward the person: a precheck that cannot answer leaves the ask to be asked, and
+    // the step after an approval judges it.
+    recordBranchAskPrecheckFailure(deps.diagnostics, run.runId, error);
+    return undefined;
+  }
+  if (refusal === undefined) return undefined;
+  // The refusal reaches the model as the call's own result, so the native tool ends as completed;
+  // without Keiko's verdict the row read "Succeeded" for a branch that was never created (U-43).
+  // The closed Git outcome names why, exactly as for a step refused after an approval.
+  // The id settles a row only when it is bound to this run's session and to the ask, the check the
+  // approval path applies: a foreign id settles nothing and the 409 answer is unchanged.
+  settleSafeTool(
+    deps.settleTool,
+    boundBranchAskActionId(run, value),
+    "succeeded",
+    codingToolGitPresentation(refusal),
+  );
+  return { status: 409, body: JSON.stringify(refusal), rejection: "branch-name-refused" };
+}
+
 async function handleV2PermissionRequest(
   value: Readonly<Record<string, unknown>>,
   signal: AbortSignal | undefined,
@@ -5169,6 +5403,8 @@ async function handleV2PermissionRequest(
 ): Promise<OpenCodeToolBridgeResponse> {
   const run = typeof value.runId === "string" ? runs.get(value.runId) : undefined;
   if (signal?.aborted === true) return refusedApproval("cancelled");
+  const refusedBranch = branchAskRefusal(run, value, deps);
+  if (refusedBranch !== undefined) return refusedBranch;
   if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
     return refusedApproval("unavailable");
   const decision = await approvals.request({
@@ -5696,7 +5932,10 @@ function bridgeServicePresentation(
   const facts =
     result === undefined || service.request === undefined
       ? {}
-      : governedToolPresentation(service.request, result);
+      : {
+          ...governedToolPresentation(service.request, result),
+          ...codingToolHumanDecisionPresentation(result),
+        };
   return Object.freeze({
     ...facts,
     bridgeDurationMs: Math.max(0, Date.now() - service.startedAtMs),
@@ -5713,7 +5952,12 @@ function governedToolPresentation(
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
   if (request.action === "verification") return codingToolVerificationPresentation(result);
-  if (isGitStepRequest(request)) return codingToolGitPresentation(result);
+  if (isGitStepRequest(request)) {
+    return {
+      ...codingToolGitPresentation(result),
+      ...codingToolGitProposalPresentation(request, result),
+    };
+  }
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"

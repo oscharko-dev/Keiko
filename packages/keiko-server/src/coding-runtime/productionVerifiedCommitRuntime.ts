@@ -6,6 +6,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { isGitZeroObjectId } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { createVerifiedCommitService } from "../gitDelivery/verifiedCommitService.js";
 import type {
@@ -56,11 +57,18 @@ export function createProductionVerifiedCommitService(
 function runBranches(
   deps: VerifiedCommitRuntimeDependencies,
   binding: VerifiedCommitRuntimeBinding,
-): Pick<VerifiedCommitRunContext, "baseRef" | "headRef"> {
+): Pick<VerifiedCommitRunContext, "baseRef" | "headRef" | "baseNeverBorn"> {
   const moved = deps.governedTaskBranch?.(binding.runId);
   return moved === undefined
     ? { baseRef: binding.context.branch.baseRef, headRef: binding.context.branch.headRef }
-    : { baseRef: moved.baseBranch, headRef: moved.taskBranch };
+    : {
+        baseRef: moved.baseBranch,
+        headRef: moved.taskBranch,
+        // The record states the commit both branches pointed at when Keiko cut the task branch: the
+        // all-zero id means the base had no commit then, so a missing base ref is that fact and not
+        // a deleted branch.
+        ...(isGitZeroObjectId(moved.headSha) ? { baseNeverBorn: true as const } : {}),
+      };
 }
 
 export function resolveVerifiedCommitContext(
@@ -101,6 +109,7 @@ export function requestVerifiedCommitApproval(
   service: VerifiedCommitService | undefined,
   proposalId: string,
   onEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  callId?: string,
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
@@ -121,6 +130,8 @@ export function requestVerifiedCommitApproval(
       scopeLabel: "workspace-scope",
       risk: "high",
       policyReason: "approval-required",
+      // The call that waits for this decision, so the Workbench shows exactly that row as waiting.
+      ...(callId === undefined ? {} : { callId }),
       expiresAt: new Date(proposal.expiresAtMs).toISOString(),
     },
   };
@@ -155,6 +166,7 @@ export function requestRuntimeStageApproval(
   service: RuntimeGitService | undefined,
   proposalId: string,
   onEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  callId?: string,
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
@@ -175,6 +187,7 @@ export function requestRuntimeStageApproval(
       scopeLabel: "workspace-scope",
       risk: "medium",
       policyReason: "approval-required",
+      ...(callId === undefined ? {} : { callId }),
       expiresAt: new Date(proposal.expiresAtMs).toISOString(),
     },
   };

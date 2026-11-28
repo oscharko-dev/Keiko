@@ -1,3 +1,4 @@
+import { eachInSequence } from "../../sequential.js";
 import { randomBytes } from "node:crypto";
 
 import type {
@@ -54,7 +55,7 @@ import {
   type RouteDefinition,
   type RouteResult,
 } from "../../routes.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../../sse.js";
+import { readyMessage, startSseHeartbeat, openSseResponse } from "../../sse.js";
 import { writeSseFrame } from "../../sse-write.js";
 import {
   breakpointStoreWorkspaceFingerprint,
@@ -255,13 +256,14 @@ function deniedPath(): RouteResult {
 async function resolveDebugWorkspace(
   workspaceId: string,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): Promise<WorkspaceResolution> {
   const project = deps.store
     .listProjects()
     .find((candidate) => breakpointStoreWorkspaceFingerprint(candidate.path) === workspaceId);
   if (project === undefined) return { ok: false, result: workspaceNotFound() };
   const resolved = await runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, project.path, deps.redactor);
+    const root = await resolveRoot(deps.store, project.path, deps.redactor, correlationId);
     return { status: 200, body: root };
   });
   if (resolved.status !== 200) return { ok: false, result: resolved };
@@ -357,7 +359,7 @@ async function authorizeWorkspace(
   service: DapDebugRouteService,
   workspaceId: string,
 ): Promise<WorkspaceAuthorization> {
-  const resolved = await resolveDebugWorkspace(workspaceId, deps);
+  const resolved = await resolveDebugWorkspace(workspaceId, deps, ctx.correlationId);
   if (!resolved.ok) return resolved;
   const authorization = service.browserSessions.authorize(
     ctx.req.headers.cookie,
@@ -449,7 +451,7 @@ async function authorizeSession(
   const projection = service.manager.health(sessionId);
   if (binding === undefined || projection === undefined)
     return { ok: false, result: sessionNotFound() };
-  const resolved = await resolveDebugWorkspace(binding.workspaceId, deps);
+  const resolved = await resolveDebugWorkspace(binding.workspaceId, deps, ctx.correlationId);
   if (!resolved.ok || resolved.workspace.partition !== binding.workspacePartitionKey) {
     return {
       ok: false,
@@ -528,14 +530,15 @@ async function configureInstrumentation(
 ): Promise<InstrumentationSnapshot> {
   let snapshot = initial;
   const fileIds = [...new Set(snapshot.breakpoints.map((breakpoint) => breakpoint.fileId))];
-  for (const fileId of fileIds) {
+  // One adapter request after the other: each reconciles the snapshot the next one sends.
+  await eachInSequence(fileIds, async (fileId) => {
     const breakpoints = snapshot.breakpoints.filter((breakpoint) => breakpoint.fileId === fileId);
     const response = await port.request("setBreakpoints", {
       source: { path: `${CAPSULE_ROOT}/${fileId}` },
       breakpoints: dapBreakpoints(breakpoints),
     });
     snapshot = reconcile(snapshot, fileId, response);
-  }
+  });
   const enabled = snapshot.exceptionFilters.filter((filter) => filter.enabled);
   const exceptionResponse = await port.request("setExceptionBreakpoints", {
     filters: enabled.map((filter) => filter.filterId),
@@ -557,7 +560,7 @@ async function handleDebugBootstrap(ctx: RouteContext, deps: UiHandlerDeps): Pro
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseDebugBootstrapRequest);
   if (!parsed.ok) return parsed.result;
-  const resolved = await resolveDebugWorkspace(parsed.value.workspaceId, deps);
+  const resolved = await resolveDebugWorkspace(parsed.value.workspaceId, deps, ctx.correlationId);
   if (!resolved.ok) return resolved.result;
   const activationRevision = await activeActivationRevision(service, resolved.workspace.realRoot);
   if (activationRevision === undefined) {
@@ -1222,9 +1225,10 @@ async function reconcileRenamedInstrumentation(
   initial: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
 ): Promise<void> {
   let latest = initial;
-  for (const pair of applied) {
+  // Pairs reconcile one after the other: each starts from the previous pair's snapshot.
+  await eachInSequence(applied, async (pair) => {
     latest = await reconcileRenamedPair(service, workspace, pair, latest);
-  }
+  });
   publishInstrumentationChange(service, workspace, latest);
 }
 
@@ -1461,7 +1465,8 @@ async function reconfigureClearedInstrumentation(
   let unavailable =
     (await updateActiveExceptionBreakpoints(service, workspace, cleared)) === "unavailable";
   const fileIds = new Set(prior.breakpoints.map((breakpoint) => breakpoint.fileId));
-  for (const fileId of fileIds) {
+  // One file after the other, so the adapter sees the clears in order.
+  await eachInSequence([...fileIds], async (fileId) => {
     const update = await updateActiveBreakpoints(service, workspace, fileId, cleared);
     if (update.kind === "unavailable") unavailable = true;
     if (update.kind === "response") {
@@ -1469,7 +1474,7 @@ async function reconfigureClearedInstrumentation(
         verificationUpdates(fileId, cleared, update.response),
       );
     }
-  }
+  });
   return unavailable ? "unavailable" : "armed";
 }
 
@@ -2449,7 +2454,7 @@ function openDebugStream(
   result: Extract<ReturnType<DapEventBridge["subscribe"]>, { readonly kind: "ok" }>,
   controller: AbortController,
 ): typeof STREAMING {
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
   const stop = (): void => {
     stopHeartbeat();

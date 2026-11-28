@@ -19,9 +19,11 @@ import {
   type UIEvent,
 } from "react";
 import type {
+  AvailableCodingSafeActivityFeed,
   CodingSafeActivityMessage,
   CodingSafeActivityTextPart,
   CodingSafeActivityPlan,
+  CodingSafeActivityProgramKind,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
   CodingWorkbenchRuntimeSseEvent,
@@ -55,12 +57,7 @@ import {
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
-import {
-  eventDetail,
-  eventOffersErrorReport,
-  eventOffersRunCheck,
-  eventTitle,
-} from "./codingWorkbenchLabels";
+import { eventDetail, eventOffersErrorReport, eventTitle } from "./codingWorkbenchLabels";
 import {
   formatRunDuration,
   modelGatewayRetrying,
@@ -78,6 +75,7 @@ import {
   ToolDuration,
   ToolFailureExplanation,
   ToolFailureLabel,
+  ToolOutputShortenedLabel,
   ToolTextDetail,
   toolFailureOrigin,
   toolGroupSummary,
@@ -126,6 +124,10 @@ const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>>
   todowrite: "codingWorkbench.timeline.tool.todo",
   question: "codingWorkbench.timeline.tool.question",
   execute: "codingWorkbench.timeline.tool.execute",
+  automation_create: "codingWorkbench.timeline.tool.execute_schedule",
+  automation_pause: "codingWorkbench.timeline.tool.execute_schedule",
+  automation_resume: "codingWorkbench.timeline.tool.execute_schedule",
+  automation_delete: "codingWorkbench.timeline.tool.execute_schedule",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -170,12 +172,19 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly tool: CodingSafeActivityTool;
+      /** The run whose feed carried the call; a proposal reference is unique within one run only. */
+      readonly runId?: string;
       readonly count: number;
       /**
        * A Git step the server answered as prepared and waiting for approval, after which the run
        * went on: a later step took it up, so it no longer waits for anyone (#4491).
        */
       readonly superseded?: boolean;
+      /**
+       * The single Git proposal this `keiko_git_execute` redeemed, as that proposal's own label: a
+       * commit, stage or unstage reads as such instead of as a generic operation (U-49).
+       */
+      readonly redeemedLabel?: CodingWorkbenchMessageKey;
     }
   | {
       readonly kind: "plan";
@@ -213,21 +222,32 @@ export interface CodingWorkbenchTimelineProps {
   readonly questions: UseCodingWorkbenchQuestionsResult;
   readonly focusRef?: RefObject<HTMLHeadingElement | null>;
   /**
-   * Asks the task's model to run the project's check, as the person's own request. Present only
-   * while a new request can be sent; the card of a run whose changes were not checked offers it
-   * as "Run the check now" (#4491).
+   * The id of the tool call the run's pending approval holds back (the ask's `callId`). While the
+   * run waits for the person, exactly that call's row reads "Waiting for approval" instead of
+   * "Running". Absent when no approval is pending or the ask names no call: no row is marked then,
+   * so an ambiguous guess never mislabels a tool that is really running. Only the call that opened
+   * the prompt is named: identical asks from other calls join it or queue behind it, and their
+   * rows keep their feed state until their own ask is the one shown.
    */
-  readonly onRunCheck?: (() => void) | undefined;
+  readonly awaitingApprovalCallId?: string | undefined;
+  /** The run is paused for the repository's build-file trust decision (`workspace-script-trust`). */
+  readonly pausedForTrust?: boolean | undefined;
 }
 
-// The action reaches the failure card through a context: the card sits several rows below the
-// timeline, and none of those rows otherwise carries an action.
-const RunCheckContext = createContext<(() => void) | undefined>(undefined);
+// The call a pending approval holds back reaches the tool rows through a context for the same reason.
+const AwaitingApprovalCallIdContext = createContext<string | undefined>(undefined);
+// Whether the run is over, so no row can still be waiting for a decision.
+const RunEndedContext = createContext(false);
+// Whether the run is paused for the package-script trust decision: nothing executes then, so a call
+// the feed still reports open reads as waiting for that decision, never as running.
+const HeldForTrustContext = createContext(false);
 
 // The complete answers read beside the bounded feed reach each message row the same way.
 // The complete model texts read beside the bounded feed reach each message row the same way, with
 // the reasoning blocks the person opened, so a row the virtual list remounts keeps its state.
 interface ModelTextsView {
+  /** The run the texts were read for: a row of any other run never borrows them. */
+  readonly runId: string | undefined;
   readonly answers: CodingWorkbenchAnswers;
   readonly reasoning: CodingWorkbenchAnswers;
   readonly readReasoning: (messageId: string) => void;
@@ -237,6 +257,7 @@ interface ModelTextsView {
 
 const NO_ANSWERS: CodingWorkbenchAnswers = new Map();
 const NO_MODEL_TEXTS: ModelTextsView = {
+  runId: undefined,
   answers: NO_ANSWERS,
   reasoning: NO_ANSWERS,
   readReasoning: () => undefined,
@@ -248,16 +269,26 @@ const ModelTextsContext = createContext<ModelTextsView>(NO_MODEL_TEXTS);
 function useModelTextsView(activity: UseCodingWorkbenchSafeActivityResult): ModelTextsView {
   const openReasoning = useRef(new Set<string>()).current;
   const { answers, reasoning, readReasoning, retryText } = activity;
+  const runId = activity.feed?.runId;
   return useMemo(
     () => ({
+      runId,
       answers: answers ?? NO_ANSWERS,
       reasoning: reasoning ?? NO_ANSWERS,
       readReasoning: readReasoning ?? NO_MODEL_TEXTS.readReasoning,
       retryText: retryText ?? NO_MODEL_TEXTS.retryText,
       openReasoning,
     }),
-    [answers, reasoning, readReasoning, retryText, openReasoning],
+    [runId, answers, reasoning, readReasoning, retryText, openReasoning],
   );
+}
+
+// The heading the run's focus returns to: the window's own when it passes one, else this timeline's.
+function useTitleRef(
+  focusRef: RefObject<HTMLHeadingElement | null> | undefined,
+): RefObject<HTMLHeadingElement | null> {
+  const internalTitleRef = useRef<HTMLHeadingElement>(null);
+  return focusRef ?? internalTitleRef;
 }
 
 export function Timeline({
@@ -267,43 +298,71 @@ export function Timeline({
   activity,
   questions,
   focusRef,
-  onRunCheck,
+  awaitingApprovalCallId,
+  pausedForTrust = false,
 }: CodingWorkbenchTimelineProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const internalTitleRef = useRef<HTMLHeadingElement>(null);
-  const titleRef = focusRef ?? internalTitleRef;
+  const titleRef = useTitleRef(focusRef);
   const [showEvents, setShowEvents] = useState(false);
-  const allItems = useTimelineItems(events, activity.feed, generating, active);
+  const allItems = useTimelineItems(events, activity, generating, active);
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
   const attention = useShownActivityAttention(activity);
   const modelTexts = useModelTextsView(activity);
-  if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
-    return null;
+  if (!active && allItems.length + questions.questions.length === 0 && !attention) return null;
   return (
-    <RunCheckContext.Provider value={onRunCheck}>
-      <ModelTextsContext.Provider value={modelTexts}>
-        <section className={styles.cmpConversation} aria-labelledby="timeline-title">
-          <TimelineHeading titleRef={titleRef} t={t} />
-          <ActivityStatus activity={activity} attention={attention} t={t} />
-          <RunDetailsToggle
-            visible={events.length > 0}
-            expanded={showEvents}
-            onToggle={() => setShowEvents(!showEvents)}
-            t={t}
-          />
-          <QuestionSummary questions={questions} />
-          <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
-          <TimelineContent
-            items={items}
-            timeline={timeline}
-            questions={questions}
-            restoreFocusRef={titleRef}
-            t={t}
-          />
-        </section>
-      </ModelTextsContext.Provider>
-    </RunCheckContext.Provider>
+    <TimelineContexts
+      awaitingApprovalCallId={awaitingApprovalCallId}
+      runEnded={!active}
+      heldForTrust={pausedForTrust}
+      modelTexts={modelTexts}
+    >
+      <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+        <TimelineHeading titleRef={titleRef} t={t} />
+        <ActivityStatus activity={activity} attention={attention} t={t} />
+        <RunDetailsToggle
+          visible={events.length > 0}
+          expanded={showEvents}
+          onToggle={() => setShowEvents(!showEvents)}
+          t={t}
+        />
+        <QuestionSummary questions={questions} />
+        <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
+        <TimelineContent
+          items={items}
+          timeline={timeline}
+          questions={questions}
+          restoreFocusRef={titleRef}
+          t={t}
+        />
+      </section>
+    </TimelineContexts>
+  );
+}
+
+// What the rows below read from the run instead of from their own props: the call a pending
+// approval holds back, whether the run is over, and the model texts.
+function TimelineContexts({
+  awaitingApprovalCallId,
+  runEnded,
+  heldForTrust,
+  modelTexts,
+  children,
+}: {
+  readonly awaitingApprovalCallId: string | undefined;
+  readonly runEnded: boolean;
+  readonly heldForTrust: boolean;
+  readonly modelTexts: ModelTextsView;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <AwaitingApprovalCallIdContext.Provider value={awaitingApprovalCallId}>
+      <RunEndedContext.Provider value={runEnded}>
+        <HeldForTrustContext.Provider value={heldForTrust}>
+          <ModelTextsContext.Provider value={modelTexts}>{children}</ModelTextsContext.Provider>
+        </HeldForTrustContext.Provider>
+      </RunEndedContext.Provider>
+    </AwaitingApprovalCallIdContext.Provider>
   );
 }
 
@@ -421,19 +480,21 @@ function RunDetailsToggle({
 // Only the open message of a generating run is live: its answer may still be streaming.
 function useTimelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
-  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  activity: UseCodingWorkbenchSafeActivityResult,
   generating: boolean,
   active: boolean,
 ): readonly TimelineItem[] {
+  const { feed, earlierFeeds } = activity;
   return useMemo(
     () =>
       timelineItems(
         events,
         feed,
+        earlierFeeds ?? [],
         openMessageId(feed, generating),
         active ? (feed?.runId ?? events.at(-1)?.runId) : undefined,
       ),
-    [events, feed, generating, active],
+    [events, feed, earlierFeeds, generating, active],
   );
 }
 
@@ -513,52 +574,94 @@ function openMessageId(
     : message.messageId;
 }
 
+// The rows of one feed, numbered on from `order`; the numbering keeps rows of one instant in feed
+// order; `idPrefix` keys the rows of an earlier run.
+function feedItems(
+  feed: AvailableCodingSafeActivityFeed,
+  liveMessageId: string | undefined,
+  first: number,
+  idPrefix: string,
+  activeRunId: string | undefined,
+): readonly TimelineItem[] {
+  const items: TimelineItem[] = [];
+  for (const turn of feed.turns) {
+    for (const message of turn.messages) {
+      if (!hasVisibleMessageContent(message)) continue;
+      items.push({
+        kind: "message",
+        id: `${idPrefix}message:${message.messageId}`,
+        occurredAt: message.occurredAt,
+        order: first + items.length,
+        message,
+        runId: feed.runId,
+        live: message.messageId === liveMessageId,
+      });
+    }
+    for (const tool of turn.tools) {
+      items.push({
+        kind: "tool",
+        id: `${idPrefix}tool:${tool.callId}`,
+        occurredAt: tool.occurredAt,
+        order: first + items.length,
+        tool: shownTool(tool, feed.runId === activeRunId ? activeRunId : undefined),
+        runId: feed.runId,
+        count: 1,
+      });
+    }
+  }
+  return items;
+}
+
+// The earlier runs of the task come first and the shown run's feed last: their rows sort into
+// place by time, so a continuation's prompt follows the rows of the turn before it (U-11).
 function timelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  earlierFeeds: readonly AvailableCodingSafeActivityFeed[],
   liveMessageId: string | undefined,
   activeRunId: string | undefined,
 ): readonly TimelineItem[] {
   const items: TimelineItem[] = timelineEventItems(events, activeRunId);
   let order = events.length;
-  for (const turn of feed?.turns ?? []) {
-    if (feed === null) break;
-    for (const message of turn.messages) {
-      if (!hasVisibleMessageContent(message)) continue;
-      items.push({
-        kind: "message",
-        id: `message:${message.messageId}`,
-        occurredAt: message.occurredAt,
-        order,
-        message,
-        runId: feed.runId,
-        live: message.messageId === liveMessageId,
-      });
-      order += 1;
-    }
-    for (const tool of turn.tools) {
-      items.push({
-        kind: "tool",
-        id: `tool:${tool.callId}`,
-        occurredAt: tool.occurredAt,
-        order,
-        tool,
-        count: 1,
-      });
-      order += 1;
-    }
+  for (const earlier of earlierFeeds) {
+    // The ids of one run's calls and messages are not promised unique across runs, so an earlier
+    // run's rows are keyed by the run as well; none of them is dropped for sharing an id.
+    const rows = feedItems(earlier, undefined, order, `run:${earlier.runId}:`, activeRunId);
+    items.push(...rows);
+    order += rows.length;
+  }
+  if (feed !== null) {
+    const rows = feedItems(feed, liveMessageId, order, "", activeRunId);
+    items.push(...rows);
+    order += rows.length;
   }
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
-  const compacted = compactToolItems(markSupersededGitProposals(orderedItems));
+  const compacted = compactToolItems(
+    markRedeemedGitProposals(markSupersededGitProposals(markPairedGitProposals(orderedItems))),
+  );
   return feed?.plan === undefined
     ? compacted
-    : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
+    : insertPlan(compacted, feed.plan, feed.runId, order, activeRunId !== undefined);
+}
+
+// #4491: a call still open on a run that is no longer active never reported its end. The server
+// settles it as cancelled; a feed read before that settlement (or restored from an older run) is
+// shown the same way, so no row keeps "Running" and a ticking clock for a run that is over.
+function shownTool(
+  tool: CodingSafeActivityTool,
+  activeRunId: string | undefined,
+): CodingSafeActivityTool {
+  if (activeRunId !== undefined || (tool.state !== "pending" && tool.state !== "running"))
+    return tool;
+  return { ...tool, state: "cancelled" };
 }
 
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   return (
     message.truncated ||
+    // A turn that spent its output budget before any answer text still says so.
+    message.outputLimitReached === true ||
     message.fullAnswer !== undefined ||
     message.fullReasoning !== undefined ||
     message.reasoning !== undefined ||
@@ -566,6 +669,8 @@ function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   );
 }
 
+// At one instant the rows keep `order`, which numbers the earlier runs' rows before the shown
+// run's, so an earlier run's last rows precede the continuation's prompt (U-11).
 function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
   // ISO-8601 instants of one fixed format order lexicographically; a locale-aware collation per
   // comparison is needless work on a sort that runs on every feed update.
@@ -576,6 +681,7 @@ function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
 function insertPlan(
   items: readonly TimelineItem[],
   plan: CodingSafeActivityPlan,
+  runId: string,
   order: number,
   open: boolean,
 ): readonly TimelineItem[] {
@@ -584,17 +690,65 @@ function insertPlan(
   // had open) on each update.
   const planItem: TimelineItem = {
     kind: "plan",
-    id: `plan:${plan.anchorMessageId}`,
+    id: `plan:${runId}:${plan.anchorMessageId}`,
     occurredAt: plan.updatedAt,
     order,
     plan,
     open,
   };
   const anchor = items.findIndex(
-    (item) => item.kind === "message" && item.message.messageId === plan.anchorMessageId,
+    (item) =>
+      item.kind === "message" &&
+      item.runId === runId &&
+      item.message.messageId === plan.anchorMessageId,
   );
   if (anchor < 0) return [...items, planItem].sort(compareTimelineItems);
   return [...items.slice(0, anchor + 1), planItem, ...items.slice(anchor + 1)];
+}
+
+// The run and opaque proposal reference a Git call carries, when the server projected one.
+function gitProposalKey(item: Extract<TimelineItem, { kind: "tool" }>): string | undefined {
+  const ref = item.tool.presentation?.gitProposalRef;
+  return ref === undefined || item.runId === undefined ? undefined : `${item.runId}\u0000${ref}`;
+}
+
+/**
+ * Rows that carry the server's opaque proposal reference are paired exactly: an execute names the
+ * proposal with the same reference in the same run, however many other proposals are open or
+ * visible, and a completed one ends that proposal's wait. An execute whose proposal is not shown
+ * stays generic. Rows without a reference fall back to the order-based rules below.
+ */
+function markPairedGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const marked = [...items];
+  const open = new Map<string, number>();
+  marked.forEach((item, index) => {
+    if (item.kind !== "tool") return;
+    const key = gitProposalKey(item);
+    if (key === undefined) return;
+    if (item.tool.tool !== "keiko_git_execute") {
+      if (isOpenGitProposal(item.tool)) open.set(key, index);
+      return;
+    }
+    redeemPairedProposal(marked, open, key, index);
+  });
+  return marked;
+}
+
+function redeemPairedProposal(
+  marked: TimelineItem[],
+  open: Map<string, number>,
+  key: string,
+  executeIndex: number,
+): void {
+  const execute = marked[executeIndex];
+  const at = open.get(key);
+  const proposal = at === undefined ? undefined : marked[at];
+  if (execute?.kind !== "tool" || at === undefined || proposal?.kind !== "tool") return;
+  const label = proposalLabelKey(proposal.tool);
+  if (label !== undefined) marked[executeIndex] = { ...execute, redeemedLabel: label };
+  if (!executeCompleted(execute.tool)) return;
+  markSuperseded(marked, [at]);
+  open.delete(key);
 }
 
 /**
@@ -611,10 +765,10 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
   let open: number[] = [];
   let redeemed = 0;
   marked.forEach((item, index) => {
-    if (item.kind !== "tool") return;
+    if (item.kind !== "tool" || gitProposalKey(item) !== undefined) return;
     if (item.tool.tool === "keiko_git_execute") {
       if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
-    } else if (item.tool.presentation?.gitOutcome === "waiting-for-approval") {
+    } else if (isOpenGitProposal(item.tool)) {
       open.push(index);
     }
     // The wire row carries no proposal id, so an execute cannot be paired with the one proposal it
@@ -628,6 +782,67 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
     }
   });
   return marked;
+}
+
+// A Git step an execute may still redeem, shared by markSupersededGitProposals and
+// markRedeemedGitProposals: any non-execute call that succeeded as waiting for approval or
+// prepared, and a stage-class proposal answered ready, which carries no outcome (Full access).
+function isOpenGitProposal(tool: CodingSafeActivityTool): boolean {
+  if (tool.tool === "keiko_git_execute" || tool.state !== "succeeded") return false;
+  const outcome = tool.presentation?.gitOutcome;
+  if (outcome === undefined) return tool.tool === "keiko_git_stage";
+  return outcome === "waiting-for-approval" || outcome === "prepared";
+}
+
+/**
+ * An execute names what it carried out when exactly one proposal was open before it. The wire row
+ * of an execute carries no proposal id, so with none or several open it keeps the generic label.
+ * Open proposals are cleared by the same rule as {@link markSupersededGitProposals}: once as many
+ * completed executes as proposals followed.
+ */
+function markRedeemedGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const marked = [...items];
+  let open: CodingSafeActivityTool[] = [];
+  let redeemed = 0;
+  marked.forEach((item, index) => {
+    if (item.kind !== "tool" || gitProposalKey(item) !== undefined) return;
+    if (item.tool.tool === "keiko_git_execute") {
+      const label = redeemedLabelKey(open);
+      if (label !== undefined) marked[index] = { ...item, redeemedLabel: label };
+      if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
+    } else if (isOpenGitProposal(item.tool)) {
+      open.push(item.tool);
+    }
+    if (open.length > 0 && redeemed >= open.length) {
+      open = [];
+      redeemed = 0;
+    }
+  });
+  return marked;
+}
+
+function redeemedLabelKey(
+  open: readonly CodingSafeActivityTool[],
+): CodingWorkbenchMessageKey | undefined {
+  const only = open.length === 1 ? open[0] : undefined;
+  return only === undefined ? undefined : proposalLabelKey(only);
+}
+
+/** A Git proposal's own label; an unstage reads as one, though it shares the stage tool's name. */
+function proposalLabelKey(tool: CodingSafeActivityTool): CodingWorkbenchMessageKey | undefined {
+  if (tool.tool === "keiko_git_stage" && tool.presentation?.gitAction === "unstage")
+    return "codingWorkbench.timeline.tool.git_unstage";
+  if (tool.tool === "execute") return programLabelKey(tool.presentation?.programKind);
+  return toolLabelKey(tool.tool);
+}
+
+// A Code Mode program reads as what it does when the server named a kind; otherwise as a tool run.
+function programLabelKey(
+  kind: CodingSafeActivityProgramKind | undefined,
+): CodingWorkbenchMessageKey {
+  if (kind === "command") return "codingWorkbench.timeline.tool.execute_command";
+  if (kind === "schedule") return "codingWorkbench.timeline.tool.execute_schedule";
+  return "codingWorkbench.timeline.tool.execute";
 }
 
 function markSuperseded(marked: TimelineItem[], indexes: readonly number[]): void {
@@ -1158,7 +1373,7 @@ function MessageRow({
           </p>
           {item.message.reasoning === undefined &&
           item.message.fullReasoning === undefined ? null : (
-            <ModelReasoning message={item.message} live={item.live} t={t} />
+            <ModelReasoning message={item.message} runId={item.runId} live={item.live} t={t} />
           )}
           <div className={styles.messageText}>
             <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
@@ -1208,32 +1423,34 @@ function KeikoNote({
 // it whole, and the part the feed does not carry is read only once the reader opens it.
 function ModelReasoning({
   message,
+  runId,
   live,
   t,
 }: {
   readonly message: CodingSafeActivityMessage;
+  readonly runId: string;
   readonly live: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const texts = useContext(ModelTextsContext);
   const { messageId } = message;
+  // The texts belong to the shown run; an earlier run's row keeps its retained excerpt, settled.
+  const own = texts.runId === runId;
+  const openKey = `${runId}\u0000${messageId}`;
   const shown = shownText(
     message.reasoning?.text ?? "",
     message.reasoning?.truncated === true,
     message.fullReasoning,
-    texts.reasoning.get(messageId),
+    own ? texts.reasoning.get(messageId) : undefined,
+    !own,
   );
-  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
-    if (event.currentTarget.open) {
-      texts.openReasoning.add(messageId);
-      texts.readReasoning(messageId);
-    } else texts.openReasoning.delete(messageId);
-  };
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void =>
+    toggleReasoning(texts, event.currentTarget.open, openKey, own ? messageId : undefined);
   return (
     <details
       className={styles.cmpReasoning}
       aria-live="off"
-      open={texts.openReasoning.has(messageId)}
+      open={texts.openReasoning.has(openKey)}
       onToggle={onToggle}
     >
       <summary
@@ -1252,6 +1469,21 @@ function ModelReasoning({
       </p>
     </details>
   );
+}
+
+// The open state is remembered per run and message; only the shown run's reasoning is read.
+function toggleReasoning(
+  texts: ModelTextsView,
+  open: boolean,
+  openKey: string,
+  readMessageId: string | undefined,
+): void {
+  if (!open) {
+    texts.openReasoning.delete(openKey);
+    return;
+  }
+  texts.openReasoning.add(openKey);
+  if (readMessageId !== undefined) texts.readReasoning(readMessageId);
 }
 
 // "Thinking…" while the model still thinks: its message is live and no answer text arrived yet;
@@ -1307,35 +1539,40 @@ function shownText(
   carriedCut: boolean,
   full: CodingSafeActivityMessage["fullAnswer"],
   held: CodingWorkbenchAnswerText | undefined,
+  settled: boolean,
 ): ShownAnswer {
   if (full === undefined) return { source: carried, state: carriedCut ? "cut" : "whole" };
   if (held === undefined) {
-    return { source: carried, state: wholeOrCut(carried, full, false) };
+    return { source: carried, state: wholeOrCut(carried, full, false, settled) };
   }
   const source = held.text.length >= carried.length ? held.text : carried;
   if (held.failed) return { source, state: "failed" };
   // A newer page can report the cut before the next feed update does: either source marks it.
-  return { source, state: wholeOrCut(source, full, held.truncated) };
+  return { source, state: wholeOrCut(source, full, held.truncated, settled) };
 }
 
 function wholeOrCut(
   source: string,
   full: NonNullable<CodingSafeActivityMessage["fullAnswer"]>,
   heldCut: boolean,
+  settled: boolean,
 ): ShownAnswer["state"] {
-  if (source.length < full.length) return "loading";
+  // A row whose full text is no longer read (an earlier run's) never waits for it: it is marked cut.
+  if (source.length < full.length) return settled ? "cut" : "loading";
   return full.truncated || heldCut ? "cut" : "whole";
 }
 
 function shownAnswer(
   message: CodingSafeActivityMessage,
   answer: CodingWorkbenchAnswerText | undefined,
+  settled: boolean,
 ): ShownAnswer {
   return shownText(
     message.segments.map((segment) => segment.text).join(""),
     message.truncated || message.segments.some((segment) => segment.truncated),
     message.fullAnswer,
     answer,
+    settled,
   );
 }
 
@@ -1351,7 +1588,8 @@ function AssistantAnswer({
   readonly live: boolean;
 }): ReactNode {
   const texts = useContext(ModelTextsContext);
-  const shown = shownAnswer(message, texts.answers.get(message.messageId));
+  const own = texts.runId === runId;
+  const shown = shownAnswer(message, own ? texts.answers.get(message.messageId) : undefined, !own);
   // A streaming answer re-renders as a whole on every delta. Parsing is linear (about 18 ms per
   // 100 KB), but a long answer's deltas can arrive faster than it renders: the deferred source lets
   // React skip the stale ones and keep the window responsive, and always settles on the newest.
@@ -1378,6 +1616,7 @@ function AssistantAnswer({
         }
         richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
+      <OutputLimitNote message={message} t={t} />
       {live || shown.source.trim().length === 0 ? null : (
         <div className={styles.cmpMessageActions}>
           <WorkbenchAnswerCopyButton
@@ -1389,6 +1628,22 @@ function AssistantAnswer({
         </div>
       )}
     </>
+  );
+}
+
+// The runtime reported the turn's finish as the model's output limit: the answer ends there.
+function OutputLimitNote({
+  message,
+  t,
+}: {
+  readonly message: CodingSafeActivityMessage;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (message.outputLimitReached !== true) return null;
+  return (
+    <p className={styles.cmpOutputLimitNote} data-testid="coding-answer-output-limit">
+      {t("codingWorkbench.activity.outputLimitReached")}
+    </p>
   );
 }
 
@@ -1490,7 +1745,7 @@ function ToolRow({
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
   const { tool } = item;
-  const shownState = shownToolState(tool, item.superseded === true);
+  const shownState = useShownToolState(tool, item.superseded === true);
   const origin = toolFailureOrigin(tool);
   return (
     <li
@@ -1498,7 +1753,7 @@ function ToolRow({
       className={styles.timelineItem}
       aria-posinset={position}
       aria-setsize={total}
-      aria-busy={tool.state === "running" || tool.state === "pending"}
+      aria-busy={shownState === "running" || shownState === "pending"}
       data-timeline-kind="tool"
     >
       <details
@@ -1514,7 +1769,7 @@ function ToolRow({
           onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
         >
           <span className={styles.toolIcon} aria-hidden="true" />
-          <ToolRowTitle tool={tool} t={t} />
+          <ToolRowTitle tool={tool} label={item.redeemedLabel} t={t} />
           {item.count > 1 ? (
             <span className={styles.toolCount}>
               {t("codingWorkbench.activity.toolCount", { count: item.count })}
@@ -1522,7 +1777,7 @@ function ToolRow({
           ) : null}
           <ToolSummaryEnd tool={tool} state={shownState} origin={origin} t={t} />
         </summary>
-        <ToolRowBody tool={tool} origin={origin} prepared={shownState === "prepared"} t={t} />
+        <ToolRowBody tool={tool} origin={origin} state={shownState} t={t} />
       </details>
     </li>
   );
@@ -1531,15 +1786,17 @@ function ToolRow({
 // The row's name in words, with the raw tool id only as a tooltip, and what it is about.
 function ToolRowTitle({
   tool,
+  label,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
+  readonly label: CodingWorkbenchMessageKey | undefined;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <div className={styles.toolMeta}>
       <p className={styles.timelineTitle} title={tool.tool}>
-        {humanizeToolName(tool.tool, t)}
+        {humanizeToolName(tool, label, t)}
       </p>
       <ToolSubject tool={tool} />
     </div>
@@ -1550,18 +1807,18 @@ function ToolRowTitle({
 function ToolRowBody({
   tool,
   origin,
-  prepared,
+  state,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
   readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
-  readonly prepared: boolean;
+  readonly state: ShownToolState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <>
       {origin === undefined ? (
-        <ToolOutcome tool={tool} prepared={prepared} t={t} />
+        <ToolOutcome tool={tool} state={state} t={t} />
       ) : (
         <>
           <ToolFailureExplanation tool={tool} origin={origin} t={t} />
@@ -1579,7 +1836,17 @@ function ToolSubject({ tool }: { readonly tool: CodingSafeActivityTool }): React
   const command = tool.presentation?.command;
   if (command !== undefined) return <ToolCommandPreview command={command} />;
   const path = tool.presentation?.relativePath;
-  return path === undefined ? null : <code className={styles.toolName}>{path}</code>;
+  if (path !== undefined) return <code className={styles.toolName}>{path}</code>;
+  const task = subagentSubject(tool);
+  return task === undefined ? null : <span className={styles.toolName}>{task}</span>;
+}
+
+// A subagent row names the agent it started and the task, as "explore — Count test files".
+function subagentSubject(tool: CodingSafeActivityTool): string | undefined {
+  const agent = tool.presentation?.agentName?.text;
+  const description = tool.presentation?.taskDescription?.text;
+  if (agent === undefined || description === undefined) return agent ?? description;
+  return `${agent} — ${description}`;
 }
 
 function ToolRowDuration({
@@ -1616,11 +1883,13 @@ function ToolSummaryEnd({
   readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const runningSince = useExecutionStart(state, tool.occurredAt);
   if (origin !== undefined) return <ToolFailureLabel tool={tool} origin={origin} t={t} />;
   if (state === "succeeded") {
     return (
       <>
         <span className="sr-only">{t("codingWorkbench.activity.toolState.succeeded")}</span>
+        <ToolOutputShortenedLabel tool={tool} t={t} />
         <ToolRowDuration tool={tool} t={t} />
       </>
     );
@@ -1628,9 +1897,24 @@ function ToolSummaryEnd({
   return (
     <>
       <ToolStateBadge tool={tool} state={state} t={t} />
-      {state === "running" ? <RunningFor since={tool.occurredAt} t={t} /> : null}
+      {state === "running" ? <RunningFor since={runningSince} t={t} /> : null}
     </>
   );
+}
+
+// A call held for a decision is reported running from the instant it was held, so its server
+// instant includes the wait. The executing time starts when the hold ends: the client instant of
+// a call seen leaving the hold replaces the reported one.
+function useExecutionStart(state: ShownToolState, reported: string): string {
+  const [previous, setPrevious] = useState(state);
+  const [resumedAt, setResumedAt] = useState<string | null>(null);
+  if (previous !== state) {
+    setPrevious(state);
+    if (state === "running" && previous.startsWith("waiting-for-")) {
+      setResumedAt(new Date().toISOString());
+    }
+  }
+  return resumedAt !== null && state === "running" ? resumedAt : reported;
 }
 
 // How long a call has been running, from one second on. It ticks silently: a timer is no live
@@ -1676,8 +1960,15 @@ type UnrunVerificationOutcome = Extract<
 // as a completed call, so its tool state reads "succeeded" for a step that never happened. The server's
 // closed Git outcome decides the badge instead: still waiting for the human, or not done.
 type UnfinishedGitState = "not-done" | "waiting-for-approval" | "prepared";
+// A proposal that a completed execute step carried out: a commit reads "committed", any other
+// governed Git step "carried-out", never "prepared" beside the execute row that finished it.
+type RedeemedGitState = "committed" | "carried-out";
 type ShownToolState =
-  CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome | UnfinishedGitState;
+  | CodingSafeActivityTool["state"]
+  | "exited"
+  | UnrunVerificationOutcome
+  | UnfinishedGitState
+  | RedeemedGitState;
 
 const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOutcome> = new Set([
   "waiting-for-trust",
@@ -1705,7 +1996,7 @@ function unfinishedGitState(
   outcome: CodingSafeActivityGitOutcome | undefined,
 ): UnfinishedGitState | undefined {
   if (outcome === undefined || outcome === "completed") return undefined;
-  return outcome === "waiting-for-approval" ? outcome : "not-done";
+  return outcome === "waiting-for-approval" || outcome === "prepared" ? outcome : "not-done";
 }
 
 function isUnrunVerificationOutcome(
@@ -1715,15 +2006,66 @@ function isUnrunVerificationOutcome(
 }
 
 // A succeeded call's badge: how its Git step really ended, a proposal a later step took up, or done.
-function succeededToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
+// A finished run cannot be waiting for a decision: with no ask open any more, a proposal still
+// reading "waiting" is a step that was never carried out.
+function succeededToolState(
+  tool: CodingSafeActivityTool,
+  superseded: boolean,
+  runEnded: boolean,
+): ShownToolState {
   const git = unfinishedGitState(tool.presentation?.gitOutcome);
   if (git === undefined) return "succeeded";
-  return superseded && git === "waiting-for-approval" ? "prepared" : git;
+  if (superseded && (git === "waiting-for-approval" || git === "prepared")) {
+    return tool.tool === "keiko_git_commit" ? "committed" : "carried-out";
+  }
+  if (git !== "waiting-for-approval") return git;
+  return runEnded ? "not-done" : git;
 }
 
-function shownToolState(tool: CodingSafeActivityTool, superseded = false): ShownToolState {
-  if (tool.state === "succeeded") return succeededToolState(tool, superseded);
-  if (tool.state !== "failed") return tool.state;
+// The one tool the package-script trust decision gates: its call is the open row the pause holds.
+// Any other call open beside it (parallel tool calls) keeps its own running state and timer.
+const TRUST_GATED_TOOL = "keiko_verification";
+
+function isOpenTool(tool: CodingSafeActivityTool): boolean {
+  return tool.state === "running" || tool.state === "pending";
+}
+
+// A call that has not finished while the person's decision on it is pending is blocked on the
+// human, not executing: the ask names its call exactly (`awaitingCallId`), never a guess.
+function isHeldForApproval(
+  tool: CodingSafeActivityTool,
+  awaitingCallId: string | undefined,
+): boolean {
+  return (
+    awaitingCallId !== undefined &&
+    tool.callId === awaitingCallId &&
+    (tool.state === "running" || tool.state === "pending")
+  );
+}
+
+function useShownToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
+  const awaitingCallId = useContext(AwaitingApprovalCallIdContext);
+  const runEnded = useContext(RunEndedContext);
+  const heldForTrust = useContext(HeldForTrustContext);
+  return shownToolState(tool, superseded, awaitingCallId, runEnded, heldForTrust);
+}
+
+function shownToolState(
+  tool: CodingSafeActivityTool,
+  superseded = false,
+  awaitingCallId?: string,
+  runEnded = false,
+  heldForTrust = false,
+): ShownToolState {
+  if (isHeldForApproval(tool, awaitingCallId)) return "waiting-for-approval";
+  if (heldForTrust && isOpenTool(tool) && tool.tool === TRUST_GATED_TOOL) {
+    return "waiting-for-trust";
+  }
+  if (tool.state === "succeeded") return succeededToolState(tool, superseded, runEnded);
+  return tool.state === "failed" ? failedToolState(tool) : tool.state;
+}
+
+function failedToolState(tool: CodingSafeActivityTool): ShownToolState {
   const exitCode = tool.presentation?.exitCode;
   if (exitCode !== undefined && exitCode !== 0) return "exited";
   const outcome = tool.presentation?.verificationOutcome;
@@ -1753,11 +2095,11 @@ function ToolStateBadge({
 // name (#3897).
 function ToolOutcome({
   tool,
-  prepared,
+  state,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
-  readonly prepared: boolean;
+  readonly state: ShownToolState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const verificationOutcome = tool.presentation?.verificationOutcome;
@@ -1768,22 +2110,27 @@ function ToolOutcome({
       </p>
     );
   }
-  const sentence = prepared
-    ? t("codingWorkbench.activity.git.prepared")
-    : toolOutcomeSentence(tool, t);
+  const sentence = toolOutcomeSentence(tool, state, t);
   return sentence === undefined ? null : <p className={styles.cmpToolOutcome}>{sentence}</p>;
 }
 
+// The sentence follows the badge the row shows, never the raw outcome: a proposal taken up by a later
+// step reads prepared, and one still "waiting" in a run that is over reads not done.
 function toolOutcomeSentence(
   tool: CodingSafeActivityTool,
+  state: ShownToolState,
   t: CodingWorkbenchTranslate,
 ): string | undefined {
+  // A proposal its execute step carried out is finished: its badge says so and needs no sentence.
+  if (state === "committed" || state === "carried-out") return undefined;
+  if (state === "prepared") return t("codingWorkbench.activity.git.prepared");
   // A carried-out Git step needs no sentence beyond its "Succeeded" badge.
   const gitOutcome = tool.presentation?.gitOutcome;
-  if (gitOutcome !== undefined && gitOutcome !== "completed") {
-    return t(`codingWorkbench.activity.git.${gitOutcome}`);
+  if (gitOutcome === undefined || gitOutcome === "completed") return undefined;
+  if (gitOutcome === "waiting-for-approval" && state !== "waiting-for-approval") {
+    return t("codingWorkbench.activity.git.not-done");
   }
-  return undefined;
+  return t(`codingWorkbench.activity.git.${gitOutcome}`);
 }
 
 function ToolPresentationDetails({
@@ -1902,8 +2249,13 @@ export function toolLabelKey(tool: string): CodingWorkbenchMessageKey | undefine
 
 // A tool Keiko has no name for (an MCP server's, a newer runtime's) is a "Tool"; its raw id stays
 // in the row's tooltip, never in the row's text.
-function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
-  return t(toolLabelKey(tool) ?? "codingWorkbench.timeline.tool.unknown");
+function humanizeToolName(
+  tool: CodingSafeActivityTool,
+  redeemed: CodingWorkbenchMessageKey | undefined,
+  t: CodingWorkbenchTranslate,
+): string {
+  const key = redeemed ?? proposalLabelKey(tool);
+  return t(key ?? "codingWorkbench.timeline.tool.unknown");
 }
 
 function PlanRow({
@@ -1999,7 +2351,7 @@ function EventRow({
         </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
-        <RunFailureReport event={item.event} t={t} />
+        <RunFailureReport event={item.event} />
       </details>
     </li>
   );
@@ -2008,27 +2360,13 @@ function EventRow({
 /**
  * A run that settled `failed` offers the existing user-initiated error report. The server uses the
  * run id as the run's Activity Log correlation id, so the report selects that run's lines; an id
- * that is not a valid correlation id falls back to the most recent registered failure. A run whose
- * changes were not checked offers "Run the check now" instead (#4491): nothing broke inside Keiko,
- * and the button is the person's own request to run the check, so it is shown as their message.
+ * that is not a valid correlation id falls back to the most recent registered failure.
  */
 function RunFailureReport({
   event,
-  t,
 }: {
   readonly event: CodingWorkbenchRuntimeSseEvent;
-  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const onRunCheck = useContext(RunCheckContext);
-  if (onRunCheck !== undefined && eventOffersRunCheck(event, true)) {
-    return (
-      <p className={styles.timelineDetail} data-run-check="">
-        <button type="button" className={styles.cmpRunCheckAction} onClick={onRunCheck}>
-          {t("codingWorkbench.event.runCheck.action")}
-        </button>
-      </p>
-    );
-  }
   if (!eventOffersErrorReport(event)) return null;
   const correlationId = isActivityLogCorrelationId(event.runId) ? event.runId : undefined;
   return (

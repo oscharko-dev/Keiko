@@ -29,6 +29,7 @@ import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
+import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import {
   plantDirectoryRedirect,
@@ -150,7 +151,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { dirname } from "node:path";
-import { createCodingToolFacade } from "./codingToolFacade.js";
+import { blockedBranchToolResult, createCodingToolFacade } from "./codingToolFacade.js";
 import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
@@ -202,6 +203,22 @@ import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 // #4359: a test can take the nested-effects fact off the pin the run is verified against.
 const pinFlag = vi.hoisted(() => ({ stripNestedEffects: false }));
+
+// #4491 review: a turn's index start that never answers, so a Stop can be proven to end the wait.
+const indexStartFlag = vi.hoisted(() => ({ hang: false, began: 0 }));
+
+vi.mock("./opencodeTurnIndex.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeTurnIndex.js")>();
+  return {
+    ...actual,
+    beginTurnIndex: (root: string): ReturnType<typeof actual.beginTurnIndex> => {
+      indexStartFlag.began += 1;
+      return indexStartFlag.hang
+        ? { start: new Promise<never>(() => undefined) }
+        : actual.beginTurnIndex(root);
+    },
+  };
+});
 
 vi.mock("./opencodeRuntimeVersions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./opencodeRuntimeVersions.js")>();
@@ -307,7 +324,7 @@ interface OpenCodeRuntimeComposition {
       // A built-in, or a custom primary agent the runtime lists (#3903 AC1).
       agent?: string,
       inputs?: AdmittedPromptInputs,
-      origin?: "verification-continuation",
+      origin?: CodingRuntimeTurnOrigin,
     ) => Promise<boolean>;
     /** What a prompt may carry besides its text, and the operations that honour it (ADR-0137 D10). */
     readonly promptInputs?:
@@ -466,6 +483,7 @@ interface OpenCodeRuntimeCompositionModule {
         readonly occurredAt: string;
       }) => void;
       readonly clear: () => void;
+      readonly observeAgentModels?: (refusedCount: number) => void;
       readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
       readonly captureMessages?: (messages: readonly CodingHistoryMessage[]) => boolean;
       readonly recordDrops: (count: number) => void;
@@ -894,6 +912,8 @@ interface StartBridgeControl {
       staged: unknown;
     };
     readonly abortSessions: string[];
+    /** When set, `POST .../interrupt` answers this failing status instead of settling. */
+    readonly interruptFailureStatus?: number;
     readonly statusResponses: unknown[];
     /** What `GET /api/shell` lists (#3901 AC3); absent lists no running job. */
     readonly shellResponses?: () => unknown[];
@@ -1252,7 +1272,9 @@ function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   const acceptedInitialization = facade.acceptedInitialization;
   const nativeEffect = facade.nativeEffect;
   const nativeSettlement = facade.nativeSettlement;
+  const branchAsk = facade.branchAsk;
   return {
+    ...(branchAsk === undefined ? {} : { branchAsk }),
     ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
     ...(nativeEffect === undefined ? {} : { nativeEffect }),
@@ -1581,8 +1603,16 @@ async function startBridgeFixture(
       );
     }
     if (path.endsWith("/interrupt")) {
-      if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
+      const readiness = readinessChallengePhase === "prompt-pending";
+      if (readiness) readinessChallengePhase = "aborted";
       else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
+      if (!readiness && control?.runControl?.interruptFailureStatus !== undefined) {
+        return Promise.resolve(
+          new Response("SENTINEL_INTERRUPT_BODY", {
+            status: control.runControl.interruptFailureStatus,
+          }),
+        );
+      }
       return Promise.resolve(v2Envelope({}));
     }
     // #3901 AC3: the background shell jobs the runtime lists; none unless the control names some.
@@ -3271,6 +3301,237 @@ describe("private OpenCode run control", () => {
       await expect(aborting).resolves.toBe(true);
       await expect(terminal).resolves.toBe(true);
     } finally {
+      await fixture.stop();
+    }
+  });
+
+  describe.each([
+    [
+      "the operator's stop",
+      (fixture: Awaited<ReturnType<typeof startBridgeFixture>>): Promise<unknown> =>
+        fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID),
+    ],
+    [
+      "the run lifecycle's stop",
+      (fixture: Awaited<ReturnType<typeof startBridgeFixture>>): Promise<unknown> => fixture.stop(),
+    ],
+  ])("a prompt waiting for the Git index start under %s", (_label, stopRun) => {
+    it("is never posted to the runtime", async () => {
+      const runControl = {
+        promptBodies: [] as string[],
+        abortSessions: [] as string[],
+        statusResponses: [{}, {}, {}, {}] as unknown[],
+      };
+      const fixture = await startBridgeFixture(facade, undefined, { runControl });
+      indexStartFlag.hang = true;
+      indexStartFlag.began = 0;
+      try {
+        const submitted = fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "must not be sent");
+        await vi.waitFor(() => {
+          expect(indexStartFlag.began).toBeGreaterThan(0);
+        });
+        expect(runControl.promptBodies).toEqual([]);
+
+        const stopping = stopRun(fixture);
+
+        await expect(submitted).resolves.toBe(false);
+        expect(runControl.promptBodies).toEqual([]);
+        await Promise.allSettled([stopping]);
+      } finally {
+        indexStartFlag.hang = false;
+        await fixture.stop();
+      }
+    });
+  });
+
+  it("never posts a prompt when Stop lands before the wait for the index start begins", async () => {
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}, {}, {}, {}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    try {
+      // The submit is still in its earlier awaits (agent, baseline, instructions) when Stop runs.
+      const submitted = fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "must not be sent");
+      const stopping = fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID);
+
+      await expect(submitted).resolves.toBe(false);
+      expect(runControl.promptBodies).toEqual([]);
+      await Promise.allSettled([stopping]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("never posts a prompt when Stop has fully finished before the submit's check", async () => {
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}, {}, {}, {}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    try {
+      const submitted = fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "must not be sent");
+      // The epoch is even again (a different even value) by the time the submit reaches its check.
+      await Promise.allSettled([fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)]);
+
+      await expect(submitted).resolves.toBe(false);
+      expect(runControl.promptBodies).toEqual([]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("neither arms nor starts a scheduled wake when Stop lands during the submit's earlier awaits", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}, {}, {}, {}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl, activityLog });
+    try {
+      const submitted = fixture.runtime.runPort.submitTask(
+        FIXTURE_RUN_ID,
+        "wake",
+        undefined,
+        undefined,
+        undefined,
+        "schedule-wake",
+      );
+      const stopping = fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID);
+
+      await expect(submitted).resolves.toBe(false);
+      await Promise.allSettled([stopping]);
+      expect(runControl.promptBodies).toEqual([]);
+      // The wake's hand-off reads the schedule state and releases the lease: none of it may run.
+      expect(
+        activityLog.events.filter(
+          (event) =>
+            event.op === "coding-runtime.schedule.lease" && event.extra?.action === "release",
+        ),
+      ).toEqual([]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records a body-free diagnostic when the interrupt of a stopping task throws", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      interruptFailureStatus: 500,
+      statusResponses: [{}, { ses_tool: { type: "busy" } }] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () =>
+        Promise.resolve(v2Envelope(completedTurnHistory().slice(0, 1).reverse())),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded abort task"),
+      ).resolves.toBe(true);
+      await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(false);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode-runtime-composition.task-abort",
+          message: "server-operation-failed",
+          code: "task-abort",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_INTERRUPT_BODY");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("closes the adapter and records the cause when the handshake throws after the adapter started", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let sseCancellations = 0;
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        safeActivity: {
+          arm: (): void => {
+            throw new Error("SENTINEL_ARM_BODY");
+          },
+          clear: vi.fn(),
+          ingest: () => true,
+          recordDrops: vi.fn(),
+          settleTool: vi.fn(),
+        },
+        onSseCancel: (): void => {
+          sseCancellations += 1;
+        },
+      },
+    );
+    try {
+      expect(sseCancellations).toBe(1);
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode-runtime-composition.handshake",
+        }),
+      );
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_ARM_BODY");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("closes a failed handshake's adapter once and records one diagnostic when its close throws", async () => {
+    const module = await import("./opencodeRuntimeAdapter.js");
+    const createAdapter = module.createOpenCodeRuntimeAdapter;
+    const closing = vi.fn();
+    const spy = vi.spyOn(module, "createOpenCodeRuntimeAdapter").mockImplementation((input) => ({
+      ...createAdapter(input),
+      start: (): ReturnType<ReturnType<typeof createAdapter>["start"]> =>
+        Promise.resolve({ ok: false, phase: "readiness" } as never),
+      close: (): Promise<void> => {
+        closing();
+        return Promise.reject(new Error("SENTINEL_CLOSE_BODY"));
+      },
+    }));
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      },
+    );
+    try {
+      expect(closing).toHaveBeenCalledOnce();
+      const handshake = records.filter((record) =>
+        record.source.startsWith("opencode-runtime-composition.handshake"),
+      );
+      expect(handshake).toHaveLength(1);
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_CLOSE_BODY");
+    } finally {
+      spy.mockRestore();
       await fixture.stop();
     }
   });
@@ -4972,10 +5233,19 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   // and one body-free line records their counts.
   it("binds the agents' gateway models and records the offered and configured counts", async () => {
     const activityLog = createBufferedServerLogSink();
+    const observeAgentModels = vi.fn();
     const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
       mode: "autonomous-delivery",
       readToolProfile: () => "native",
       activityLog,
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: (): true => true,
+        recordDrops: vi.fn(),
+        settleTool: vi.fn(),
+        observeAgentModels,
+      },
       configDocuments: () =>
         Promise.resolve([
           { agents: { explore: { model: "gemma-small" }, general: { model: "openai/gpt-x" } } },
@@ -5016,6 +5286,8 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         refusedAgentCount: 1,
       });
       expect(JSON.stringify(bound)).not.toContain("gemma-small");
+      // U-53: the one refused override reaches the run's observer as a count, once.
+      expect(observeAgentModels).toHaveBeenCalledExactlyOnceWith(1);
     } finally {
       await fixture.stop();
     }
@@ -12463,6 +12735,227 @@ describe("the plain approval of a managed Jira write", () => {
     expect(withJiraWriteReview(ask, run("other"), request, deps)).toBe(ask);
     expect(withJiraWriteReview(ask, run("jira"), request, {} as typeof deps)).toBe(ask);
   });
+});
+
+// U-27: a task branch Keiko would refuse at execution is answered as that refusal on the ask lane,
+// so the model reads why and no person is asked about a name that can never be created.
+describe("a governed task-branch ask naming an unsafe branch", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const askFor = (branchName: string): string =>
+    JSON.stringify({
+      action: "permission-request",
+      runId: FIXTURE_RUN_ID,
+      actionId: "ses_tool:call_branch",
+      properties: { metadata: { actionKind: "git-branch", branchName } },
+    });
+
+  it.each(["a\u202eb", "a\u200bb", "a b"])(
+    "answers %j with the blocked invalid-name result, not a bare denial",
+    async (name) => {
+      const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] })) },
+        undefined,
+        { mode: "supervised-coding", runtimeEvents },
+      );
+      try {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: askFor(name),
+        });
+        expect(response.status).toBe(409);
+        expect(JSON.parse(response.body)).toMatchObject({
+          git: { kind: "branch", status: "blocked", reason: "invalid-name" },
+          guidance: expect.stringContaining("not a branch name Keiko will create") as string,
+        });
+        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+});
+
+// U-32: a task branch the run's own state already refuses (it stands on a task branch) is answered
+// with the step's refusal on the ask lane, in every mode that asks, so no person approves it first.
+describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const askBody = JSON.stringify({
+    action: "permission-request",
+    runId: FIXTURE_RUN_ID,
+    actionId: "ses_tool:call_branch",
+    properties: { metadata: { actionKind: "git-branch", branchName: "feat/u27-branch-check" } },
+  });
+
+  async function askBranch(
+    mode: "governed-assist" | "supervised-coding",
+    refusal: CodingToolResult | Error | undefined,
+  ): Promise<{
+    readonly status: number;
+    readonly body: string;
+    readonly asked: boolean;
+    readonly consulted: readonly string[];
+  }> {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const consulted: string[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] })),
+        branchAsk: {
+          refusal: (name) => {
+            consulted.push(name);
+            if (refusal instanceof Error) throw refusal;
+            return refusal;
+          },
+        },
+      },
+      undefined,
+      { mode, runtimeEvents },
+    );
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: askBody,
+      });
+      return {
+        status: response.status,
+        body: response.body,
+        asked: runtimeEvents.some((event) => event.kind === "permission-requested"),
+        consulted,
+      };
+    } finally {
+      await fixture.stop();
+    }
+  }
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "answers the step's own blocked result without a card in %s",
+    async (mode) => {
+      const refusal = blockedBranchToolResult("not-on-base", "feat/u27-branch-check");
+      const answered = await askBranch(mode, refusal);
+      expect(answered.status).toBe(409);
+      expect(JSON.parse(answered.body)).toEqual(refusal);
+      expect(JSON.parse(answered.body)).toMatchObject({
+        git: { kind: "branch", status: "blocked", reason: "not-on-base" },
+        guidance: expect.stringContaining("already works on its own task branch") as string,
+      });
+      expect(answered.asked).toBe(false);
+      expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+    },
+  );
+
+  // U-43: the refused call's row must carry Keiko's verdict (the closed Git outcome), never the
+  // native tool's own "completed" alone, which read as a green check for a branch never created.
+  // The ask as the generated plugin sends it: the id is bound to the session and the ask id.
+  const boundAskBody = (actionId: string): string =>
+    JSON.stringify({
+      action: "permission-request",
+      runId: FIXTURE_RUN_ID,
+      actionId,
+      properties: {
+        id: `per_${createHash("sha256").update(actionId, "utf8").digest("hex").slice(0, 32)}`,
+        sessionID: "ses_tool",
+        metadata: { actionKind: "git-branch", branchName: "feat/u27-branch-check" },
+      },
+    });
+
+  async function settledBranchAsk(
+    refusal: CodingToolResult | undefined,
+    body: string = boundAskBody("ses_tool:call_branch"),
+  ): Promise<{ readonly status: number; readonly settlements: readonly unknown[] }> {
+    const settlements: unknown[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] })),
+        branchAsk: { refusal: () => refusal },
+      },
+      undefined,
+      {
+        mode: "governed-assist",
+        safeActivity: {
+          arm: vi.fn(),
+          clear: vi.fn(),
+          ingest: () => true,
+          recordDrops: vi.fn(),
+          settleTool: (settlement): void => {
+            settlements.push(settlement);
+          },
+        },
+      },
+    );
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body,
+      });
+      return { status: response.status, settlements };
+    } finally {
+      await fixture.stop();
+    }
+  }
+
+  it.each([
+    ["protected-name", "branch-protected-name"],
+    ["not-on-base", "branch-not-on-base"],
+  ] as const)(
+    "settles a branch refused for %s with the closed %s outcome on the tool row",
+    async (reason, gitOutcome) => {
+      const answered = await settledBranchAsk(
+        blockedBranchToolResult(reason, "feat/u27-branch-check"),
+      );
+      expect(answered.status).toBe(409);
+      expect(answered.settlements).toHaveLength(1);
+      expect(answered.settlements[0]).toMatchObject({
+        actionId: "ses_tool:call_branch",
+        presentation: { gitOutcome },
+      });
+    },
+  );
+
+  // U-43 audit: the action id comes from the request body, so it settles a row only when it is bound
+  // to the run's session and to the ask, as on the approval path. The answer stays the 409 refusal.
+  it.each([
+    ["another session", boundAskBody("ses_other:call_branch")],
+    [
+      "an ask id it does not hash to",
+      boundAskBody("ses_tool:call_branch").replace('"per_', '"per_0'),
+    ],
+    ["no ask id", askBody],
+  ])("settles nothing for an action id of %s, and keeps the 409", async (_name, body) => {
+    const answered = await settledBranchAsk(
+      blockedBranchToolResult("protected-name", "feat/u27-branch-check"),
+      body,
+    );
+    expect(answered.status).toBe(409);
+    expect(answered.settlements).toEqual([]);
+  });
+
+  it("settles nothing for a branch ask no refusal covers", async () => {
+    expect((await settledBranchAsk(undefined)).settlements).toEqual([]);
+  });
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "falls back to asking, without a 409 or a rejection, when the precheck throws in %s",
+    async (mode) => {
+      const throwing = new TypeError("precheck unreadable");
+      const answered = await askBranch(mode, throwing);
+      expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+      expect(answered.status).not.toBe(409);
+      expect(answered.body).not.toContain('"kind":"branch"');
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still takes an ask nothing refuses to the person in %s",
+    async (mode) => {
+      const answered = await askBranch(mode, undefined);
+      expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+      expect(answered.body).not.toContain('"kind":"branch"');
+    },
+  );
 });
 
 // #4359: whether a Code Mode program asks is decided by the pin of the version the run was verified

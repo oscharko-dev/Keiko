@@ -39,6 +39,16 @@ function settledRunId(snapshot: CodingWorkbenchRuntimeSnapshot | null): string |
   return snapshot !== null && settledRunState(snapshot.state) ? snapshot.runId : undefined;
 }
 
+// U-23: a run that ended before a server restart is `recovery-required`, not settled, yet the
+// server holds no live projection for it either. Its conversation comes back from Coding History
+// exactly like a settled run's; only the synthesized settlement row stays settled-only.
+function restorableRunId(snapshot: CodingWorkbenchRuntimeSnapshot | null): string | undefined {
+  return snapshot !== null &&
+    (settledRunState(snapshot.state) || snapshot.state === "recovery-required")
+    ? snapshot.runId
+    : undefined;
+}
+
 function heldSettlement(events: readonly CodingWorkbenchRuntimeSseEvent[], runId: string): boolean {
   return events.some(
     (event) => event.runId === runId && event.kind === "status" && settledRunState(event.state),
@@ -389,7 +399,7 @@ export function restoreConversation(
   snapshot: CodingWorkbenchRuntimeSnapshot | null,
   detail: CodingHistoryDetail | null,
 ): RestoredConversation | null {
-  const runId = settledRunId(snapshot);
+  const runId = restorableRunId(snapshot);
   if (snapshot === null || runId === undefined || detail === null) return null;
   const context = { runId, updatedAt: snapshot.updatedAt, historyCut: detail.truncated };
   const { turns, unplaced, answers } = packedConversation(
@@ -412,6 +422,21 @@ export interface ShownRun {
   readonly runId: string;
   /** Coding History message ids of the run that the transcript shows because the feed has none. */
   readonly overflowMessageIds: ReadonlySet<string>;
+  /**
+   * The messages of earlier runs of the task that the timeline shows from the feeds it keeps of
+   * them (U-11), as `earlierMessageKey`s; the transcript leaves exactly these out. A feed that
+   * missed a message, or cut its text, leaves that message to the transcript: a repeat is
+   * acceptable, a message shown nowhere is not. Absent: none.
+   */
+  readonly earlierMessageKeys?: ReadonlySet<string>;
+}
+
+/**
+ * Coding History's message ids are its own, not the feed's, so a message the timeline shows from an
+ * earlier run's feed is recognised by the run, the role and the whole text it shows.
+ */
+function earlierMessageKey(runId: string, role: ChatMessage["role"], text: string): string {
+  return `${runId}\u0000${role}\u0000${stripUnsafeFormatChars(text).trim()}`;
 }
 
 const NO_MESSAGE_IDS: ReadonlySet<string> = new Set();
@@ -424,8 +449,8 @@ const NO_MESSAGE_IDS: ReadonlySet<string> = new Set();
 export function transcriptShows(shownRun: ShownRun | undefined, message: ChatMessage): boolean {
   return (
     shownRun === undefined ||
-    message.runId !== shownRun.runId ||
-    shownRun.overflowMessageIds.has(message.id)
+    (!carriedByEarlierFeed(shownRun, message) &&
+      (message.runId !== shownRun.runId || shownRun.overflowMessageIds.has(message.id)))
   );
 }
 
@@ -435,13 +460,73 @@ function shownRunOf(
   restoration: RestoredConversation | null,
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
   runId: string | undefined,
+  earlierMessageKeys: ReadonlySet<string>,
 ): ShownRun | undefined {
+  const earlier = earlierMessageKeys.size === 0 ? {} : { earlierMessageKeys };
   if (restoration !== null) {
-    return { runId: restoration.feed.runId, overflowMessageIds: restoration.overflowMessageIds };
+    return {
+      runId: restoration.feed.runId,
+      overflowMessageIds: restoration.overflowMessageIds,
+      ...earlier,
+    };
   }
   return feed !== null && runId !== undefined
-    ? { runId, overflowMessageIds: NO_MESSAGE_IDS }
+    ? { runId, overflowMessageIds: NO_MESSAGE_IDS, ...earlier }
     : undefined;
+}
+
+function countKey(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function feedMessageCounts(
+  feeds: UseCodingWorkbenchSafeActivityResult["earlierFeeds"],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const feed of feeds ?? []) {
+    for (const turn of feed.turns) {
+      for (const message of turn.messages) {
+        const text = message.segments.map((segment) => segment.text).join("");
+        if (text.trim().length > 0)
+          countKey(counts, earlierMessageKey(feed.runId, message.role, text));
+      }
+    }
+  }
+  return counts;
+}
+
+function storedMessageCounts(history: readonly ChatMessage[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const message of history) {
+    if (message.runId === undefined) continue;
+    countKey(counts, earlierMessageKey(message.runId, message.role, message.content));
+  }
+  return counts;
+}
+
+// The messages the timeline shows from the feeds of earlier runs, by run, role and text. A key is
+// carried only when the feed holds at least as many occurrences as Coding History does: with fewer,
+// which stored occurrence the feed kept is unknowable, so every one of them stays readable in the
+// transcript (a repeat is acceptable, a message shown nowhere is not).
+function carriedEarlierMessageKeys(
+  feeds: UseCodingWorkbenchSafeActivityResult["earlierFeeds"],
+  history: readonly ChatMessage[],
+): ReadonlySet<string> {
+  const stored = storedMessageCounts(history);
+  const keys = new Set<string>();
+  for (const [key, count] of feedMessageCounts(feeds)) {
+    if (count >= (stored.get(key) ?? 0)) keys.add(key);
+  }
+  return keys;
+}
+
+function carriedByEarlierFeed(shownRun: ShownRun, message: ChatMessage): boolean {
+  return (
+    message.runId !== undefined &&
+    shownRun.earlierMessageKeys?.has(
+      earlierMessageKey(message.runId, message.role, message.content),
+    ) === true
+  );
 }
 
 // One body-free line per distinct restoration: where the run's messages went and what the page said.
@@ -491,9 +576,13 @@ export function useRestoredRunTimeline(
   );
   useReportedRestoration(restoration);
   const runId = snapshot?.runId;
+  const earlierMessageKeys = useMemo(
+    () => carriedEarlierMessageKeys(activity.earlierFeeds, detail?.messages ?? []),
+    [activity.earlierFeeds, detail?.messages],
+  );
   const shownRun = useMemo(
-    () => shownRunOf(restoration, activity.feed, runId),
-    [restoration, activity.feed, runId],
+    () => shownRunOf(restoration, activity.feed, runId, earlierMessageKeys),
+    [restoration, activity.feed, runId, earlierMessageKeys],
   );
   const feed = restoration?.feed ?? activity.feed;
   return {

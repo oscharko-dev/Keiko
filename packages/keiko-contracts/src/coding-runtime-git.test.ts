@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { isCodingRuntimeGitResult } from "./coding-runtime-git.js";
+import {
+  CODING_RUNTIME_GIT_MAX_PATHS,
+  CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
+  CODING_RUNTIME_GIT_STAGE_CAUSES,
+  isCodingRuntimeGitResult,
+  normalizePersistedCodingRuntimeGitResult,
+} from "./coding-runtime-git.js";
+import { activityLogOperationSchema } from "./observability.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 const pairs = [
   ["ready", "none"],
@@ -33,6 +40,51 @@ describe("closed runtime Git evidence", () => {
         expect(isCodingRuntimeGitResult({ ...stage, status, reason })).toBe(valid);
       }
     }
+  });
+  // #4491: the closed cause of an unsupported-transformation refusal, and only there.
+  it("admits a closed cause on a stage unsupported-transformation refusal only", () => {
+    const refused = { ...stage, status: "blocked", reason: "unsupported-transformation" };
+    for (const cause of CODING_RUNTIME_GIT_STAGE_CAUSES) {
+      expect(isCodingRuntimeGitResult({ ...refused, cause })).toBe(true);
+    }
+    expect(isCodingRuntimeGitResult({ ...refused, cause: "bogus" })).toBe(false);
+    expect(
+      isCodingRuntimeGitResult({
+        ...stage,
+        status: "blocked",
+        reason: "policy-block",
+        cause: "filter-driver",
+      }),
+    ).toBe(false);
+    expect(
+      isCodingRuntimeGitResult({
+        ...refused,
+        kind: "unstage",
+        proposalId: "unstage-1",
+        cause: "filter-driver",
+      }),
+    ).toBe(false);
+  });
+  // The activity-log registration lists the causes as a literal (its parser reads literals); it must
+  // never drift from the contract's closed list.
+  it("keeps the activity-log stageCause vocabulary equal to the contract's causes", () => {
+    const field = activityLogOperationSchema("git.runtime-action")?.fields.stageCause;
+    expect(field).toMatchObject({ dataClass: "closed-enum", required: false });
+    expect([...((field as { values?: readonly string[] }).values ?? [])].sort()).toEqual(
+      [...CODING_RUNTIME_GIT_STAGE_CAUSES].sort(),
+    );
+  });
+  // U-28: the request carries at most CODING_RUNTIME_GIT_MAX_PATHS entries, but the proposal a
+  // directory expands to binds up to CODING_RUNTIME_GIT_MAX_STAGE_PATHS files.
+  it.each(["stage", "unstage"] as const)("bounds a %s proposal's expanded file count", (kind) => {
+    const base = { ...stage, kind, proposalId: `${kind}-123`, status: "ready", reason: "none" };
+    const accepted = (pathCount: number): boolean =>
+      isCodingRuntimeGitResult({ ...base, pathCount });
+    expect(accepted(CODING_RUNTIME_GIT_MAX_PATHS + 1)).toBe(true);
+    expect(accepted(302)).toBe(true);
+    expect(accepted(CODING_RUNTIME_GIT_MAX_STAGE_PATHS)).toBe(true);
+    expect(accepted(CODING_RUNTIME_GIT_MAX_STAGE_PATHS + 1)).toBe(false);
+    expect(accepted(0)).toBe(false);
   });
   it.each(["message", "stdout", "token", "capability", "root", "argv", "env"])(
     "rejects unreviewed nested result data %s",
@@ -91,5 +143,51 @@ describe("closed runtime Git branch result", () => {
     for (const name of ["-D", "a b", "x..y", "", "a:b"])
       expect(isCodingRuntimeGitResult({ ...branch, branch: name })).toBe(false);
     expect(isCodingRuntimeGitResult({ ...branch, argv: ["branch"] })).toBe(false);
+  });
+});
+
+// #4491: a fresh repository has no commit yet. The status says so with a closed `head` marker
+// instead of an empty or missing sha, and a marker that contradicts the sha is refused.
+describe("runtime Git status of a born and an unborn branch", () => {
+  const body = {
+    kind: "status",
+    stagedTreeDigest: "a".repeat(64),
+    branch: "main",
+    changes: [],
+    truncated: false,
+  };
+  it("accepts a born head with its commit and an unborn head without one", () => {
+    expect(isCodingRuntimeGitResult({ ...body, head: "born", headSha: "b".repeat(40) })).toBe(true);
+    expect(isCodingRuntimeGitResult({ ...body, head: "unborn" })).toBe(true);
+  });
+  it("refuses every contradictory or incomplete head", () => {
+    expect(isCodingRuntimeGitResult({ ...body, head: "unborn", headSha: "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(isCodingRuntimeGitResult({ ...body, head: "born" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, head: "born", headSha: "" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(40) })).toBe(false);
+    expect(isCodingRuntimeGitResult(body)).toBe(false);
+  });
+  // A status persisted by 1.5.10 has a commit and no marker. The boundary reads it as born before the
+  // guard runs; the guard itself still refuses it, and nothing else is inferred.
+  it("reads a persisted status without the marker as born, and nothing else", () => {
+    const persisted = { ...body, headSha: "b".repeat(40) };
+    expect(isCodingRuntimeGitResult(persisted)).toBe(false);
+    const normalized = normalizePersistedCodingRuntimeGitResult(persisted);
+    expect(normalized).toEqual({ ...persisted, head: "born" });
+    expect(isCodingRuntimeGitResult(normalized)).toBe(true);
+    // No commit and no marker is never read as unborn, and a stated marker is never overwritten.
+    expect(isCodingRuntimeGitResult(normalizePersistedCodingRuntimeGitResult(body))).toBe(false);
+    const unborn = { ...body, head: "unborn" };
+    expect(normalizePersistedCodingRuntimeGitResult(unborn)).toBe(unborn);
+    expect(normalizePersistedCodingRuntimeGitResult({ kind: "diff" })).toEqual({ kind: "diff" });
+    expect(normalizePersistedCodingRuntimeGitResult("x")).toBe("x");
+    // A malformed sha still fails after normalization.
+    expect(
+      isCodingRuntimeGitResult(
+        normalizePersistedCodingRuntimeGitResult({ ...body, headSha: "not-a-sha" }),
+      ),
+    ).toBe(false);
   });
 });

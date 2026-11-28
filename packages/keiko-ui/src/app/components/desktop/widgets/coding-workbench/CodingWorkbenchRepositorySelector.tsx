@@ -20,7 +20,8 @@ import {
   type RepositoryBranchState,
 } from "../../hooks/useRepositoryBranchState";
 import { selectableRepositories } from "./codingWorkbenchRepositories";
-import { locallyAvailable } from "./codingWorkbenchRepositoryAvailability";
+import { locallyAvailable, needsReconnect } from "./codingWorkbenchRepositoryAvailability";
+import { useRepositoryReconnect, type ReconnectOrigin } from "./useRepositoryReconnect";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -107,18 +108,30 @@ interface RepositoryOption {
   readonly badge?: string;
 }
 
+// U-16: a folder that exists but changed since it was added stays enabled — choosing it reconnects
+// it. A folder that is gone, or that the read surface refuses, is disabled with its plain badge.
+function registeredOption(
+  project: ProjectWithAvailability,
+  t: CodingWorkbenchTranslate,
+): RepositoryOption {
+  const base = {
+    value: project.path,
+    label: project.name || repositoryName(project.path),
+    description: project.path,
+  };
+  if (locallyAvailable(project)) return base;
+  if (needsReconnect(project)) {
+    return { ...base, description: t("codingWorkbench.repository.changedReason") };
+  }
+  return { ...base, disabled: true, badge: t("codingWorkbench.repository.unavailable") };
+}
+
 function repositoryOptions(
   catalog: CatalogState,
   root: string | null,
   t: CodingWorkbenchTranslate,
 ): readonly RepositoryOption[] {
-  const registered = catalog.repositories.map((project) => ({
-    value: project.path,
-    label: project.name || repositoryName(project.path),
-    description: project.path,
-    disabled: !locallyAvailable(project),
-    ...(!locallyAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
-  }));
+  const registered = catalog.repositories.map((project) => registeredOption(project, t));
   if (root === null || registered.some((project) => project.value === root)) return registered;
   return [
     {
@@ -153,6 +166,7 @@ function chipTrigger(
 function RepositoryChip({
   root,
   locked,
+  busy,
   catalog,
   onSelect,
   t,
@@ -160,6 +174,7 @@ function RepositoryChip({
 }: {
   readonly root: string | null;
   readonly locked: boolean;
+  readonly busy: boolean;
   readonly catalog: CatalogState;
   readonly onSelect: (root: string) => void;
   readonly t: CodingWorkbenchTranslate;
@@ -176,6 +191,7 @@ function RepositoryChip({
       sections={[{ options }]}
       onValueChange={onSelect}
       onOpen={catalog.reload}
+      busy={busy}
       disabled={locked || (catalog.loading && options.length === 0) || catalog.error}
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
@@ -311,6 +327,15 @@ function LocationChip({
       menuPlacement="up"
     />
   );
+}
+
+// A registered folder that still exists but whose workspace connection no longer matches the
+// directory behind it (a repository deleted and cloned again at the same path): the person can
+// reconnect it in one step, so the notice offers that instead of only naming the problem.
+function repositoryReconnectable(root: string | null, catalog: CatalogState): boolean {
+  if (root === null || catalog.loading || catalog.error) return false;
+  const selected = catalog.repositories.find((project) => project.path === root);
+  return selected !== undefined && selected.available && selected.workspaceAvailable === false;
 }
 
 function repositoryUnavailable(root: string | null, catalog: CatalogState): boolean {
@@ -551,6 +576,15 @@ interface RepositorySelectorState {
   readonly folderMode: boolean;
   // #4068: ...unless the runtime confines no work in place.
   readonly folderUnsupported: boolean;
+  readonly reconnectable: boolean;
+  // U-16: choosing a changed folder reconnects it first; the failure stays visible.
+  readonly choose: (root: string) => void;
+  readonly reconnectFailed: boolean;
+  readonly reconnectFailedFrom: ReconnectOrigin | null;
+  // The Reconnect button: reconnects the selected folder and tells the window, never re-selects it.
+  readonly reconnectSelected: (root: string) => void;
+  // U-44: a reconnect is running; the repository field stays locked until it lands.
+  readonly reconnecting: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
@@ -563,8 +597,16 @@ function useRepositorySelectorState(
     offeredLocations: offered,
     catalogRefreshKey,
   }: Pick<CodingWorkbenchRepositorySelectorProps, "offeredLocations" | "catalogRefreshKey">,
+  onSelect: (root: string) => void,
+  onReconnected: (() => void) | undefined,
 ): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog(catalogRefreshKey);
+  const reconnect = useRepositoryReconnect(
+    catalog.repositories,
+    catalog.reload,
+    onSelect,
+    onReconnected,
+  );
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
@@ -581,6 +623,12 @@ function useRepositorySelectorState(
     branchDenied,
     folderMode,
     folderUnsupported,
+    reconnectable: repositoryReconnectable(root, catalog),
+    choose: reconnect.choose,
+    reconnectSelected: reconnect.reconnectSelected,
+    reconnectFailed: reconnect.failed,
+    reconnectFailedFrom: reconnect.failedFrom,
+    reconnecting: reconnect.reconnecting,
   };
 }
 
@@ -598,6 +646,8 @@ interface CodingWorkbenchRepositorySelectorProps {
   readonly placement?: SelectorPlacement;
   /** A change reloads the repository catalog (the folder's workspace availability moved). */
   readonly catalogRefreshKey?: string | undefined;
+  /** The person reconnected the selected repository: the window binds it again. */
+  readonly onReconnected?: (() => void) | undefined;
 }
 
 function LocationSelectorField({
@@ -661,7 +711,69 @@ function BranchSelectorField({
   );
 }
 
+// One click re-connects the registered folder through the shared reconnect hook (the same route the
+// Git window uses): the connection is proven afresh by the server, never assumed. The hook owns the
+// deadline, the diagnostics and the failure notice; a refusal says so in plain words.
+function ReconnectAction({
+  root,
+  state,
+  t,
+}: {
+  readonly root: string;
+  readonly state: RepositorySelectorState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      className={styles.cmpRepositorySelectorGit}
+      disabled={state.reconnecting}
+      onClick={() => {
+        state.reconnectSelected(root);
+      }}
+      data-testid="coding-workbench-reconnect"
+    >
+      {t("codingWorkbench.repository.reconnect")}
+    </button>
+  );
+}
+
 function SelectorRecoveryForState({
+  root,
+  state,
+  placement,
+  onOpenGit,
+  t,
+}: {
+  readonly root: string | null;
+  readonly state: RepositorySelectorState;
+  readonly placement: SelectorPlacement;
+  readonly onOpenGit: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      <SelectorRecoveryNotice
+        root={root}
+        state={state}
+        placement={placement}
+        onOpenGit={onOpenGit}
+        t={t}
+      />
+      {root !== null && state.reconnectable ? (
+        <ReconnectAction root={root} state={state} t={t} />
+      ) : null}
+      <ReconnectNotice
+        failed={state.reconnectFailed}
+        reconnecting={state.reconnecting}
+        failedFrom={state.reconnectFailedFrom}
+        t={t}
+      />
+    </>
+  );
+}
+
+function SelectorRecoveryNotice({
   root,
   state,
   placement,
@@ -694,14 +806,14 @@ function SelectorRecoveryForState({
 function RepositorySelectorField({
   root,
   locked,
-  catalog,
+  state,
   onSelect,
   placement,
   t,
 }: {
   readonly root: string | null;
   readonly locked: boolean;
-  readonly catalog: CatalogState;
+  readonly state: RepositorySelectorState;
   readonly onSelect: (root: string) => void;
   readonly placement: SelectorPlacement;
   readonly t: CodingWorkbenchTranslate;
@@ -711,13 +823,54 @@ function RepositorySelectorField({
       <RepositoryChip
         root={root}
         locked={locked}
-        catalog={catalog}
+        busy={state.reconnecting}
+        catalog={state.catalog}
         onSelect={onSelect}
         t={t}
         placement={placement}
       />
     </SelectorField>
   );
+}
+
+function ReconnectNotice({
+  failed,
+  reconnecting,
+  failedFrom,
+  t,
+}: {
+  readonly failed: boolean;
+  readonly reconnecting: boolean;
+  // The failure names the Git route only when the Reconnect button started the attempt.
+  readonly failedFrom: ReconnectOrigin | null;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  // The status region stays mounted and empty, so a screen reader announces the text swapped in.
+  return (
+    <>
+      <output className={styles.cmpRepositorySelectorNotice}>
+        {reconnecting ? t("codingWorkbench.repository.reconnecting") : null}
+      </output>
+      {failed ? (
+        <p className={styles.cmpRepositorySelectorNotice} role="alert">
+          {t(
+            failedFrom === "button"
+              ? "codingWorkbench.repository.reconnectFailed"
+              : "codingWorkbench.repository.reconnectChoiceFailed",
+          )}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+// The location follows the repository: it waits for a reconnect, and an ordinary folder has none.
+function locationLocked(
+  locked: boolean,
+  root: string | null,
+  state: RepositorySelectorState,
+): boolean {
+  return locked || state.reconnecting || root === null || state.folderMode;
 }
 
 export function CodingWorkbenchRepositorySelector({
@@ -731,21 +884,21 @@ export function CodingWorkbenchRepositorySelector({
   ...work
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const state = useRepositorySelectorState(root, locked, work);
+  const state = useRepositorySelectorState(root, locked, work, onSelect, work.onReconnected);
   return (
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField
         root={root}
         locked={locked}
-        catalog={state.catalog}
-        onSelect={onSelect}
+        state={state}
+        onSelect={state.choose}
         t={t}
         placement={placement}
       />
       <LocationSelectorField
         location={state.folderMode ? "local" : work.location}
         offered={work.offeredLocations}
-        locked={locked || root === null || state.folderMode}
+        locked={locationLocked(locked, root, state)}
         onSelect={work.onSelectLocation}
         t={t}
         placement={placement}
@@ -753,7 +906,7 @@ export function CodingWorkbenchRepositorySelector({
       <BranchSelectorField
         root={root}
         branch={branch}
-        locked={state.branchLocked}
+        locked={state.branchLocked || state.reconnecting}
         state={state.branchState}
         onSelect={onSelectBranch}
         t={t}

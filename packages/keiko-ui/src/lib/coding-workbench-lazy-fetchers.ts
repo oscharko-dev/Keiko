@@ -817,7 +817,7 @@ export async function fetchGitStatus(
   if (options?.includeIgnored === true) params.set("includeIgnored", "true");
   return fetchJson(
     `/api/git/status?${params.toString()}`,
-    undefined,
+    options?.signal === undefined ? undefined : { signal: options.signal },
     validateGitRepositoryStatusResponse,
     options?.correlationId,
   );
@@ -832,7 +832,7 @@ export async function fetchGitSummary(
   params.set("root", root);
   return fetchJson(
     `/api/git/summary?${params.toString()}`,
-    undefined,
+    options?.signal === undefined ? undefined : { signal: options.signal },
     validateGitRepositorySummary,
     options?.correlationId,
   );

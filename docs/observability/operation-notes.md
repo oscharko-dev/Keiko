@@ -658,6 +658,22 @@ operation and the serialized mutation correlation.
 failure emits WARN with the existing closed `errorKind` header and bounded `errorClass`, `frames`
 and `causeChain`; the other reasons emit INFO. Inspection evidence remains body-free.
 
+## Bounded git reads
+
+`git.status.bounded` records a git read the byte cap ended or that stopped early, with counts and a closed `surface` only: `shownRecordCount`, `partialRecordDropped` and `maxBytes`. The `history` surface (the Git window History tab) writes a line only when a page ends early, either because the cap cut its last record (dropped, never counted short) or because a record could not be read; the optional `unreadableRecordCount` then holds the records left unread, and the page is reported `truncated` so the UI continuation stays exact. A whole, readable page writes nothing.
+
+## Governed commit signing decision
+
+`git.verified-commit` (its `result` line) and `git.delivery.mutation.completed` carry the optional closed field `signing` for a commit execution, so a "why was this commit unsigned" or "why did signing fail" question is answered from the log without any configuration text. `configured` means Git's effective `commit.gpgsign` (a Git boolean, read through the commit's own identity lane across system, global, repository and included scopes) was true and the commit was signed with `--gpg-sign` or `-S`. `required-by-branch-protection` means `commit.gpgsign` was not true but the trusted branch-protection read for the target branch said signatures are required, so the commit was signed all the same. A signer that then fails is `failed` / `signing-failed`, never an unsigned fallback. `not-configured` means the value was unset or false and signing was not required: the commit was made exactly as Git would make it, unsigned, with neither `--gpg-sign` nor `--no-gpg-sign`. `not-configured-protection-unavailable` is the same unsigned commit when the branch-protection read could not answer (unreachable, unauthenticated or no remote): unknown is never treated as required, and a protected branch that requires signatures still rejects the commit at push. `unknown-fail-closed` means the value could not be read, so the commit attempted to sign and any failure stays visible; the same lines then carry `signingReadFailure` (`timeout`, `cancelled`, `denied`, `spawn`, `truncated`, `exit`, `malformed`), and a `git.delivery.mutation.failed` line with `phaseReached: signing-read` carries the same class with `frames` and `causeChain`. Both fields are absent on lines that are not a finished commit execution, and on a verified commit refused for contradictory operands before any Git process started, where no signing decision was made (ADR-0006, #4491).
+
+## Governed index transaction cleanup
+
+`git.index-transaction.cleanup-incomplete` is written once when a governed Git index transaction (`caller` `stage`, `unstage` or `turn-index-restore`), the branch ref locks or the HEAD lock of an unborn branch creation (`branch-ref-lock`), or the merge-state removal after a bound commit (`commit-state`) finished but its cleanup could not remove everything. It is never written for a clean cleanup. The transaction's own result is already settled and is never replaced by the cleanup: every step (each quarantine directory, the private index copy, Git's lock, the lock's descriptor, each ref lock, each created ref directory) is its own guarded step, so one transient sharing violation (Windows `EBUSY` or `EPERM`) never skips another and never leaves `index.lock` behind because a quarantine could not be removed. The line carries counts and flags only: `quarantineFailures`, `temporaryIndexLeft` (also set when the gitdir was no longer the locked one, so the private copy could not be removed), `lockLeft` (the lock file stayed, or could not be proved to be this transaction's own and was therefore left alone; the next index write is blocked until it is removed), `descriptorFailures` (a lock descriptor that could not be closed, distinct from the lock file), `refLockFailures`, `directoryFailures` and `stateFileFailures` (`MERGE_MSG`, `MERGE_MODE` or `SQUASH_MSG` that a successful bound commit could not remove, as `git commit` removes them; the commit's success stands). It carries the mutation's `correlationId` when the caller has one (stage, unstage and ref locks); the turn-index undo has none and uses `UNKNOWN_CORRELATION_ID`. A report port that throws or is absent surfaces as the Node process warning `KEIKO_GIT_CLEANUP_UNREPORTED` instead of replacing the result (#4491).
+
+## Undo and Restore changes: files and index
+
+`coding-runtime.revert.applied` and `coding-runtime.revert.refused` record an Undo and a Restore changes of the newest turn. The runtime's own file writes (`session.revert.stage` for an Undo, `session.revert.clear` for a Restore) run under a guard (`opencodeRevertGuard.ts`) inside a native-write gate (`nativeWriteGate.ts`). Keiko cannot make those writes conditional and never writes a version of a person's file back into the workspace, so it orders and checks instead. Every write a person makes through Keiko waits for a runtime write in flight and lands right after it, so the person's edit wins: the Files/Editor save, rename, delete, create and copy (`files.ts`), the patch apply (`patchApplyRoutes.ts`) and the search-and-replace apply (`workspaceSearchRoutes.ts`). The Editor agent changeset commit (`agentRoutes.ts`, reachable through `handleEditorAgentActions`), the Git pull (`gitDelivery/syncExecution.ts`; a fetch touches no worktree file) and the Local checkout's branch switch (`task-workspace/local-checkout.ts`) rewrite the worktree too. The pull waits in the gate like the rest; the changeset commit and the branch switch write synchronously and cannot wait, so while a runtime revert write of the workspace is queued or running they refuse instead (the changeset answers `failed` with the retry sentence, the switch `BRANCH_CONFLICT`; each writes `coding-runtime.revert.refused`, `operation: write`, `reason: write-gate-busy`) and, being synchronous, cannot start beside one that begins afterwards. The model's own branch tool (`runtimeGitBranch`) is not a person's write and never runs beside an Undo, which stops the turn first. Two writes are ordered when their roots are the same folder or one contains the other (roots are real paths, lowercased on macOS and Windows), a person's write loops until no related runtime write is queued or running, and both waits are bounded (30 s each) and fail closed: a person's write that waited that long does not run (`HumanWriteGateTimeoutError`; the routes answer 409 `BUSY` with "A Coding run is still writing these files. Try again in a moment." and `coding-runtime.revert.refused` records `operation: write`, `reason: write-gate-timeout` and the wait as `waitBucketMs`, under the request's correlation id or the unknown-correlation id; the Git pull answers `git-error` because the sync outcome vocabulary is a wire contract, and the refusal's reason is on that line); a runtime write that waited that long for a person's write sends nothing and fails as `revert-failed` with `errorKind: timeout`. The guard proves the files byte-for-byte as the last step before the request (a file not as proven refuses with `workspace-changed`, nothing is sent, the index returns to the undone state), then reads them once more and settles from the files alone, with no watching. Restore: the files equal the turn's content, so it is applied (a lost answer reports `settlement: response-lost` on `coding-runtime.revert.applied` and the index is finished with it); they equal the proven undone state and the request threw a proven refusal, so it is a failure; an answered request that left them at the proven state wrote nothing and is `uncertain` (`unexpected-content`), never applied; otherwise (`revert-failed`, the undo stays staged, the index returns); anything else is uncertain. Undo: the expected result is known per file where the runtime or the turn says it (`absent` for a file the stage reports as added, else the contents the turn's first native edit of the file found, read when that edit was admitted); a file that does not match is uncertain, and a request that threw is uncertain unless it is proven not applied (the runtime refused it with 400, 401, 403, 404, 409, 410, 412, 415 or 422, or the connection was refused before anything was sent; 408, 429 and other statuses that can arrive mid-processing do not count): a timeout, abort, reset or server error may have happened after the runtime began writing, so unchanged files are not proof, and the stage request counts as sent (a later "not applied" settle clears the runtime's own revert first). A clear the runtime refuses with a client error means it held nothing staged and ends the record. The witness a later Restore proves is what the guard read inside the gate for a file with an expectation or one the stage left untouched; a changed file nothing covers (a file only a shell command changed, or one the stage reply names that the proof before the request did not cover) stays `unverifiable`, so a later Restore refuses it rather than writing the turn's content over what may be a person's edit. Uncertain ends as `coding-runtime.revert.refused` with reason `outcome-uncertain` and the closed `uncertainReason` (`unexpected-content`, `partial-write`, `call-failed-unknown`, `unreadable`). It is never a dead end: the record claims nothing (`revertState` reports it as nothing staged) and keeps a Restore's index moves; the person's next Undo or Restore reads the files again and settles it (files show the turn's content: applied; files show the state before the write: back to an ordinary staged undo with the index rolled back, or ended for an Undo, after the runtime's own staged revert is cleared explicitly when the stage request had been answered, logged as a `coding-runtime.revert.applied` line with `action: cleared`; neither: `workspace-changed`, nothing written); a turn that is admitted (after the agent selection that can refuse it) first reads the files again: a record they settle becomes an ordinary staged undo again (and then blocks the turn like any staged undo); only a record they cannot settle ends as it is, without touching files, logged as operation `submit`, reason `outcome-uncertain`, with the turn's id as correlation id. An uncertain record does not block a turn by itself. An Undo or a Restore asked while the files still settle nothing answers `outcome-uncertain`. A rename, delete or copy proves its entry again, kind included, inside the gate, because the plan was made before the wait. The undo window's end does the same and never commits an uncertain record blindly; a record it cannot settle is not kept (the window closes and the run ends): `commitStagedRevert` answers `unsettled`, and `coding-runtime.undo-window` records `stagedRevert: unsettled` at warn together with a `commit` refusal. Residual: the gate orders only writes made through Keiko. An edit by a program Keiko does not control (an external editor) inside the one HTTP round trip between the proof and the runtime's write is overwritten, and for an Undo of a file with no expectation it is not taken as the stage (the witness stays unverifiable); only a conditional write in the runtime closes the round trip itself. A file the shell changed before the turn's native edit of it can read as a mismatch and end uncertain. A native call that hangs holds the gate for related runtime writes until it settles or their wait runs out, and a person's write queued behind it is refused with the retry sentence once its wait runs out. The index part of a Restore that cannot finish is rolled back; a rollback that is refused (a person restaged a path) or fails leaves the retained index outcome at `changed-after-turn` or `unavailable`, is logged as `coding-runtime.revert.refused` (operation `restore`, the request's `correlationId`), and drops the retained index moves so a later Restore still brings the files back without the index part, and that later Restore's `coding-runtime.revert.applied` line carries the kept `indexOutcome` (`changed-after-turn` or `unavailable`) instead of none. A transient rollback failure (a busy `index.lock`) is retried once after a short pause before the moves are dropped. An index move (Undo or Restore) never removes a staged entry that is not part of its plan: a planned path that would share its place with a person's staged entry outside the plan (a file where they staged something below the same name, or something below the name of a file they staged) is drift and answers `changed-after-turn`; the check runs before the private index copy is changed and again on the finished copy, so the copy is never promoted over such an entry (#4491).
+
 ## Commit drafts and stream recovery
 
 **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
@@ -705,9 +721,10 @@ run's messages from the newest end and only as far as the feed can still hold th
 older is named for the transcript by position and never examined. `cutCount` counts timeline
 messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
-truncated.". Counts only — never a message, path or run name. An explicit Stop or takeover keeps the
-run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
-with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
+truncated.". Counts only — never a message, path or run name. A run that ends keeps its live tool rows, as OpenCode does: `coding-runtime.safe-activity` records
+`event=interrupted` with the closed `reason` (`stop`, `takeover`, or `run-ended` for every other
+terminal state: failed, succeeded, budget or time exhausted) and the number of open calls it settled
+as `cancelled` (#3907, #4491).
 
 A model's answer is never cut to fit the bounded safe-activity feed (owner decision "Work-ending
 limits"). The projection keeps the complete text of every assistant answer the feed lists beside the
@@ -774,13 +791,33 @@ told apart by a digest held in memory only. A verification or Git step keeps its
 operations and has no failure origin. `keiko support analyze` therefore shows a run's pattern, for
 example twelve command failures and no Keiko refusal.
 
+`coding-runtime.native-policy.decided` records each native policy decision under the run's id. Besides
+the `permission` class the runtime asked about (an `edit` permission covers edit, write and patch;
+`shell` is the command tool), the line carries the closed `toolKind` (O-13): `read`, `glob`, `grep`,
+`list`, `edit`, `bash`, `webfetch`, `websearch`, `skill`, `task`, `question`, `todo`, `program` (a
+Code Mode program), `schedule`, `session`, `worktree`, `mcp` or `other`. It is derived from the
+evaluated permission (an MCP tool by its classification), never from a path, command or argument, so
+a log tells a command from a file edit or a scheduled-task change without any body.
+
+`coding-runtime.tool-output.shortened` records one line per tool call whose result the runtime kept
+only the start of for the model (its `tool_output` cap, 51,200 bytes and 2,000 lines, protects the
+context window), under the run's id. The line carries the tool's closed class, the bytes the model
+kept (`keptBytes`), the lines kept and the lines the whole output had (`keptLines`, `totalLines`,
+absent when the runtime stated none; the original byte size is not reported) and the run's running
+count. The runtime saves the whole output in its tool-output directory in the run's private home,
+which the native policy admits for reads only; neither that path, the output nor the command ever
+reaches the log. The Workbench row carries the same counts as an "output shortened" marker. Keiko's
+own governed tools bound their results themselves and state `truncated: false`, so they never write
+this line.
+
 `coding-runtime.history` also records a refused history request as `event=refused` under the
 request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or
 `invalid-request` (400). A status or title update checks that the task exists without reading its
 messages, so completing a task records `updated` alone. A run that moved onto a task branch of its
 own (`keiko_git_branch`) moves its task with it, recorded as `updated` with `branchChanged` under the
 run's correlation id and never the branch name; a failure there records `failed` and leaves the
-branch move standing (#4491). Removing a project that still holds Coding
+branch move standing (#4491). The branch name reaches only the authenticated in-memory approval
+review channel (hash-bound to the approval digest), never the Activity Log. Removing a project that still holds Coding
 tasks is refused with `PROJECT_HAS_CODING_TASKS` and deletes nothing, because a removed project
 would take its Coding tasks with it. A scheduled wake continues only a task that is still active;
 for a completed task it keeps waiting (#4491).
@@ -854,7 +891,8 @@ repository or workspace that was not activated (`history-repository-switched`,
 a new task instead of following a settled run of another task (`history-run-held`, once per pick;
 #4271), a run that needed recovery left with New task (`recovery-left`, once per departure; F30), the starting repository of a window without a stored one, decided only after the
 task-workspace state answered (`repository-seeded` from the shell's project or
-`repository-seed-skipped` for an active task binding, once per window; #4271; `repository-returned` when the Git window hands a just-added folder back to the window that asked for it, #4371) and a refused editor
+`repository-seed-skipped` for an active task binding, once per window; #4271; `repository-returned` when the Git window hands a just-added folder back to the window that asked for it, #4371; `repository-reconnected` when choosing a repository whose folder changed reconnected and selected it in one step, U-44), a workspace activation the Workbench requests on its own
+(`runtime-readiness-retry` with the closed `readinessRetryOutcome` `started`, `recovered` or `exhausted` and the `attempt` count, under one correlation id per failure streak: a failed runtime readiness read is read again after 2 s, 8 s and 30 s, and a readiness answer anchored to a live run is read again once that run is no longer active; U-37), (`workspace-activation-requested` with the closed `activationTrigger` `window-selection`, `window-pinned`, `shell-seed` or `active-follow`, under the request's correlation; U-3. A Workbench window that only followed the active workspace and itself started or continued a run pins the repository that run works in (`repositoryPinned` in its persisted configuration, kept across a reload; layouts saved without it still load), so after the run it stays on that repository instead of following the active workspace again until an explicit selection replaces it. A pin is not a selection: it holds only while it is the active repository or none is active, and once another window moves the active workspace elsewhere the window follows it instead of binding its pin back. A window never pins the run of another window; a window never binds anything while its run state is unread, and the shell's seed never overrides an active workspace. A server selection of the workspace that is already active logs `task-workspace.lifecycle` `activate` with the outcome `unchanged` and ends no undo window) and a refused editor
 bridge registration
 (`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
 refused request's correlation and the run as parent; #4117) and a diff that switched to the
@@ -871,8 +909,8 @@ ended without a passing check after its last change records why, on `coding-runt
 `verificationGap` (`no-check-run`, `check-failed`, `check-not-started`, `budget-exhausted`; #4491) with
 `errorKind=validation-failed` unless a check was blocked, and why no
 continuation ran on `coding-runtime.run.verification-continuation` as `state: skipped` with the closed `skipReason`
-(`docs-only`, `no-failed-check`, `blocked`, `budget-exhausted`, `already-continued`); the one continuation that does
-run records `state: continued` with the failed `check` and its `failedCount`, never a path or output. What a delivery card showed is `delivery-step-shown` with the closed
+(`docs-only`, `no-failed-check`, `blocked`, `budget-exhausted`, `already-continued`, `target-unproven`); the one continuation that does
+run records `state: continued` with the failed `check`, its `failedCount` and never a path or output. The continuation is a write phase with the run's editable tools and the server cannot narrow what the model changes in it, so it starts only for a check the run itself broke: the same check target passed earlier in the run and fails after a later code edit. A red check that never passed in the run (`target-unproven`) is not repaired automatically; the run settles with its gap and the person decides (U-38, #4491 review). The continuation task still scopes the repair to the person's work, as model steering only; when the run still ends with that check red and no code change after it, `coding-runtime.run.settled` adds the closed `verificationGapDetail: unchanged-after-continuation` beside `verificationGap: check-failed`. What a delivery card showed is `delivery-step-shown` with the closed
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;
@@ -902,6 +940,30 @@ failures (its routes could not be set up, the runtime could not be created). A r
 its step on the `coding-runtime.exit` diagnostic, for example `supervisor-no-desktop` (started from
 an SSH or service session); the refusal words are one per supervisor error code and
 `nativeRuntimeProcessTree.refusal-codes.test.ts` fails when a code lacks its own.
+
+A runtime Git `status` reads the repository once: its facts and its answer come from the same raw
+scan. `git.raw-status.conversion-settled` (and `.conversion-failed`) additionally carry `listingMs`,
+`scanMs`, `settleMs` and `gitSpawnCount`: where the scan's time went and how many Git processes the
+operation had started by the settlement. The promisor probe that guards every read runs once per
+operation (a read session), not once per read. `git.runtime-action` names a read that ended under the
+run as `deadline-exceeded` (the tool's own budget), `signal-aborted` (a Stop while authority held) or
+`authority-revoked` (authority lapsed); the model-facing refusal stays `authority-revoked`.
+
+Every runtime Git action, and every governed Git mutation, runs in one read session of its own, so a
+tool call costs the processes it needs and nothing else (Windows pays 70 to 130 ms for each).
+`git.runtime-action` carries `gitSpawnCount` and `durationMs` for a call that started a Git process,
+`git.verified-commit` carries `gitSpawnCount` on its `result` line, and `git.delivery.mutation.completed`
+carries both: the processes the action's scope started (its snapshot read, its preflight and every
+governed step) and its wall time. A proposal reads the repository once and its redemption reads it
+again before anything is written; a task branch asks Git for `refs/heads/<name>` with one
+`rev-parse --verify`; the commit signing decision reads the branch the same mutation's preflight snapshot reported
+(the adapter binds the commit to the verified head and branch, so no other branch can receive it) and
+one fresh `git remote`. The session ends with the call, so a promisor verdict never authorizes a later one.
+
+A stage refused as `unsupported-transformation` carries `stageCause` on its `git.runtime-action`
+line: one closed word (`config-unsupported`, `filter-driver`, `attribute-filter`,
+`attribute-encoding`, `attribute-ident`, `attribute-line-ending`, `attribute-unreadable` or
+`content-conversion`) that names which check refused, never a path, an attribute value or a setting.
 
 ## Coding Workbench request deadlines, Editor and window binding
 
@@ -983,6 +1045,84 @@ when it resolves outside the install's folder), `pathPrefixed` and `placement` (
 `inside-execution-root` for a folder the step may modify, which is never used). Closed values only:
 never a path.
 
+The `editor.verification.execute` completion line splits the Windows part of `probeDurationMs`
+(#4491): `supervisorAttestationMs` is the supervisor's size and digest check and `stepNodeAttestationMs`
+the step Node.js's digest, both read per verification and never remembered (Windows only);
+`stepCopyCleanupMs` and `stepCopyCleanupRetryCount` are the removal of the run's private step copy
+after the last step, inside the exclusive workspace scope, and how many times that removal was
+retried. All four are whole milliseconds or a count, omitted when the run did not measure them.
+
+### Approved package scripts bind the verification effect (#4491)
+
+A script step of a verification run is bound to the package scripts the person approved. The plan
+carries the digest of the package's whole script table (pre and post scripts included); the effect
+re-proves it after the exclusive workspace queue and the dependency bootstrap, per step, and again
+once the step ended (a nested package-manager call may have read a changed file; the step is then
+`denied`, never reported as the approved scripts' outcome). A run that must be approved and arrives
+without the digest refuses its script steps (`approval-missing`).
+
+On macOS and Linux the effect does not start `npm run`, which would read `package.json` again in a
+process of its own. It reads the manifest once and runs the bytes of that read through `/bin/sh -c`,
+in npm's order (`pre<name>`, `<name>`, `post<name>`; only `<name>` under `ignore-scripts=true`), with
+PATH prefixed by every `node_modules/.bin` from the package folder up to the workspace root and the
+`NODE`, `npm_lifecycle_*`, `npm_package_*`, `npm_node_execpath`, `npm_execpath` and `INIT_CWD`
+values npm sets (`npm_config_user_agent` is not set: it needs the npm version and the person's user
+config). The step still reports `npm`, its arguments and its own status; the egress sandbox and the
+workspace boundary are the ones the npm step runs under. A script with a NUL character or beyond
+64 KiB (256 KiB in all) is refused before the spawn. Whether yarn or pnpm run a script's pre
+and post scripts is read from the root `packageManager` field and the manager's own setting. Yarn
+Berry (2 and later) runs none and yarn classic runs them. pnpm runs them unless
+`enablePrePostScripts` is false (documented default: true, pnpm.io/settings): an explicit `false`
+(`pnpm-workspace.yaml`, `package.json#pnpm` or the `.npmrc` key `enable-pre-post-scripts`) runs main
+only, an explicit `true` runs pre, main and post in npm order, and with no setting pnpm 8 and later
+run the pair. With no setting, pnpm 7 (whose default changed around then and is not verified here),
+an older pnpm or an absent or unknown version with a pre or post script is `lifecycle-order-unknown`.
+`NODE`, `npm_node_execpath` and `npm_execpath` name host paths and are set
+only when the step runs on the host, never inside a container. The unit-test and bug-investigation
+workflows bind their `test` script step the same way, from the read that built their plan. Yarn
+Berry and pnpm scripts run
+through `/bin/sh`, not through yarn's portable shell or pnpm's own runner, and the package manager is
+never invoked, so a setting that only changes the manager (such as `yarnPath`) cannot change which
+bytes run. The digest is re-proved after every step too, and that denial is kept in bound mode: a
+script that rewrites its own `package.json`, or a nested `npm run other` that re-reads a changed one,
+is denied after it ran, because its outcome is not the approved scripts' outcome. Every server
+execution requires the digest (`executeVerificationEnforced` always sets `requireApprovedScripts`, the
+run engine derives the digest at plan time); only `keiko verify` on the CLI, a direct user action on
+the person's own folder, runs scripts without it. A Windows step that runs in a Linux container (Docker or Podman) binds the same way, because
+the container has `sh`; only the Windows AppContainer keeps running the package manager against the
+run's private step copy, re-proving the digest before and after each step. The unit-test and
+bug-investigation workflows pass no Windows step supervisor (they never did), so on Windows they run
+only where a container runtime answers, and are denied as isolation unavailable otherwise. `enablePrePostScripts` is read from `pnpm-workspace.yaml` and
+`package.json#pnpm` (top-level keys only), and a value that is not a boolean is refused. The root manifest is read once for both its `packageManager` and its `pnpm` key.
+
+`editor.verification.script-binding` (new operation, #4491) records one line per script step, on the
+run's correlation id, written as the effect decides each step (a run that is cancelled or fails later
+has still logged the refusals it reached; nothing is capped or dropped): `outcome` (closed) and
+`scriptStepOrdinal` (the 0-based ordinal among the run's script steps, not the plan step index). `outcome` is `bound` (Keiko ran the
+approved bytes), `fenced-windows` (package manager on the private step copy, under the digest
+fence), `scripts-changed` (the scripts differ from the approval, before or during the step) or
+`refused:<reason>`. `scripts-changed` and every `refused:` outcome are the diagnostic facts. A
+refused or changed step is also a `denied` result in the persisted, body-free report whose detail
+is `scripts could not be bound to the approved bytes: <reason>. <one plain sentence and next step>`
+or `scripts changed after approval: ...`. The reasons are `script-shell-configured`,
+`ignore-scripts-configured` (a value that is not a boolean, or any `ignore-scripts` for yarn or
+pnpm), `package-manager-configuration` (`scripts-prepend-node-path`, `enable-pre-post-scripts`,
+`enableScripts`, a `node-linker` value the manager cannot run from node_modules, or an unreadable rc
+file), `lifecycle-order-unknown` (yarn or pnpm
+with a pre or post script), `package-config-unsupported`, `script-not-runnable`,
+`yarn-pnp-unsupported` (a `.pnp.cjs`, `.pnp.js` or `.pnp.loader.mjs`, or `node-linker` / `nodeLinker`
+set to `pnp`) and `approval-missing` and `windows-step-copy-missing` (a Windows step without the run's private step copy is refused: the fence would otherwise read the live folder). `node-linker` is read per manager: npm ignores it; yarn accepts
+`node-modules`; pnpm accepts `isolated` and `hoisted`.
+
+Only the project's own files are read, and never the person's home `.npmrc`. For npm that is the
+`.npmrc` of the package folder, as npm reads with that folder as its prefix (the workspace root's
+when the root is the package), and keys inside an ini `[section]` are not top-level configuration
+and are ignored, as npm's ini reader treats them. For yarn and pnpm the `.npmrc`, `.yarnrc` and
+`.yarnrc.yml` of the workspace root and the package folder are read, with yarn's camelCase keys
+(`scriptShell`, `enableScripts`, `nodeLinker`) matched in their kebab form. `ignore-scripts=true` of
+that `.npmrc` (the package folder's wins) or of `package.json` `config` is reproduced for npm as npm
+documents it: the named script still runs, without its pre and post scripts.
+
 ## Gateway readiness, model activation and the tool-calling check
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
@@ -1003,12 +1143,15 @@ Keiko lists every model a gateway offers through metadata requests, which cost n
 an inference request only to a model a person activated (#4351, owner decision 2026-11-13; manual
 activation, product decision 2026-11-16): a check loads the model, which on a shared gateway evicts
 a model somebody else is using. Startup checks no chat model and starts no tool-calling proof; every
-chat model is inactive in each server process until the person activates it in Settings > Models
-(per model or "Activate all"), and that activation is its readiness check. Replacing a connection
-deactivates it, and the person can deactivate an activated model there again (Deactivate,
+chat model is inactive until the person activates it in Settings > Models and then stays activated across restarts until a product update or a changed connection (owner decision 2026-11-28; `gateway.activation.persistence` records the restored count and the count discarded per closed reason, body-free)
+(per model or "Activate all"), and that activation is its readiness check. Saving the configuration again deactivates only the models whose connection or credential
+changed or that were removed (`gateway.activation.persistence`, reason `configuration-changed`, with a count), and the person can deactivate an activated model there again (Deactivate,
 `POST /api/gateway/readiness/deactivation`): that sends nothing to the provider, the model leaves the
 Chat picker and is refused until it is activated anew, and a deactivation while that model's check
-still runs is refused (`gateway.readiness.deactivation` records the closed outcome). Only activated models are offered by the Chat picker and elected as an automatic
+still runs is refused (`gateway.readiness.deactivation` records the closed outcome: `deactivated`, `not-activated`, `check-running`,
+`unknown-model`, `bad-request`, or `record-failed`). `record-failed` means the process deactivated the model but the activation record could not be rewritten; the route answers
+500 `RECORD_FAILED`, the record is withdrawn whole so the model cannot come back at a restart, and a repeated Deactivate retries it. The discard reasons of `gateway.activation.persistence` are `first-start`, `unreadable`,
+`format-changed` (a record of an older file format, never migrated), `foreign-installation`, `product-changed`, `configuration-changed`, `credential-changed`, `deactivated`, `invalidated` and `capacity`. The record holds at most 512 activations, exactly what a restart reads back; any activation beyond that is not stored and is counted under `capacity` at the write, and entries past that bound in a record found at start are counted under `capacity` too, once, when the record is rewritten without them. `unreadable` also counts entries inside an otherwise accepted record that failed to parse; they are dropped by the rewrite, and a failed rewrite of such a record never withdraws its valid entries. The `product-changed` line counts the whole record (valid, malformed and past-the-bound entries). The `unreadable`, `format-changed` and `foreign-installation` lines carry the number of entries the discarded record held (0 only when the file could not be parsed at all). Only activated models are offered by the Chat picker and elected as an automatic
 default (Chat create and the Workbench prefer activated models over a better-ranked inactive one);
 a pick or a Send in Chat and a pick or Start in the Coding Workbench never start a basic-chat check.
 The Workbench proves tool calling and context only for an activated model. Startup still probes the
@@ -1048,7 +1191,12 @@ wait; disconnecting a browser does not cancel shared discovery or start another 
 Workbench profile describes the model chosen in its picker (`modelId`) and its own observed
 verification, rather than the gateway-wide state. `model-verification-pending` means that a check of
 that model is already running; a tracked model nobody activated is `conversation-not-ready`;
-`tool-calling-unverified` records an unknown tool capability without dispatching a probe.
+`tool-calling-unverified` records an unknown tool capability without dispatching a probe. The
+Workbench tells the two meanings of `conversation-not-ready` apart from the catalog (absent
+`conversationReady` is "not activated yet in this session", `false` is a failed check) and, for the
+first, offers the person's own activation in place (U-12, #4491). It posts to the same readiness
+route as Settings > Models; `gateway.readiness.started` and `.completed` then carry the closed
+`surface` (`settings`, `coding-workbench`, `chat`), `settings` when the request names none.
 See [ADR-0171](../adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 The tool-calling check runs in two steps (#4351, owner decision 2026-11-13): first as production works, the
@@ -1134,6 +1282,14 @@ For a saturated probe, `delayMs` records the remaining request budget (zero at e
 fabricated cooldown. A stream records its start before admission waiting and its zero-chunk failure
 if admission is refused or cancelled. Late sibling probes cannot extend a reopened outage.
 
+`gateway.prompt.usage-rejected` records, under the call's correlation, that the provider's reported
+prompt usage was not used to calibrate later admission (ADR-0052). `reason` is closed:
+`implausibly-low` and `implausibly-high` mark a figure outside the 0.25 to 2.0 times band of the
+local estimate (with a learned floor once ratios exist), and `ambiguous-cache-layout` marks a report
+whose prompt-cache tokens could be either inside or beside `prompt_tokens`. The line carries
+`reportedPromptTokens`, `localPromptTokens` and a `modelIdDigest`, never text. After it, the next
+prompt of that model keeps the local estimate until a usable report is recorded.
+
 On retries, `reportedPromptTokens` always describes only the current counter response and is
 absent when that response has no count. `providerPromptTokens` adds the current response-schema
 cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
@@ -1196,7 +1352,36 @@ unbound observations cannot suppress retrieval-miss findings. The citation sibli
 A no-anchor general request can use the same validated empty pack and cumulative synthesis grants
 when the policy allows assessment; scope validation and disabled-policy clarification still apply.
 
+## How a streamed model turn ended
+
+`gateway.stream.completed` records the provider's own `finishReason` for the answer: `stop`,
+`length`, `tool_calls`, `content_filter` or `unknown`. `length` is the model reaching its output
+limit, so a cut-off answer is read off the line instead of inferred from `completionTokens`.
+`unknown` is a frame without a finish reason the gateway recognizes, an `error` or `cancelled`
+finish (those fail elsewhere) and a stream that settled no answer; it is never a guessed `stop`.
+The same finish reaches the Coding Workbench timeline as a closed fact on the assistant message
+(`outputLimitReached`), read from the runtime message's finish, never from its text. The Workbench's
+"The model answered without using any tools" line is a display fact over the run's own feed (a
+settled Build run with no tool call) and writes nothing new.
+
 ## Reasoning, tool arguments and answer repair
+
+An empty model turn (no text and no tool call) says what the provider itself reported (O-11), so
+"the provider generated output that never arrived" (a long tool call its parser buffered and dropped)
+is told apart from "the model generated nothing" from the log alone. `chat.response.streamed` and
+`gateway.stream.failed` record `providerCompletionTokens` and `providerReasoningTokens`
+(`completion_tokens_details.reasoning_tokens`) from the provider's usage record (the final
+`stream_options.include_usage` chunk, or a whole body's `usage`): present only when the provider sent
+the count, never defaulted to 0. On an answer that ended empty both lines add `emptyAnswerEvidence`
+(`provider-reported-output`: completion tokens above zero; `no-provider-output`: zero;
+`usage-unavailable`: no usage sent), and `coding-sidecar.gateway.turn-failed` carries the same word
+and `providerCompletionTokens` for the attempt that surfaced (after a repair, the repair's own
+attempt; each attempt's own usage stays on its `chat.response.streamed` line). A long silent gap is
+read from `maxGapMs` and `silentForMs` of that line. `coding-sidecar.gateway.outcome`'s
+`completionTokens` is the gateway's own count (provider-reported or a byte estimate): a turn that
+measured nothing writes 0, which `completionTokensMeasured: false` marks as a default rather than a
+count, and a failed outcome carries `providerCompletionTokens` when the provider reported one. The
+user-facing message is unchanged.
 
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
 provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
@@ -1243,7 +1428,11 @@ a cancellation) omits both, because it cannot know; a repaired turn that failed 
 is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
 discarded (a repair's first answer, a rejected tool call) remains in the run's cumulative usage
 roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
-`discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
+`discardedPromptTokens`, `discardedCompletionTokens`). A turn whose model wrote its tool call as text
+(finish `stop`, no native call, markup naming an advertised tool) is re-requested by the gateway at
+most twice with one fixed hint (ADR-0137, live defect M-1); `coding-sidecar.gateway.outcome` then
+carries `textualToolCallRecovery` (`retried-native`, `retry-exhausted`, `retry-skipped`, `retry-interrupted`) and `textualToolCallRetries`,
+never the markup. The correction the model receives is one fixed
 sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
 never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant
 messages, and `coding-sidecar.gateway.request-validated` counts the dropped messages. By default
@@ -1308,3 +1497,24 @@ Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and s
 Coding Workbench composer reuses that store per Workbench window (`surface: "coding-workbench"`).
 Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
 browser persistence; stale revisions fail closed (ADR-0114 D1).
+
+## Browser approval
+
+`coding-app-session.browser-approval.state` with `action: inspect` is written once per distinct
+reader and again only when what that reader sees changes, never once per poll. `reader` records
+whether a session cookie was presented (`with-session`) or not (`without-session`), not whether it
+was valid: a stale tab reads `with-session` together with `outcome: unavailable`.
+
+`git.delivery.commit-refused` is written once for every interactive commit on a prepared branch that was refused or failed (the bound lane, ADR-0006). It carries the closed `refusal`: `not-on-prepared-branch`, `authority-lapsed`, `sequencer-in-progress`, `sequencer-unreadable` (the read failed; `frames`, `causeChain` and `failureKind` name the error, never its text), `empty-message`, `message-invalid`, `message-too-large` (the effective message exceeds the 64 KiB bounded input), `cleanup-unavailable` (the `commit.cleanup` mode or the comment marker cannot be read, Git itself rejects it, or `auto` finds no free comment character; result `precondition-failed`), `landed-after-failure` (see below), `nothing-to-commit`, `ref-symbolic` (the branch ref is a symbolic ref; nothing is moved, result `precondition-failed`; the verified commit lane writes this line too, for this refusal only), `ref-moved` (the compare-and-swap on the HEAD the commit was built on failed; the result code is `conflict` and nothing was written), `checkout-unreadable`, `revision-unreadable`, `git-command-failed`, `interrupted` and `unexpected-error`. Every refusal other than `ref-moved` answers `precondition-failed`. The bound commit also writes the reflog entry `git commit` writes (`commit: <first line>` or `commit (initial): <first line>`, on the branch and on HEAD) and removes the merge state a successful `git commit` removes. The message is cleaned by Git itself according to the effective `commit.cleanup` (`cleanup-unavailable` when the mode cannot be read or is invalid), so both commit lanes record the same bytes (ADR-0084, #4491). A late failure of `update-ref` after the branch already names the new commit is a success: it records `landed-after-failure` and the result carries the closed `completionNote` `recorded-despite-late-error`, which the Git window shows in English and German. A non-zero `update-ref` is `ref-moved` (result `conflict`) only when the branch tip differs from the value the commit was built on; with the tip unchanged (a held ref lock, for example) it is `git-command-failed` and the plain `precondition-failed`. A throwing log port never replaces the refusal; its lost line surfaces as the process warning `KEIKO_GIT_COMMIT_REFUSAL_UNREPORTED`. When the merge-state cleanup itself throws, `git.index-transaction.cleanup-incomplete` (`caller` `commit-state`) carries `failureKind`, `frames` and `causeChain`.
+
+## Browser stream capacity
+
+The browser's own diagnostics (`reportClientDiagnostic`, no registered operation) record, with
+closed text and counts only: `waiting for origin capacity (priority=essential)` once per wait
+episode after ten seconds with `errorKind: timeout`; `admitted after waiting for origin capacity
+(waitSeconds, attempts)` once when that episode ends; `yielded origin capacity (priority=...)` when
+a stream gave its slot up; `origin capacity acquisition unavailable` at most once per wait episode
+for a background stream; `contention query unavailable` once per lease; `<stream> could not be
+created` when the browser refuses an event source (editor verification, relationship activity,
+Workbench runtime); and `run events stream frame unreadable` once per stream with `errorKind:
+validation-failed`, never the frame. None carries a path, an endpoint or content.

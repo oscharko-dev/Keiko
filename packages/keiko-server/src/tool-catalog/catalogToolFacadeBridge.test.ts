@@ -452,6 +452,38 @@ describe("canonical catalog facade bridge", () => {
     ).toMatchObject({ level: "info" });
   });
 
+  // A step that ran into the wall-time or a resource ceiling reached a verdict too: settling it as
+  // `handler-failed` (error level, outputBytes 0) left the model an opaque failure and opened a
+  // support incident for what is an executed verification (output-volume defect V-1).
+  it.each(["VERIFICATION_TIMED_OUT", "VERIFICATION_RESOURCE_EXCEEDED"])(
+    "records %s as a completed handler and keeps the model-facing result",
+    async (code) => {
+      const { bridge, log } = createBridge();
+      const request = COVERED.find((entry) => entry.action === "verification");
+      if (request === undefined) throw new Error("verification fixture missing");
+      const limited = {
+        status: "failed" as const,
+        evidence: [{ kind: "governed-delegate" as const, code }],
+        reasonCode: code,
+        detail: "Limit reached: output-limit.",
+      };
+
+      await expect(
+        bridge.execute(request, facadeInput(), (_signal, mutationGuard) => {
+          expect(mutationGuard.check()).toBe(true);
+          return Promise.resolve(limited);
+        }),
+      ).resolves.toEqual(limited);
+      const settled = log.events.at(-1);
+      expect(settled).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        level: "info",
+        extra: { status: "completed", reason: "none", effectStarted: true },
+      });
+      expect(settled?.errorKind).toBeUndefined();
+    },
+  );
+
   it("keeps a verification refused before the runner a handler fault", async () => {
     const { bridge, log } = createBridge();
     const request = COVERED.find((entry) => entry.action === "verification");
@@ -1107,6 +1139,8 @@ it("passes the actual opaque catalog invocation to the private original-read del
   const admitted = log.events.filter((event) => event.op === "tool-catalog.invocation-started");
   const settled = log.events.filter((event) => event.op === "tool-catalog.invocation-settled");
   expect(admitted).toHaveLength(1);
+  // The effective per-call deadline is recorded so an abort is located from the log alone (W-5).
+  expectEffectiveDeadlineLogged(admitted);
   expect(settled).toHaveLength(1);
   expect(seen).toEqual([admitted[0]?.extra?.invocationId]);
   expect(settled[0]?.extra?.invocationId).toBe(seen[0]);
@@ -1218,3 +1252,9 @@ describe("a large governed changeset edit through the canonical boundary", () =>
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+function expectEffectiveDeadlineLogged(admitted: readonly { readonly extra?: unknown }[]): void {
+  const extra = admitted[0]?.extra as { readonly deadlineMs?: number } | undefined;
+  expect(extra?.deadlineMs).toBeGreaterThan(0);
+  expect(extra?.deadlineMs).toBeLessThanOrEqual(30_000);
+}

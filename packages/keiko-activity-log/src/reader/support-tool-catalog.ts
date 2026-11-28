@@ -121,7 +121,7 @@ function registeredTerminal(record: Readonly<Record<string, unknown>>): Record<s
     durationMs: record.durationMs,
     effectStarted: record.effectStarted,
     budgetDisposition: record.budgetDisposition,
-    ...definedFields(record, ["inputBytes", "outputBytes", "resultCount", "truncated"]),
+    ...definedFields(record, ["budgetMs", "inputBytes", "outputBytes", "resultCount", "truncated"]),
     ...diagnostics,
   };
 }

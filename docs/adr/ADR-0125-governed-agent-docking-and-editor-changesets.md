@@ -205,7 +205,7 @@ decision, 2026-10-28). The model-facing `keiko_changeset_edit` call carries one 
 `governed-tool-catalog.ts`; the generic catalog ceilings (256 KiB per call, 64 KiB per string) stay
 what every other tool is held to (ADR-0175 D4). The gateway capture, the descriptor bound, the
 wire schema the model sees, the tool request body (`CODING_TOOL_MAX_REQUEST_BODY_BYTES`, while the
-response and `tool_output` bound stay 256 KiB), the invocation registry entry, the lifecycle
+response bound stays 256 KiB; the runtime's model-visible `tool_output` cap is a different limit, at upstream parity of 50 KiB and 2,000 lines), the invocation registry entry, the lifecycle
 evidence and the runtime's history gate all read that one declaration; the model-facing prompt
 states the cap from the contract constants. A native OpenCode edit (`edit`, `write`, `patch`) is
 held to the same cap before the run's patch budget is charged: the policy admission refuses a diff

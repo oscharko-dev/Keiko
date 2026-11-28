@@ -24,6 +24,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { API_ROUTES, matchRoute, type RouteContext, type HandlerOutcome } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
+import { invalidBranchNameToolResult } from "./coding-runtime/codingToolFacade.js";
 import { CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import {
   expectActivityLogProof,
@@ -290,6 +291,37 @@ describe("coding-sidecar tool facade route", () => {
       ]);
     },
   );
+
+  // U-27: a task-branch ask Keiko refuses itself reaches the model through the real route with its
+  // invalid-name guidance, and leaves a body-free closed line.
+  it("passes the blocked invalid-name branch result through the route and logs it", async () => {
+    const log = captureServerLog();
+    const refusal = invalidBranchNameToolResult();
+    const handle = vi.fn(() =>
+      Promise.resolve({
+        status: 409,
+        body: JSON.stringify(refusal),
+        rejection: "branch-name-refused" as const,
+      }),
+    );
+    const result = await handleCodingSidecarToolFacade(
+      toolFacadeContext({}),
+      depsWith(bridge(handle)),
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { git: { kind: "branch", status: "blocked", reason: "invalid-name" } },
+    });
+    expect(JSON.stringify(result)).toContain("not a branch name Keiko will create");
+    expect(log.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.tool-facade.rejected",
+        status: 409,
+        errorKind: "invalid-request",
+        extra: { reason: "branch-name-refused", completeness: "complete", loss: "none" },
+      }),
+    ]);
+  });
 
   // PR #3625 review: only a denied or expired ask's own result reaches the model. Any other 409 is
   // answered with the route's own refusal and its body is never parsed or passed on.

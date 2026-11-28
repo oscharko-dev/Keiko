@@ -111,9 +111,13 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
-- 1.5.10: CLI entrypoints, root exports and UI stores are unchanged. The Git status response gains
-  the optional `stagedDigest` field, which older clients ignore, and `keiko start` and
-  `keiko restart` refuse a state directory inside the start folder (#4491).
+- 1.5.10: CLI entrypoints and UI stores are unchanged. The root barrel only adds exports:
+  `scriptTableDigest`, `SCRIPTS_CHANGED_DENIAL_PREFIX`, `SCRIPTS_UNBOUND_DENIAL_PREFIX`,
+  `SCRIPT_BINDING_OUTCOMES` and the types `BoundScriptRefusal` and `ScriptBindingOutcome`, the closed
+  vocabulary of a verification step whose approved package
+  scripts cannot be run unbound. The Git status response gains the optional `stagedDigest` field,
+  which older clients ignore, and `keiko start` and `keiko restart` refuse a state directory
+  inside the start folder (#4491).
 - 1.5.9: CLI entrypoints are unchanged. The root barrel only adds exports: the connected-folder
   Chat tool (`createConnectedFolderToolBudget`, `executeConnectedFolderToolRequest` and their
   types), the turn-scoped workspace index, the workspace path-case and ignore helpers

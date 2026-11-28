@@ -48,6 +48,11 @@ export interface KeikoSelectProps {
   /** Called after a deliberate pointer or keyboard opening is accepted. */
   readonly onOpen?: (() => void) | undefined;
   readonly disabled?: boolean;
+  /**
+   * A pending change the control waits for: the trigger keeps focus and stays announced
+   * (`aria-disabled`, `aria-busy`) but cannot open, unlike `disabled`, which drops focus.
+   */
+  readonly busy?: boolean;
   readonly placeholder?: string | undefined;
   readonly ariaLabel?: string | undefined;
   readonly ariaDescribedBy?: string | undefined;
@@ -591,6 +596,7 @@ export default function KeikoSelect({
   onValueChange,
   onOpen,
   disabled = false,
+  busy = false,
   placeholder,
   ariaLabel,
   ariaDescribedBy,
@@ -660,8 +666,17 @@ export default function KeikoSelect({
     setSearchQuery("");
   }, []);
 
+  // A change the control waits for locks it: an open menu would still commit a choice.
+  useEffect(() => {
+    if (!busy) return;
+    const focusInMenu = menuRef.current?.contains(document.activeElement) === true;
+    closeMenu();
+    // The menu unmounts with the focus inside it: the trigger keeps it, as on every close.
+    if (focusInMenu) triggerRef.current?.focus();
+  }, [busy, closeMenu]);
+
   const openMenu = (preferredIndex?: number): void => {
-    if (disabled || flatOptions.length === 0) return;
+    if (disabled || busy || flatOptions.length === 0) return;
     const fallbackIndex = resolveOpenMenuIndex(flatOptions, preferredIndex, selectedIndex);
     window.dispatchEvent(new Event(SELECT_OPEN_EVENT));
     setOpen(true);
@@ -822,7 +837,7 @@ export default function KeikoSelect({
   }
 
   function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
-    if (disabled) return;
+    if (disabled || busy) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       openMenu(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex(flatOptions));
@@ -919,7 +934,7 @@ export default function KeikoSelect({
   }, [open, activeIndex, closeMenu, flatOptions, selectedIndex]);
 
   const triggerClasses = buildTriggerClasses({
-    disabled,
+    disabled: disabled || busy,
     mono,
     open,
     openUp,
@@ -983,6 +998,8 @@ export default function KeikoSelect({
         autoFocus={autoFocus}
         className={triggerClasses}
         disabled={disabled}
+        aria-disabled={busy ? true : undefined}
+        aria-busy={busy ? true : undefined}
         onClick={() => {
           if (open) closeMenu();
           else openMenu();

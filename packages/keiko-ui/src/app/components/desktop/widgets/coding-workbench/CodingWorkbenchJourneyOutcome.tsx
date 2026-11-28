@@ -27,7 +27,10 @@ import styles from "./CodingWorkbenchJourneyOutcome.module.css";
  * truncation flag only, never a path or diff body. */
 export interface CodingWorkbenchJourneyChangedFilesSummary {
   readonly status: "loading" | "ready" | "unavailable";
+  /** Files in the listed (possibly bounded) list. */
   readonly fileCount: number;
+  /** The exact number of changed files; above `fileCount` when the list is bounded. */
+  readonly totalCount: number;
   readonly truncated: boolean;
 }
 export interface CodingWorkbenchJourneyOutcomeProps {
@@ -224,12 +227,21 @@ function ChangedFilesSummary({
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (summary?.status !== "ready") return null;
+  const bounded = summary.totalCount > summary.fileCount;
+  let text: string;
+  if (bounded) {
+    text = t("codingWorkbench.changes.changedFilesShowing", {
+      count: summary.fileCount,
+      total: summary.totalCount,
+    });
+  } else if (summary.fileCount === 1) text = t("codingWorkbench.journey.changedFiles.one");
+  else text = t("codingWorkbench.journey.changedFiles", { count: summary.fileCount });
   return (
     <p className={common.helpText}>
-      {summary.fileCount === 1
-        ? t("codingWorkbench.journey.changedFiles.one")
-        : t("codingWorkbench.journey.changedFiles", { count: summary.fileCount })}
-      {summary.truncated ? ` ${t("codingWorkbench.journey.changedFilesTruncated")}` : ""}
+      {text}
+      {summary.truncated && !bounded
+        ? ` ${t("codingWorkbench.journey.changedFilesTruncated")}`
+        : ""}
     </p>
   );
 }

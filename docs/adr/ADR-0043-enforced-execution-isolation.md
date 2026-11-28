@@ -117,6 +117,25 @@ one level below a drive, the shipped patched step Node.js, `mvn -B -o test` offl
 `subst` drive letters in place of the capabilities Windows refuses) are accepted for Milestone 1 of
 #4491, as are the ARM64 guest results; the x64 repeat and the live container path stay in #4561.
 
+1.20 — #4491 amends D20/D21 (2026-11-27): the step supervisor resolves the runtime through the same
+ordered discovery as the Coding activation (packaged release, dev checkout, then the npm runtime
+package), so an npm installation's steps are governed by the runtime package it starts its Coding
+runs from. Like the activation, it stops at a refused packaged or dev-checkout lane instead of falling
+through to the next one, and each verification execution resolves the supervisor once, sharing it between its isolation
+probe and its run and remembering nothing afterwards (a Coding run reuses one correlation id for every
+attempt), with the discovery failure line carrying the run's correlation id. A verification attests only what its
+steps execute: on the npm lane the discovery locates the supervisor and reads its size and digest once, asynchronously
+and streamed, and hashes the step Node.js on every use (never a cache keyed on metadata); the OpenCode payload tree is
+the sidecar's own launch attestation and is not hashed for a verification. The private step copy is removed
+asynchronously, awaited inside the exclusive workspace scope before the next execution. The packaged and dev-checkout
+lanes still go through their full payload attestation, because their discovery yields the activated runtime that the
+Coding activation shares and has no narrower form; only the npm lane, the one measured, was narrowed. On the npm lane a
+tampered OpenCode payload therefore no longer disables governed verification steps: the supervisor and the step Node.js
+are attested on their own against the digests compiled into this server, and the payload is attested on the sidecar's
+launch path, where a tampered one refuses the Coding run. A supervisor that cannot be read to attest it is the closed
+`unreadable` outcome with a diagnostic, never an exception out of the probe. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
+denies it as isolation unavailable instead of reporting a missing script.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1512,7 +1531,10 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     refusal 18 settles the run with `runtime-supervisor-no-desktop` and names
     `supervisor-no-desktop` on the `coding-runtime.exit` line (`codingRuntimeManager.test.ts`),
     and the Workbench words that code as a signed-in desktop session
-    (`codingWorkbenchLabels.test.ts`). `nativeRuntimeProcessTree.refusal-codes.test.ts` reads every
+    (`codingWorkbenchLabels.test.ts`). The same test pins the host's real ordering, where the closed
+    stdout fails the handshake while the exit's own teardown is still reaping: the start folds onto
+    that teardown (one reap, proven because nothing was created) and the refusal, not
+    `runtime-reap-unproven`, settles the run. `nativeRuntimeProcessTree.refusal-codes.test.ts` reads every
     `error_code` of `keiko_runtime_supervisor.c` and fails when one lacks its own word, shares a
     word, or does not reach a run failure code the Workbench can word. The profile sweep's counts are
     pinned from the launch response (`nativeRuntimeProcessBackend.windows-grants.test.ts`) and the

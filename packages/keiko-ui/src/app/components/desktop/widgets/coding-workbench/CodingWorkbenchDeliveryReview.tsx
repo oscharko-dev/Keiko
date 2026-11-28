@@ -21,6 +21,7 @@ export function approvalHelpKey(kind: ActionKind): CodingWorkbenchMessageKey {
   if (kind === "commit") return "codingWorkbench.approval.commit.help";
   if (kind === "push") return "codingWorkbench.approval.delivery.pushHelp";
   if (kind === "pull-request") return "codingWorkbench.approval.delivery.prHelp";
+  if (kind === "verification-command") return "codingWorkbench.approval.verification.help";
   return "codingWorkbench.approval.help";
 }
 

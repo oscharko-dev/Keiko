@@ -29,6 +29,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { postEditorAgentActionResult } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import {
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
+} from "../../../../../lib/browser-stream-capacity";
 import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
@@ -685,18 +689,29 @@ function handleEditorAgentFrame(event: Event): void {
   }
 }
 
-function closeEditorAgentEventSource(): void {
-  if (editorAgentEventSource === null) return;
+let editorAgentAdmission: DirectStreamAdmission | null = null;
+
+// Closes the connection only: the admission stays, so a yielded stream asks for its slot again.
+function detachEditorAgentEventSource(): void {
+  const source = editorAgentEventSource;
+  if (source === null) return;
   if (editorAgentActionListener !== null) {
-    editorAgentEventSource.removeEventListener("editor-agent:action", editorAgentActionListener);
+    source.removeEventListener("editor-agent:action", editorAgentActionListener);
   }
   if (editorAgentResultListener !== null) {
-    editorAgentEventSource.removeEventListener("editor-agent:result", editorAgentResultListener);
+    source.removeEventListener("editor-agent:result", editorAgentResultListener);
   }
-  editorAgentEventSource.close();
+  source.close();
   editorAgentEventSource = null;
   editorAgentActionListener = null;
   editorAgentResultListener = null;
+}
+
+function closeEditorAgentEventSource(): void {
+  // A stream still waiting for an origin-wide slot is cancelled with its admission.
+  detachEditorAgentEventSource();
+  editorAgentAdmission?.release();
+  editorAgentAdmission = null;
   editorAgentConnectedSessionKey = null;
 }
 
@@ -714,7 +729,7 @@ function reconcileEditorAgentEventSource(): void {
     closeEditorAgentEventSource();
     return;
   }
-  if (editorAgentEventSource !== null && editorAgentConnectedSessionKey === nextKey) {
+  if (editorAgentConnectedSessionKey === nextKey) {
     // The connected set already matches; nothing to do.
     return;
   }
@@ -722,14 +737,31 @@ function reconcileEditorAgentEventSource(): void {
   if (typeof EventSource === "undefined") return;
   const url = editorAgentEventUrl(readySessions);
   if (url === null) return;
+  editorAgentConnectedSessionKey = nextKey;
+  // The stream opens only once an origin-wide connection slot admits it. It is essential and never
+  // yields: the server treats a dropped bridge as an unavailable session, so an action issued
+  // during a gap would find no bridge, and the stream has no replay for what the gap would lose.
+  editorAgentAdmission = admitDirectBrowserStream(() => openEditorAgentEventSource(url), {
+    nonReplayable: true,
+  });
+}
+
+function openEditorAgentEventSource(url: string): void {
+  detachEditorAgentEventSource();
   const source = createSameOriginApiEventSource(url);
-  if (source === null) return;
+  if (source === null) {
+    queueMicrotask(() => {
+      editorAgentAdmission?.release();
+      editorAgentAdmission = null;
+      editorAgentConnectedSessionKey = null;
+    });
+    return;
+  }
   editorAgentActionListener = handleEditorAgentFrame;
   editorAgentResultListener = handleEditorAgentFrame;
   source.addEventListener("editor-agent:action", editorAgentActionListener);
   source.addEventListener("editor-agent:result", editorAgentResultListener);
   editorAgentEventSource = source;
-  editorAgentConnectedSessionKey = nextKey;
 }
 
 /**

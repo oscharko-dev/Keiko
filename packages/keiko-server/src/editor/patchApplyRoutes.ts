@@ -53,6 +53,7 @@ import {
   requestRootAccessResolver,
   resolveRequestRoot,
   runFilesHandler,
+  runHumanWriteOrBusy,
 } from "../files.js";
 import { DENIED_MESSAGE } from "../files-deny.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -477,13 +478,23 @@ async function mutateThroughReprovedRoot(
   }
   let result: PatchApplyResult;
   try {
-    result = applyPatch(workspace, ctx.request.diff, {
-      applyEnabled: true,
-      signal: ctx.signal,
-      allowOverwrite,
-      fs: access.fs,
-    });
-  } catch {
+    // A patch a person applies waits for a runtime revert write in flight and lands after it.
+    result = await runHumanWriteOrBusy(
+      access.canonicalRoot,
+      () =>
+        Promise.resolve(
+          applyPatch(workspace, ctx.request.diff, {
+            applyEnabled: true,
+            signal: ctx.signal,
+            allowOverwrite,
+            fs: access.fs,
+          }),
+        ),
+      ctx.correlationId,
+    );
+  } catch (error) {
+    // A write the gate refused is the route's own retryable answer, not a failed patch.
+    if (error instanceof FilesError) throw error;
     return failureOutcome(ctx);
   }
   captureAppliedHistory(ctx, result);

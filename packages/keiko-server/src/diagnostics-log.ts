@@ -804,6 +804,9 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "tool-invocation-identities-evicted",
   "approval-ask-run-bound-refused",
   "approval-ask-coalesced",
+  // The approval card of a governed verification could not show the command it would run; the
+  // closed reason travels in `errorClass`, never a command line or a path (ADR-0124 D6).
+  "approval-preview-unavailable",
   // One complete point-of-use verification of the secure-read helper ran (the unchanged helper is
   // otherwise served from its identity-bound verdict); the run it served is not known here.
   "secure-read-helper-verified",

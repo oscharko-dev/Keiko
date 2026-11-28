@@ -1170,3 +1170,22 @@ describe("source-qualified citation safety", () => {
     expect(screen.getByRole("button", { name: /Select repository source/ })).toBeInTheDocument();
   });
 });
+
+describe("SafeMarkdown — table cell wrapping", () => {
+  // `.sm-root` wraps with `overflow-wrap: anywhere`, which a table cell inherited: the table then
+  // shrank a column to one character and a header such as "Schwere" broke letter by letter. The
+  // table wraps only inside a word that cannot fit on its own line, so its wrapper scrolls instead.
+  // Inline code keeps its own `anywhere` (`.sm-inline-code`), so a long path still breaks.
+  it("never lets a markdown table break a cell's words to fit", () => {
+    const { container } = render(
+      <SafeMarkdown source={"| Schwere | Befund |\n| --- | --- |\n| H | `a/b/c.java:12` |"} />,
+    );
+
+    const table = container.querySelector("table.sm-table");
+    expect(table).not.toBeNull();
+    expect((table as HTMLTableElement).style.overflowWrap).toBe("break-word");
+    for (const cell of container.querySelectorAll("th, td")) {
+      expect((cell as HTMLElement).style.overflowWrap).toBe("");
+    }
+  });
+});

@@ -223,6 +223,14 @@ import {
 } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  activatedModelsOf,
+  createModelActivationMemory,
+  MODEL_ACTIVATION_FILE,
+  sameActivationBinding,
+  type ActivationRemovalReason,
+  type ModelActivationMemory,
+} from "./model-activation-memory.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import type { WorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
@@ -246,7 +254,7 @@ import {
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
 } from "./workspace-root-denial-log.js";
-import { pathIsDenied } from "./files-deny.js";
+import { pathDenialCause, pathDenialReason } from "./files-deny.js";
 import { insideProgramFolder } from "./launch-directory.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -714,9 +722,45 @@ export interface RuntimeGatewayConfig {
     observedGeneration?: number,
     conversationCheckedAt?: string,
     citationObservation?: CitationCapabilityObservation,
-    conversationReadinessFailure?: "transient",
+    evidence?: RecordedCapabilityEvidence,
   ): void;
-  readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
+  /**
+   * Drops a model's observation. `evidence.cause` says why for the activation record: a person's
+   * deactivation, or (the default) a failed check that invalidated the observation.
+   */
+  readonly clearVerifiedCapability: (
+    modelId: string,
+    observedGeneration?: number,
+    evidence?: ClearObservationEvidence,
+  ) => boolean;
+  /**
+   * Restores the activations remembered from an earlier start whose binding still holds, without a
+   * request to any model, and keeps the record in line from then on (owner decision 2026-11-28).
+   */
+  readonly rememberActivations?:
+    ((memory: ModelActivationMemory, correlationId: string) => void) | undefined;
+  /**
+   * Runs one logical change to the observations (a catalogue update clears and re-records several)
+   * and lets the durable activation record see only the settled result, in one write.
+   */
+  readonly settleObservations?: (<T>(change: () => T) => T) | undefined;
+  /**
+   * Retries a durable activation record that could not be written and says whether it is now in
+   * line. True when nothing is remembered or nothing is outstanding.
+   */
+  readonly settleActivationRecord?:
+    ((reason: ActivationRemovalReason, correlationId: string) => boolean) | undefined;
+}
+
+/** What a recorded observation carries beyond its fields: why chat failed, and the causing check. */
+export interface RecordedCapabilityEvidence {
+  readonly conversationReadinessFailure?: "transient" | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+export interface ClearObservationEvidence {
+  readonly cause?: "deactivated" | "invalidated";
+  readonly correlationId?: string;
 }
 
 type CitationCapabilityObservation = Pick<
@@ -1793,6 +1837,130 @@ interface RuntimeGatewayState {
   generation: number;
   readonly observations: Map<string, VerifiedModelCapabilityObservation>;
   readonly listeners: ReturnType<typeof gatewayConfigListeners>;
+  /** Present once the installation identity is known; keeps activations across restarts. */
+  activation?: ModelActivationMemory | undefined;
+  /** Set while one logical change is settling: the record is written once, when it ends. */
+  settling?: SettlingChange | undefined;
+}
+
+/** One logical change to the observations whose durable record is written once, when it ends. */
+interface SettlingChange {
+  dirty: boolean;
+  correlationId: string;
+  /** The activated model ids after the latest step, to attribute each removal to its own step. */
+  activeIds: Set<string>;
+  /** A model still missing, with the reason of the step that took it out. */
+  readonly removals: Map<string, ActivationRemovalReason>;
+}
+
+function liveActivations(state: RuntimeGatewayState): ReturnType<typeof activatedModelsOf> {
+  return activatedModelsOf(state.observations, state.generation, state.config?.providers ?? []);
+}
+
+function deferActivationSync(
+  state: RuntimeGatewayState,
+  settling: SettlingChange,
+  reason: ActivationRemovalReason,
+  correlationId: string,
+): void {
+  const now = new Set(liveActivations(state).map((model) => model.provider.modelId));
+  for (const id of settling.activeIds) if (!now.has(id)) settling.removals.set(id, reason);
+  for (const id of now) settling.removals.delete(id);
+  settling.activeIds = now;
+  settling.dirty = true;
+  settling.correlationId = correlationId;
+}
+
+/** Keeps the durable activation record equal to the activated set after every change to it. */
+function syncActivation(
+  state: RuntimeGatewayState,
+  reason: ActivationRemovalReason,
+  correlationId: string = UNKNOWN_CORRELATION_ID,
+  removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
+  additions: "allowed" | "withheld" = "allowed",
+): void {
+  if (state.settling !== undefined) {
+    deferActivationSync(state, state.settling, reason, correlationId);
+    return;
+  }
+  state.activation?.sync(liveActivations(state), reason, correlationId, removalReasons, additions);
+}
+
+/** Persists what a failed change removed; a failure of that write never masks the original error. */
+function persistRemovalsAfterFailure(
+  state: RuntimeGatewayState,
+  settling: SettlingChange,
+  original: unknown,
+): void {
+  try {
+    syncActivation(state, "invalidated", settling.correlationId, settling.removals, "withheld");
+  } catch (syncError) {
+    // Never silent: a body-free diagnostic always records it; the original error stays the one thrown.
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: settling.correlationId,
+        operation: "gateway.activation.persist",
+        source: "server.deps.persistRemovalsAfterFailure",
+        error: syncError,
+        redact: () => "Keiko could not record the removals of a capability change that failed.",
+      }),
+    );
+    attachCause(original, syncError);
+  }
+}
+
+/** Links the second failure to the first when the first can carry it; never throws. */
+function attachCause(original: unknown, cause: unknown): void {
+  if (!(original instanceof Error) || !Object.isExtensible(original)) return;
+  if (Object.getOwnPropertyDescriptor(original, "cause") !== undefined) return;
+  Object.defineProperty(original, "cause", { value: cause, configurable: true, writable: true });
+}
+
+function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T): T {
+  if (state.settling !== undefined) return change();
+  const settling: SettlingChange = {
+    dirty: false,
+    correlationId: UNKNOWN_CORRELATION_ID,
+    activeIds: new Set(liveActivations(state).map((model) => model.provider.modelId)),
+    removals: new Map(),
+  };
+  state.settling = settling;
+  let result: T;
+  try {
+    result = change();
+  } catch (error) {
+    // A change that failed midway leaves a partial set. What it removed is persisted, so a restart
+    // cannot restore a model whose proof was already invalidated; nothing it added is written.
+    state.settling = undefined;
+    if (settling.dirty) persistRemovalsAfterFailure(state, settling, error);
+    throw error;
+  }
+  state.settling = undefined;
+  if (settling.dirty)
+    syncActivation(state, "configuration-changed", settling.correlationId, settling.removals);
+  return result;
+}
+
+function rememberRuntimeActivations(
+  state: RuntimeGatewayState,
+  memory: ModelActivationMemory,
+  correlationId: string,
+): void {
+  state.activation = memory;
+  const restored = memory.restore(state.config?.providers ?? [], correlationId);
+  const now = Date.now();
+  for (const { modelId, activatedAt } of restored) {
+    // A stored time in the future would present as unavailable; the restore moment is the bound.
+    const stamp = Date.parse(activatedAt) > now ? new Date(now).toISOString() : activatedAt;
+    state.observations.set(modelId, {
+      modelId,
+      generation: state.generation,
+      checkedAt: stamp,
+      conversationCheckedAt: stamp,
+      fields: { conversationReady: true },
+    });
+  }
 }
 
 function mergeConfiguredGateway(state: RuntimeGatewayState, active: GatewayConfig): GatewayConfig {
@@ -1809,6 +1977,46 @@ function mergeConfiguredGateway(state: RuntimeGatewayState, active: GatewayConfi
   };
 }
 
+/**
+ * The activations a replaced configuration keeps (owner decision 2026-11-28): a model whose
+ * connection and credential are unchanged stays activated, so adding a model never costs the others
+ * their activation. Only the basic-chat proof is carried, never a feature proof.
+ */
+function unchangedActivations(
+  state: RuntimeGatewayState,
+  next: GatewayConfig | undefined,
+): readonly VerifiedModelCapabilityObservation[] {
+  const kept: VerifiedModelCapabilityObservation[] = [];
+  for (const provider of next?.providers ?? []) {
+    const observation = keptActivation(state, provider);
+    if (observation === undefined) continue;
+    kept.push({
+      modelId: provider.modelId,
+      generation: state.generation + 1,
+      checkedAt: observation.checkedAt,
+      ...(observation.conversationCheckedAt === undefined
+        ? {}
+        : { conversationCheckedAt: observation.conversationCheckedAt }),
+      fields: { conversationReady: true },
+    });
+  }
+  return kept;
+}
+
+// The current, conversation-ready observation of a provider whose connection and credential did not change.
+function keptActivation(
+  state: RuntimeGatewayState,
+  provider: GatewayConfig["providers"][number],
+): VerifiedModelCapabilityObservation | undefined {
+  const observation = state.observations.get(provider.modelId);
+  if (observation?.generation !== state.generation) return undefined;
+  if (observation.fields.conversationReady !== true) return undefined;
+  const previous = state.config?.providers.find((entry) => entry.modelId === provider.modelId);
+  return previous !== undefined && sameActivationBinding(previous, provider)
+    ? observation
+    : undefined;
+}
+
 function setRuntimeGateway(
   state: RuntimeGatewayState,
   next: GatewayConfig | undefined,
@@ -1816,12 +2024,15 @@ function setRuntimeGateway(
   correlationId?: string,
   configured = next,
 ): void {
+  const kept = unchangedActivations(state, next);
   state.config = next;
   state.configured = configured;
   state.present = present;
   state.verification = UNVERIFIED_GATEWAY;
   state.observations.clear();
   state.generation++;
+  for (const observation of kept) state.observations.set(observation.modelId, observation);
+  syncActivation(state, "configuration-changed", correlationId);
   state.listeners.notify(correlationId);
 }
 
@@ -1869,6 +2080,7 @@ function replaceRuntimeCatalog(
       state.observations.set(id, { ...observation, generation: state.generation });
     } else state.observations.delete(id);
   }
+  syncActivation(state, "configuration-changed", correlationId);
   state.listeners.notify(correlationId);
   return true;
 }
@@ -1956,23 +2168,65 @@ function createRuntimeGatewayConfig(
       if (generation === undefined || generation === state.generation)
         state.verification = verification;
     },
+    ...runtimeObservationFacets(state),
+  };
+}
+
+function runtimeObservationFacets(
+  state: RuntimeGatewayState,
+): Pick<
+  RuntimeGatewayConfig,
+  | "verifiedCapability"
+  | "recordVerifiedCapability"
+  | "clearVerifiedCapability"
+  | "rememberActivations"
+  | "settleObservations"
+  | "settleActivationRecord"
+> {
+  return {
     verifiedCapability: (id): VerifiedModelCapabilityObservation | undefined =>
       state.observations.get(id),
     recordVerifiedCapability: gatewayCapabilityRecorder(
       state.observations,
       () => state.generation,
       (id) => state.config?.providers.some((provider) => provider.modelId === id) === true,
+      (correlationId) => {
+        syncActivation(state, "invalidated", correlationId);
+      },
     ),
-    clearVerifiedCapability: (id, generation): boolean =>
-      (generation === undefined || generation === state.generation) &&
-      state.observations.delete(id),
+    clearVerifiedCapability(id, generation, evidence): boolean {
+      if (generation !== undefined && generation !== state.generation) return false;
+      const cleared = state.observations.delete(id);
+      if (cleared) syncActivation(state, evidence?.cause ?? "invalidated", evidence?.correlationId);
+      return cleared;
+    },
+    rememberActivations(memory, correlationId): void {
+      rememberRuntimeActivations(state, memory, correlationId);
+    },
+    settleObservations: <T>(change: () => T): T => settleObservationChange(state, change),
+    settleActivationRecord(reason, correlationId): boolean {
+      // From the live activations, never from what the memory last heard: a restored set that no
+      // sync has touched yet is still part of it.
+      syncActivation(state, reason, correlationId);
+      return state.activation?.recorded() ?? true;
+    },
   };
+}
+
+function transientChatFailure(
+  fields: VerifiedModelCapabilityFields,
+  failure: "transient" | undefined,
+): Pick<VerifiedModelCapabilityObservation, "conversationReadinessFailure"> {
+  return fields.conversationReady === false && failure === "transient"
+    ? { conversationReadinessFailure: failure }
+    : {};
 }
 
 function gatewayCapabilityRecorder(
   observations: Map<string, VerifiedModelCapabilityObservation>,
   generation: () => number,
   admitted: (modelId: string) => boolean,
+  changed: (correlationId?: string) => void,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
   return (
     modelId,
@@ -1981,8 +2235,9 @@ function gatewayCapabilityRecorder(
     observedGeneration,
     conversationCheckedAt,
     citationObservation,
-    conversationReadinessFailure,
+    evidence,
   ): void => {
+    const conversationReadinessFailure = evidence?.conversationReadinessFailure;
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
     if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
@@ -1994,14 +2249,13 @@ function gatewayCapabilityRecorder(
         ? {}
         : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
-      ...(fields.conversationReady === false && conversationReadinessFailure === "transient"
-        ? { conversationReadinessFailure }
-        : {}),
+      ...transientChatFailure(fields, conversationReadinessFailure),
       ...boundedCitationObservation(
         citationObservation ?? observations.get(modelId),
         currentGeneration,
       ),
     });
+    changed(evidence?.correlationId);
   };
 }
 
@@ -3539,9 +3793,10 @@ function seedInitialProject(
   // Git and Files read of it is denied, so offering it only starts the person on a refused folder.
   // It is the very predicate the Files and Git routes apply to a requested root (#4371). The
   // decision is recorded body-free on the existing denial line: closed reason, no path.
-  if (pathIsDenied(normalizedPath)) {
+  const denial = pathDenialCause(normalizedPath);
+  if (denial !== undefined) {
     recordWorkspaceRootDenied(
-      { reason: "denied-locus", failureKind: "DENIED", errorKind: "authority-denied" },
+      { reason: pathDenialReason(denial), failureKind: "DENIED", errorKind: "authority-denied" },
       { correlationId },
     );
     return undefined;
@@ -7117,6 +7372,59 @@ function buildInitialGatewayState(
   };
 }
 
+/** Everything a start restores from the state directory before the handlers are assembled. */
+function restoreAtStartup(
+  options: BuildHandlerDepsOptions,
+  bundle: PersistenceBundle,
+  runtimeConfig: RuntimeGatewayConfig,
+  resolvedUiDbPath: string,
+  correlationId: string,
+): void {
+  reconcileNodeStoreAtStartup(options, bundle, correlationId);
+  restoreRememberedActivations(options, runtimeConfig, bundle, resolvedUiDbPath, correlationId);
+}
+
+/**
+ * Gives back the model activations of an earlier start whose binding still holds (owner decision
+ * 2026-11-28), with no request to any model. Without an installation identity nothing is
+ * remembered, so a missing identity can only cost a re-activation, never claim one.
+ */
+function restoreRememberedActivations(
+  options: BuildHandlerDepsOptions,
+  runtimeConfig: RuntimeGatewayConfig,
+  bundle: PersistenceBundle,
+  resolvedUiDbPath: string,
+  correlationId: string,
+): void {
+  if (runtimeConfig.rememberActivations === undefined) return;
+  let installationId: string | undefined;
+  try {
+    installationId = bundle.uiStore.browserApprovals?.installationId();
+  } catch (error) {
+    emitServerDiagnostic(
+      options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.activation.restore",
+        source: "server.deps.restoreRememberedActivations",
+        error,
+        redact: () => "Keiko could not read its installation identity; no activation is restored.",
+      }),
+    );
+  }
+  if (installationId === undefined) return;
+  runtimeConfig.rememberActivations(
+    createModelActivationMemory({
+      path: join(dirname(resolvedUiDbPath), MODEL_ACTIVATION_FILE),
+      installationId,
+      productVersion: KEIKO_PRODUCT_VERSION,
+      log: options.activityLog ?? processServerLogSink(),
+      diagnostics: options.diagnostics,
+    }),
+    correlationId,
+  );
+}
+
 /** The one native session continuity service of this server, over the state directory (S02/S03). */
 function buildCodingSessionContinuity(
   options: BuildHandlerDepsOptions,
@@ -7207,7 +7515,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
     projections.contentRedactString,
   );
-  reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
+  restoreAtStartup(options, bundle, runtimeConfig, resolvedUiDbPath, bootstrapCorrelationId);
   return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,

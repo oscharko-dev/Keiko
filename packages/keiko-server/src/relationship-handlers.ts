@@ -76,7 +76,7 @@ import type {
   RelationshipAuditKind,
 } from "./store/relationship-audit.js";
 import { UiStoreError } from "./store/errors.js";
-import { SSE_HEADERS } from "./sse.js";
+import { openSseResponse } from "./sse.js";
 import { writeSseFrame } from "./sse-write.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
@@ -1961,14 +1961,13 @@ function handleEventsImpl(ctx: RouteContext, deps: UiHandlerDeps): RouteResult |
     res.end();
     return STREAMING;
   }
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { openFrame: false });
   // Flush headers + emit an initial liveness frame so the EventSource client fires `onopen`
   // immediately, even on an idle workspace with no activity snapshots. Without this, the stream
   // sends 0 bytes until the first activity transition or the 30s ping, leaving the client stuck in
   // "connecting" and unable to distinguish a live-but-quiet stream from a dead one. The frame is a
   // `retry:` reconnect directive plus an SSE comment (`:` lines are ignored by EventSource), so it
   // carries no relationship payload and never trips the activity allowlist.
-  res.flushHeaders();
   const unsubscribe = openRelationshipEventsStream(ctx, deps, res, relationship, workspaceId);
   ctx.req.on("close", () => {
     unsubscribe();

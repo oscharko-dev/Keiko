@@ -558,6 +558,26 @@ describe("Gateway.chatStream", () => {
     expect(timeouts).toStrictEqual([GATEWAY_BUFFERED_BUDGET_FLOOR_MS]);
   });
 
+  it("skips a very long run of empty deltas before the first answer chunk", async () => {
+    const emptyDeltas = 100_000;
+    const adapter: ProviderAdapter = {
+      call: (_request, cfg) => Promise.resolve(okResponse(cfg.modelId)),
+      callStream: async function* (_request, cfg): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        for (let index = 0; index < emptyDeltas; index += 1) yield { type: "delta", token: "" };
+        yield { type: "delta", token: "answer" };
+        yield { type: "done", response: { ...okResponse(cfg.modelId), content: "answer" } };
+      },
+    };
+    const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
+      adapter,
+      clock: createScriptedGatewayClock(),
+    });
+    const chunks = await collectStream(gateway.chatStream(REQUEST));
+    expect(chunks.some((chunk) => chunk.type === "delta" && chunk.token === "answer")).toBe(true);
+    expect(chunks.at(-1)?.type).toBe("done");
+  });
+
   it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: streamingAdapter(["Hel", "lo"]),

@@ -3402,6 +3402,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserWidget.common.no": "nein",
   "browserWidget.status.screenshotReady":
     "Screenshot bereit (Probelauf) — mit Anwenden dauerhaft speichern.",
+  "browserWidget.status.eventsGap":
+    "Live-Ereignisse waren kurz pausiert, weil ein anderer Datenstrom die Verbindung brauchte. Ereignisse aus dieser Lücke werden nicht angezeigt.",
   "browserWidget.status.persistedAs": "Gespeichert als {path}.",
   "browserWidget.status.persistedAsPrefix": "Gespeichert als",
   "browserWidget.status.currentOrigin": "Aktueller Ursprung: {origin}",
@@ -3580,7 +3582,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.preview.preflightFindings": "Prüfungen",
   "commitComposer.preflight.branchProtectionUnavailable":
     "Remote-Branch-Regeln konnten nicht gelesen werden",
-  "commitComposer.preflight.signedCommitsRequired": "Signierte Commits sind möglicherweise nötig",
+  "commitComposer.preflight.signedCommitsRequired":
+    "Dieser Branch verlangt signierte Commits. Keiko signiert diesen Commit; richte vorher die Commit-Signierung ein (Signaturschlüssel und commit.gpgsign), sonst schlägt der Commit fehl",
   "commitComposer.warning.mixed-scope": "Gemischter Umfang — Änderungen betreffen mehrere Bereiche",
   "commitComposer.warning.wip-marker": "Work-in-Progress-Markierung im Betreff",
   "commitComposer.warning.large-change": "Große Änderung — viele Dateien bereitgestellt",
@@ -3593,6 +3596,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.violation.subject-too-long": "Die Betreffzeile ist zu lang",
   "commitComposer.violation.missing-issue-key": "Der erforderliche Issue-Schlüssel fehlt",
   "commitComposer.violation.missing-signoff": "Der Signed-off-by-Trailer fehlt",
+  "commitComposer.violation.message-too-large":
+    "Die Commit-Nachricht ist zu groß (mehr als 64 KiB)",
   "gitClientWindow.error.noRepository": "Wählen Sie zuerst ein Repository aus.",
   "promptEnhancer.error.cancelled": "Anfrage abgebrochen.",
   "promptEnhancer.error.failed":
@@ -6557,6 +6562,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.new": "Neu",
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
+  "gitClientWindow.ui.commitLateError":
+    "Der Commit wurde aufgezeichnet, obwohl Git einen späten Fehler gemeldet hat. Prüfen Sie den Repository-Zustand, bevor Sie erneut committen.",
   "gitClientWindow.ui.commitSigningRecovery":
     "Git konnte diesen Commit nicht signieren. Prüfen Sie den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stellen Sie sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicken Sie danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",

@@ -11,11 +11,17 @@ import {
   createEngine,
   evaluate,
   existsInTree,
+  groupLintFiles,
   isUiTypeScriptFile,
+  lintChangedFiles,
+  lintGroupInChild,
+  lintGroupOf,
   needsLargerHeap,
   profileRules,
   QUALITY_PROFILE,
   rerunWithLargerHeap,
+  serialiseResults,
+  SONAR_RULES_GROUP_ENV,
   SONAR_RULES_HEAP_RERUN_ENV,
   shouldRerunWithLargerHeap,
   resolveBaseRef,
@@ -406,4 +412,146 @@ describe("rerunWithLargerHeap", () => {
     expect(shouldRerunWithLargerHeap({}, small)).toBe(true);
     expect(shouldRerunWithLargerHeap({ [SONAR_RULES_HEAP_RERUN_ENV]: "1" }, small)).toBe(false);
   });
+});
+
+// #4573: one engine kept every type-aware program of a wide diff resident and ran out of the hosted
+// runner's 8 GB heap, so each analysis group runs in a process of its own.
+describe("analysis groups", () => {
+  it("groups a file by its workspace package, else by its top-level folder", () => {
+    expect(lintGroupOf("packages/keiko-server/src/a.ts")).toBe("packages/keiko-server");
+    expect(lintGroupOf("packages/keiko-ui/src/lib/b.tsx")).toBe("packages/keiko-ui");
+    expect(lintGroupOf("scripts/lib/c.mjs")).toBe("scripts");
+    expect(lintGroupOf("eslint.config.mjs")).toBe(".");
+    expect(lintGroupOf("vitest.config.ts")).toBe(".");
+    expect(lintGroupOf("packages/x.mjs")).toBe("packages");
+  });
+
+  it("keeps every file exactly once, grouped in first-seen order", () => {
+    const files = [
+      "packages/keiko-server/src/a.ts",
+      "scripts/b.mjs",
+      "packages/keiko-server/src/c.ts",
+      "packages/keiko-ui/src/d.tsx",
+    ];
+    expect(groupLintFiles(files)).toEqual([
+      ["packages/keiko-server/src/a.ts", "packages/keiko-server/src/c.ts"],
+      ["scripts/b.mjs"],
+      ["packages/keiko-ui/src/d.tsx"],
+    ]);
+  });
+
+  it("lints each group separately and returns every group's results", async () => {
+    const seen = [];
+    const results = await lintChangedFiles(
+      ["packages/keiko-a/src/x.ts", "scripts/y.mjs", "packages/keiko-a/src/z.ts"],
+      async (group) => {
+        seen.push(group);
+        return group.map((filePath) => ({ filePath, messages: [] }));
+      },
+    );
+    expect(seen).toEqual([
+      ["packages/keiko-a/src/x.ts", "packages/keiko-a/src/z.ts"],
+      ["scripts/y.mjs"],
+    ]);
+    expect(results.map((result) => result.filePath)).toEqual([
+      "packages/keiko-a/src/x.ts",
+      "packages/keiko-a/src/z.ts",
+      "scripts/y.mjs",
+    ]);
+  });
+
+  it("keeps only the fields the verdict reads", () => {
+    expect(
+      serialiseResults([
+        {
+          filePath: "/r/a.ts",
+          source: "secret-free but large",
+          messages: [{ line: 2, message: "m", ruleId: "sonarjs/x", column: 4, fatal: undefined }],
+        },
+        { filePath: "/r/b.ts", messages: [{ line: 1, message: "parse", fatal: true }] },
+      ]),
+    ).toEqual([
+      {
+        filePath: "/r/a.ts",
+        messages: [{ fatal: false, line: 2, message: "m", ruleId: "sonarjs/x" }],
+      },
+      { filePath: "/r/b.ts", messages: [{ fatal: true, line: 1, message: "parse", ruleId: null }] },
+    ]);
+  });
+});
+
+describe("lintGroupInChild", () => {
+  const spawnReturning = (child) => vi.fn(() => child);
+
+  it("starts the script as a marked group process with the raised heap and the files on stdin", () => {
+    const analysed = [{ filePath: resolve(repoRoot, "scripts/a.mjs"), messages: [] }];
+    const spawn = spawnReturning({
+      status: 0,
+      output: [null, null, null, JSON.stringify(analysed)],
+    });
+    expect(
+      lintGroupInChild(["scripts/a.mjs"], { spawn, script: "/x/s.mjs", env: { PATH: "p" } }),
+    ).toEqual(analysed);
+    const [executable, args, options] = spawn.mock.calls[0];
+    expect(executable).toBe(process.execPath);
+    expect(args).toEqual([`--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`, "/x/s.mjs"]);
+    expect(options.env).toEqual({
+      PATH: "p",
+      [SONAR_RULES_HEAP_RERUN_ENV]: "1",
+      [SONAR_RULES_GROUP_ENV]: "1",
+    });
+    expect(options.input).toBe(JSON.stringify(["scripts/a.mjs"]));
+    expect(options.stdio[3]).toBe("pipe");
+  });
+
+  it("fails instead of passing when a requested file has no result", () => {
+    const analysed = [{ filePath: resolve(repoRoot, "scripts/a.mjs"), messages: [] }];
+    const spawn = spawnReturning({
+      status: 0,
+      output: [null, null, null, JSON.stringify(analysed)],
+    });
+    expect(() => lintGroupInChild(["scripts/a.mjs", "scripts/b.mjs"], { spawn })).toThrow(
+      "no result for 1 file(s)",
+    );
+  });
+
+  it("fails instead of passing when a group process ends with a status", () => {
+    const spawn = spawnReturning({ status: 134, output: [null, null, null, ""] });
+    expect(() => lintGroupInChild(["a.mjs"], { spawn })).toThrow("ended by status 134");
+  });
+
+  it("fails and names the signal when a group process is killed", () => {
+    const spawn = spawnReturning({ status: null, signal: "SIGABRT", output: [] });
+    expect(() => lintGroupInChild(["a.mjs", "b.mjs"], { spawn })).toThrow(
+      "the analysis of 2 file(s) ended by signal SIGABRT",
+    );
+  });
+
+  it("rethrows a process that could not start", () => {
+    const spawn = spawnReturning({ error: new Error("spawn ENOENT") });
+    expect(() => lintGroupInChild(["a.mjs"], { spawn })).toThrow("spawn ENOENT");
+  });
+
+  it("reports through a real group process what the engine reports in place", async () => {
+    const relative = "scripts/sonar-rules-group-probe.mjs";
+    const path = resolve(repoRoot, relative);
+    const code = [
+      "export function probe(flag) {",
+      "  if (flag) {",
+      "    return 1;",
+      "  } else {",
+      "    return 1;",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(path, code);
+    try {
+      const inPlace = summarise(await createEngine().lintFiles([path]));
+      expect(inPlace.length).toBeGreaterThan(0);
+      expect(summarise(lintGroupInChild([path]))).toEqual(inPlace);
+    } finally {
+      rmSync(path, { force: true });
+    }
+  }, 120_000);
 });

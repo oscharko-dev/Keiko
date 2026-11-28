@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { isCredentialNamedSegment, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { closeFileServerLogSinks, createActivityLogSink } from "../observability/index.js";
@@ -48,7 +49,7 @@ function workspaceAt(root: string): WorkspaceInfo {
 }
 
 describe("privateStepWorkspace (#4496)", () => {
-  it("copies the workspace once without credential-named entries and links, then removes it", () => {
+  it("copies the workspace once without credential-named entries and links, then removes it", async () => {
     const real = temporary("keiko-step-real-");
     const outside = temporary("keiko-step-outside-");
     mkdirSync(join(real, "src"));
@@ -102,15 +103,20 @@ describe("privateStepWorkspace (#4496)", () => {
       loss: "none",
     });
 
-    step.dispose();
+    const cleanup = await step.dispose();
     expect(existsSync(copy.root)).toBe(false);
-    step.dispose();
+    expect(cleanup).toMatchObject({ retryCount: 0 });
+    expect(await step.dispose()).toBeUndefined();
   });
 
-  it("makes no copy for a run whose steps never asked for one", () => {
+  it("makes no copy for a run whose steps never asked for one", async () => {
     const real = temporary("keiko-step-real-");
     const stateRoot = temporary("keiko-step-log-");
-    privateStepWorkspace(workspaceAt(real), createActivityLogSink(stateRoot), undefined).dispose();
+    await privateStepWorkspace(
+      workspaceAt(real),
+      createActivityLogSink(stateRoot),
+      undefined,
+    ).dispose();
     closeFileServerLogSinks();
     expect(
       persistedActivityLogLines(
@@ -118,6 +124,102 @@ describe("privateStepWorkspace (#4496)", () => {
         "editor.verification.windows-step-copy",
       ),
     ).toEqual([]);
+  });
+
+  describe("removing the copy", () => {
+    function copiedStep(
+      host: Parameters<typeof privateStepWorkspace>[3],
+      correlationId = "step-cleanup",
+    ): { readonly step: ReturnType<typeof privateStepWorkspace>; readonly root: string } {
+      const real = temporary("keiko-step-real-");
+      writeFileSync(join(real, "index.ts"), "export {};\n");
+      const step = privateStepWorkspace(
+        workspaceAt(real),
+        createActivityLogSink(temporary("keiko-step-log-")),
+        correlationId,
+        host,
+      );
+      return { step, root: step.workspace().root };
+    }
+
+    it("settles only once the copy is gone, so the next copy is never made beside it", async () => {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { step, root } = copiedStep({
+        remove: async (path, options) => {
+          await gate;
+          await rm(path, options);
+        },
+      });
+
+      let settled = false;
+      const disposal = step.dispose().then((cleanup) => {
+        settled = true;
+        return cleanup;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(existsSync(root)).toBe(true);
+
+      release();
+      const cleanup = await disposal;
+      expect(existsSync(root)).toBe(false);
+      expect(cleanup).toMatchObject({ retryCount: 0 });
+    });
+
+    it("retries a transient removal failure with a growing delay and reports the retry count", async () => {
+      const delays: number[] = [];
+      let failures = 2;
+      const clock = [100, 160];
+      const { step, root } = copiedStep({
+        remove: async (path, options) => {
+          if (failures > 0) {
+            failures -= 1;
+            throw Object.assign(new Error("busy"), { code: "EBUSY" });
+          }
+          await rm(path, options);
+        },
+        sleep: (ms) => {
+          delays.push(ms);
+          return Promise.resolve();
+        },
+        now: () => clock.shift() ?? 160,
+      });
+
+      expect(await step.dispose()).toEqual({ durationMs: 60, retryCount: 2 });
+      expect(delays).toEqual([100, 200]);
+      expect(existsSync(root)).toBe(false);
+    });
+
+    it("gives up after five retries, records the failure and still settles", async () => {
+      let attempts = 0;
+      const { step } = copiedStep({
+        remove: () => {
+          attempts += 1;
+          return Promise.reject(Object.assign(new Error("locked"), { code: "EPERM" }));
+        },
+        sleep: () => Promise.resolve(),
+      });
+
+      expect(await step.dispose()).toMatchObject({ retryCount: 5 });
+      expect(attempts).toBe(6);
+    });
+
+    it("does not retry an error that is not transient", async () => {
+      let attempts = 0;
+      const { step } = copiedStep({
+        remove: () => {
+          attempts += 1;
+          return Promise.reject(Object.assign(new Error("denied"), { code: "EACCES" }));
+        },
+        sleep: () => Promise.reject(new Error("must not wait")),
+      });
+
+      expect(await step.dispose()).toMatchObject({ retryCount: 0 });
+      expect(attempts).toBe(1);
+    });
   });
 
   it("names the credential files the Windows step canary places beside the private copy", () => {

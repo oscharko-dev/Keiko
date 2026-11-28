@@ -160,9 +160,18 @@ export type CodingWorkbenchRuntimeFailureCode =
  * `workspace-location-unsupported`; one whose worktree lies on another volume than Windows, where
  * the AppContainer cannot resolve its path, with `workspace-volume-unsupported`. No run exists when
  * they are answered, so no run snapshot ever carries one: they are not run failure codes.
+ * `workspace-selection-mismatch` is the same kind: the start stated a repository other than the
+ * server's active workspace (the Workbench showed one folder while the global pointer was on
+ * another) and is refused before any authority, snapshot or history exists.
+ * `expected-workspace-missing` is the same kind: the start stated no repository at all (a window
+ * whose bundle predates the field), so the guard above cannot run. The start stays refused, and the
+ * window is told to reload rather than shown a contract error.
  */
 export type CodingWorkbenchRuntimeStartRefusalCode =
-  "workspace-location-unsupported" | "workspace-volume-unsupported";
+  | "workspace-location-unsupported"
+  | "workspace-volume-unsupported"
+  | "workspace-selection-mismatch"
+  | "expected-workspace-missing";
 
 /** What a refused start answers with: a run failure code, or a start-only refusal (#4068). */
 export type CodingWorkbenchRuntimeStartFailureCode =
@@ -210,7 +219,8 @@ export type CodingWorkbenchTurnFailureCode =
 /**
  * Why a run that changed code settled `verification-not-evidenced` (#4491): the concrete gap the
  * Workbench names instead of a generic "not verified". `no-check-run`: no check ran after the last
- * change. `check-failed`: a check ran after the last change and failed. `check-not-started`: a check
+ * change; since the 2026-11-28 owner decision this gap no longer fails a run, it is recorded on the
+ * Activity Log and the value stays admissible only for a row an older Keiko stored. `check-failed`: a check ran after the last change and failed. `check-not-started`: a check
  * could not start (it was refused or blocked). `budget-exhausted`: the run's tool-call or patch
  * budget was used up before a check ran. A closed word, never inferred from text.
  */
@@ -222,6 +232,31 @@ export const CODING_WORKBENCH_VERIFICATION_GAPS = [
 ] as const;
 
 export type CodingWorkbenchVerificationGap = (typeof CODING_WORKBENCH_VERIFICATION_GAPS)[number];
+
+/**
+ * Why a `cancelled` run ended when the person did not press Stop (U-31): Keiko itself was closed.
+ * `server-shutdown-waiting`: the run was held for a decision only the person can make, so no action
+ * was in flight. `server-shutdown-working`: the run was doing work, so what it had started is not
+ * known to be complete. Absent on a person's own Stop and on a run settled by an older Keiko. A
+ * closed word, never inferred from text.
+ */
+export const CODING_WORKBENCH_STOP_CAUSES = [
+  "server-shutdown-waiting",
+  "server-shutdown-working",
+] as const;
+
+export type CodingWorkbenchStopCause = (typeof CODING_WORKBENCH_STOP_CAUSES)[number];
+
+/**
+ * What a `check-failed` verification gap adds (U-38). `unchanged-after-continuation`: Keiko asked the
+ * model once to look at the failing check and the model changed no code afterwards, so the check is
+ * still red and this run did not change it (the failure may predate the run). A closed word, never
+ * inferred from text; absent on every other gap.
+ */
+export const CODING_WORKBENCH_VERIFICATION_GAP_DETAILS = ["unchanged-after-continuation"] as const;
+
+export type CodingWorkbenchVerificationGapDetail =
+  (typeof CODING_WORKBENCH_VERIFICATION_GAP_DETAILS)[number];
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([

@@ -1,5 +1,5 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -66,33 +66,95 @@ function finishActions(
   ];
 }
 
-function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
-  const t = useCodingWorkbenchTranslate();
+// #4491: Complete task and New task disable or unmount the button that was just activated, which
+// dropped the keyboard focus to the page. The composer is where the person types next.
+const COMPOSER_ID = "coding-workbench-task-intent";
+
+// The person (or another control) already placed the focus on a live, enabled element outside the
+// session bar: it stays. The bar's own buttons are the ones the action just used.
+function focusSettledElsewhere(bar: HTMLElement | null): boolean {
+  const current = document.activeElement;
+  if (!(current instanceof HTMLElement) || current === document.body) return false;
+  if (bar?.contains(current) === true) return false;
+  return current.isConnected && !current.matches(":disabled");
+}
+
+// Focus moves once the action has settled and the page shows its outcome: to the composer after a
+// success, to the Try again control after a failure, where Finish and Try again are still offered.
+// A click arms the wait and the action raises `pending` in the same event: a commit that sees it
+// rise starts the wait. An action that settles without any such commit was an early return, which
+// disarms, so a later unrelated pending change never steals the focus.
+function useFocusAfterAction(
+  session: CodingTaskSession,
+  retryRef: RefObject<HTMLButtonElement | null>,
+  barRef: RefObject<HTMLElement | null>,
+): (action: () => Promise<void>) => Promise<void> {
+  const phase = useRef<"idle" | "armed" | "waiting">("idle");
+  const { pending, error } = session;
+  useEffect(() => {
+    if (phase.current === "armed") {
+      phase.current = pending ? "waiting" : "idle";
+      return;
+    }
+    if (phase.current !== "waiting" || pending) return;
+    phase.current = "idle";
+    if (error) {
+      retryRef.current?.focus();
+      return;
+    }
+    if (focusSettledElsewhere(barRef.current)) return;
+    const composer = document.getElementById(COMPOSER_ID);
+    if (composer instanceof HTMLElement && !composer.hasAttribute("disabled")) composer.focus();
+  });
+  return (action) => {
+    phase.current = "armed";
+    return action().finally(() => {
+      if (phase.current === "armed") phase.current = "idle";
+    });
+  };
+}
+
+function sessionActions(
+  session: CodingTaskSession,
+  active: boolean,
+  onHistory: () => void,
+  t: ReturnType<typeof useCodingWorkbenchTranslate>,
+): readonly SessionAction[] {
   const locked = active || session.pending;
-  const actions = [
-    {
-      label: t("codingWorkbench.history.title"),
-      icon: Icons.codingHistory,
-      run: onHistory,
-      disabled: false,
-    },
+  const history = {
+    label: t("codingWorkbench.history.title"),
+    icon: Icons.codingHistory,
+    run: onHistory,
+    disabled: false,
+  };
+  const created = {
+    label: t("codingWorkbench.history.new"),
+    icon: Icons.plus,
+    run: (): void => void session.newTask(),
+    disabled: locked,
+  };
+  // A task that could not be read has nothing to fork, continue or complete: the way out is Coding
+  // History or a new task.
+  if (session.detail === null) return [history, created];
+  return [
+    history,
     {
       label: t("codingWorkbench.history.fork"),
       icon: Icons.branch,
       run: (): void => {
         session.beginFork();
       },
-      disabled: locked || session.detail === null || session.fork !== null,
+      disabled: locked || session.fork !== null,
     },
     ...continueActions(session, locked, t),
     ...finishActions(session, locked, t),
-    {
-      label: t("codingWorkbench.history.new"),
-      icon: Icons.plus,
-      run: (): void => void session.newTask(),
-      disabled: locked,
-    },
+    created,
   ];
+}
+
+function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const actions = sessionActions(session, active, onHistory, t);
   return (
     <div className={styles.cmpSessionActions}>
       {actions.map(({ label, icon: Icon, run, disabled }) => (
@@ -112,24 +174,70 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
   );
 }
 
+function RetryButton({
+  retry,
+  buttonRef,
+}: {
+  readonly retry: (() => void) | undefined;
+  readonly buttonRef: RefObject<HTMLButtonElement | null>;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (retry === undefined) return null;
+  return (
+    <button ref={buttonRef} type="button" className={styles.cmpMessageFork} onClick={retry}>
+      {t("codingWorkbench.history.retry")}
+    </button>
+  );
+}
+
+// Complete task, New task and Try again each remove or disable the control that was activated, so
+// each hands the keyboard focus over once the action has settled.
+function withFocusHandover(
+  session: CodingTaskSession,
+  awaitFocus: (action: () => Promise<void>) => Promise<void>,
+): CodingTaskSession {
+  const repeat = session.retry;
+  return {
+    ...session,
+    finish: () => awaitFocus(session.finish),
+    newTask: () => awaitFocus(session.newTask),
+    retry:
+      repeat === undefined
+        ? undefined
+        : (): void => {
+            void awaitFocus(() => {
+              repeat();
+              return Promise.resolve();
+            });
+          },
+  };
+}
+
 export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const { session } = props;
   const t = useCodingWorkbenchTranslate();
+  const retryRef = useRef<HTMLButtonElement | null>(null);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const awaitFocus = useFocusAfterAction(session, retryRef, barRef);
   // #3880: an unpaired window cannot read its task; the run status sentence says why.
   const errorHeld = useHeldNotice("task-session", session.error);
   const error = session.error && !errorHeld;
   if (session.detail === null && !session.pending && !error) return null;
+  const marked = withFocusHandover(session, awaitFocus);
   return (
-    <div className={styles.cmpSessionBar}>
+    <div ref={barRef} className={styles.cmpSessionBar}>
       {session.detail !== null ? (
+        <span className={styles.cmpSessionIdentity} title={session.detail.task.title}>
+          {session.detail.task.title}
+        </span>
+      ) : null}
+      {session.detail !== null || error ? <TaskSessionActions {...props} session={marked} /> : null}
+      {error ? (
         <>
-          <span className={styles.cmpSessionIdentity} title={session.detail.task.title}>
-            {session.detail.task.title}
-          </span>
-          <TaskSessionActions {...props} />
+          <p role="alert">{t("codingWorkbench.history.error")}</p>
+          <RetryButton retry={marked.retry} buttonRef={retryRef} />
         </>
       ) : null}
-      {error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
       {session.pending ? <output>{t("codingWorkbench.history.loading")}</output> : null}
     </div>
   );

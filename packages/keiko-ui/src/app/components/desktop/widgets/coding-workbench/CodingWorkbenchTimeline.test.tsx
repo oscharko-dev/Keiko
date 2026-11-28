@@ -446,8 +446,8 @@ describe("CodingWorkbenchTimeline", () => {
     expect(trust.querySelector('[data-state="waiting-for-trust"]')).toHaveTextContent(
       "Waiting for approval",
     );
-    expect(trust).toHaveTextContent("this workspace's package scripts are not allowed yet");
-    expect(trust).toHaveTextContent("Allow package scripts for verification");
+    expect(trust).toHaveTextContent("you have not yet trusted this repository's build files");
+    expect(trust).toHaveTextContent("Trust this repository's build files");
 
     const empty = card("no-runnable-steps");
     expect(empty.open).toBe(true);
@@ -527,12 +527,48 @@ describe("CodingWorkbenchTimeline", () => {
     expect(passed).toHaveTextContent("Every requested verification check passed.");
   });
 
+  // Lab U-24: a task branch refused as not-on-base read the generic policy sentence. Each closed
+  // branch word names its own cause; the policy and authority refusals keep the generic one.
+  it.each([
+    ["branch-invalid-name", "not a branch name Keiko will create"],
+    ["branch-protected-name", "protected name such as main or dev"],
+    ["branch-exists", "a branch with that name already exists"],
+    ["branch-not-on-base", "already on a task branch"],
+    ["branch-not-local-checkout", "only in a Local checkout"],
+    ["branch-executable-filters", "executable Git filters"],
+    ["branch-preflight", "repository condition that blocks the branch"],
+    ["commit-protected-branch", "does not commit there. Use a task branch"],
+    ["blocked", "policy or authority checks refused"],
+  ] as const)("explains the refused task branch %s precisely", (gitOutcome, sentence) => {
+    const feed = feedWithGitOutcomes();
+    const tool = {
+      callId: "branch-1",
+      tool: "keiko_git",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome, bridgeDurationMs: 9 },
+    } as const;
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-branch", messages: [], tools: [tool], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent(sentence);
+    if (gitOutcome !== "blocked") expect(container).not.toHaveTextContent("policy or authority");
+  });
+
   // Lab T37 (2026-11-07, #4271): a commit Keiko refused showed "Git commit - Succeeded". A refused
   // Git step reads as not done, with its reason, and opens like the other cards that need a reading.
   it("shows a refused Git step as not done instead of succeeded", () => {
     const { container } = render(
       <Timeline
-        active={false}
+        active
         events={[]}
         activity={activityLike(feedWithGitOutcomes())}
         questions={IDLE_QUESTIONS}
@@ -610,11 +646,125 @@ describe("CodingWorkbenchTimeline", () => {
     );
 
     expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
-    const prepared = container.querySelector<HTMLDetailsElement>('[data-tool-state="prepared"]');
-    expect(prepared?.open).toBe(false);
-    expect(prepared).toHaveTextContent("Prepared");
-    expect(prepared).toHaveTextContent("Prepared here; a later step took it up.");
-    expect(prepared).not.toHaveTextContent("Succeeded");
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    const committed = container.querySelector<HTMLDetailsElement>('[data-tool-state="committed"]');
+    expect(committed?.open).toBe(false);
+    expect(committed).toHaveTextContent("Committed");
+    expect(committed).not.toHaveTextContent("Prepared");
+    expect(committed).not.toHaveTextContent("Succeeded");
+  });
+
+  // Live, Full access (#4491): the commit proposal is answered as prepared, policy executes it, and
+  // the proposal row kept reading "Prepared" beside the "Git operation - Succeeded" row.
+  it("shows an authorized commit proposal as committed once its execute step succeeded", () => {
+    const feed = feedWithRepeatedTools();
+    const tools = [
+      {
+        callId: "git-commit-proposal",
+        tool: "keiko_git_commit",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "prepared", bridgeDurationMs: 9 },
+      },
+      {
+        callId: "git-commit-execute",
+        tool: "keiko_git_execute",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+      },
+    ] as const;
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-commit", messages: [], tools: [...tools], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="committed"]')).toHaveTextContent("Committed");
+  });
+
+  // Lab 2026-11-27 (Full access): a proposal the policy authorized needs no decision, and a run that
+  // is over cannot be waiting for one. Neither may read "Waiting for approval".
+  it("shows a proposal that needs no decision as prepared, in a live and a finished run", () => {
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "prepared", bridgeDurationMs: 9 },
+    } as const;
+    for (const active of [true, false]) {
+      const { container, unmount } = render(
+        <Timeline
+          active={active}
+          events={[]}
+          activity={activityLike({
+            ...feedWithRepeatedTools(),
+            turns: [{ turnId: "turn-commit", messages: [], tools: [proposal], truncated: false }],
+          })}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+      expect(container.querySelector('[data-tool-state="prepared"]')).toHaveTextContent("Prepared");
+      unmount();
+    }
+  });
+
+  it("never leaves a Git proposal waiting for approval once the run is over", () => {
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    } as const;
+    const view = (active: boolean): ReactElement => (
+      <Timeline
+        active={active}
+        events={[]}
+        activity={activityLike({
+          ...feedWithRepeatedTools(),
+          turns: [{ turnId: "turn-commit", messages: [], tools: [proposal], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />
+    );
+    const { container, rerender } = render(view(true));
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).not.toBeNull();
+    rerender(view(false));
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+    const ended = container.querySelector('[data-tool-state="not-done"]');
+    expect(ended).not.toBeNull();
+    // The sentence follows the badge: a finished run's step is not done, never "waiting".
+    expect(ended).toHaveTextContent("Not done: the step failed or its result is uncertain.");
+    expect(container).not.toHaveTextContent("Waiting for a decision");
+  });
+
+  // The relocation of the waiting pins to a live run must not lose the finished-run coverage of every
+  // other Git word: each reads as not done with its own reason, and the one that waited does too.
+  it("shows every unfinished Git word as not done in a run that is over", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithGitOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const notDone = container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="not-done"]');
+    expect(notDone).toHaveLength(8);
+    for (const card of notDone) expect(card).not.toHaveTextContent("Succeeded");
+    expect(container).toHaveTextContent("policy or authority checks refused");
+    expect(container).toHaveTextContent("changed after this step was proposed");
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
   });
 
   // Audit of 72be7da6f: only a completed execute takes a proposal up. A proposal still waiting while
@@ -660,7 +810,7 @@ describe("CodingWorkbenchTimeline", () => {
     } as const;
     const { container } = render(
       <Timeline
-        active={false}
+        active
         events={[]}
         activity={activityLike({
           ...feed,
@@ -697,7 +847,7 @@ describe("CodingWorkbenchTimeline", () => {
     const renderTools = (tools: readonly CodingSafeActivityTool[]): HTMLElement =>
       render(
         <Timeline
-          active={false}
+          active
           events={[]}
           activity={activityLike({
             ...feed,
@@ -726,8 +876,155 @@ describe("CodingWorkbenchTimeline", () => {
     oneRedeemed.remove();
 
     const bothRedeemed = renderTools([...proposals, execute("exec-1"), execute("exec-2")]);
-    expect(bothRedeemed.querySelectorAll('[data-tool-state="prepared"]')).toHaveLength(2);
+    expect(bothRedeemed.querySelectorAll('[data-tool-state="committed"]')).toHaveLength(1);
+    expect(bothRedeemed.querySelectorAll('[data-tool-state="carried-out"]')).toHaveLength(1);
+    expect(bothRedeemed.querySelector('[data-tool-state="prepared"]')).toBeNull();
     expect(bothRedeemed.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+  });
+
+  // Audit of the U-40/U-49 merge: a ready stage proposal (Full access, no outcome) is still open,
+  // so one completed execute redeems one of two open proposals and the commit stays waiting.
+  it("counts a ready stage proposal as open, so one execute leaves a later commit waiting", () => {
+    const tools: CodingSafeActivityTool[] = [
+      {
+        callId: "stage-ready",
+        tool: "keiko_git_stage",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { bridgeDurationMs: 9 },
+      },
+      {
+        callId: "commit-proposal",
+        tool: "keiko_git_commit",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+      },
+      {
+        callId: "exec-1",
+        tool: "keiko_git_execute",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+      },
+    ];
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike({
+          ...feedWithRepeatedTools(),
+          turns: [{ turnId: "turn-ready", messages: [], tools, truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelectorAll('[data-tool-state="waiting-for-approval"]')).toHaveLength(1);
+    expect(container.querySelector('[data-tool-state="committed"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+  });
+
+  // U-49 (real macOS Full-access run, 2026-11-28): an unstage proposal read "Git stage" and every
+  // execute read "Git operation", so the run's Git rows could not be told apart.
+  describe("names the Git action a row stands for (U-49)", () => {
+    const titles = (tools: readonly CodingSafeActivityTool[]): string[] => {
+      const { container, unmount } = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike({
+            ...feedWithRepeatedTools(),
+            turns: [{ turnId: "turn-git", messages: [], tools: [...tools], truncated: false }],
+          })}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      // Completed steps fold into a closed "N steps" group that mounts its rows when opened.
+      for (const summary of container.querySelectorAll("[data-timeline-kind='group'] summary")) {
+        fireEvent.click(summary);
+      }
+      const found = [...container.querySelectorAll("p[title^='keiko_git']")].map(
+        (node) => node.textContent ?? "",
+      );
+      unmount();
+      return found;
+    };
+    const proposal = (
+      callId: string,
+      tool: string,
+      presentation: NonNullable<CodingSafeActivityTool["presentation"]>,
+    ): CodingSafeActivityTool => ({
+      callId,
+      tool,
+      state: "succeeded",
+      occurredAt: AT,
+      presentation,
+    });
+    const execute = (
+      callId: string,
+      gitOutcome: "completed" | "not-done",
+    ): CodingSafeActivityTool =>
+      proposal(callId, "keiko_git_execute", { gitOutcome, bridgeDurationMs: 9 });
+
+    it("reads an unstage proposal as an unstage and a stage proposal as a stage", () => {
+      expect(
+        titles([
+          proposal("unstage", "keiko_git_stage", { gitAction: "unstage" }),
+          proposal("stage", "keiko_git_stage", { gitAction: "stage" }),
+          proposal("legacy", "keiko_git_stage", { bridgeDurationMs: 9 }),
+        ]),
+      ).toEqual(["Git unstage", "Git stage", "Git stage"]);
+    });
+
+    it.each([
+      ["a commit", "keiko_git_commit", { gitOutcome: "prepared" }, "Git commit"],
+      ["a stage", "keiko_git_stage", { gitAction: "stage" }, "Git stage"],
+      ["an unstage", "keiko_git_stage", { gitAction: "unstage" }, "Git unstage"],
+    ] as const)(
+      "names the execute after the one open proposal, %s",
+      (_case, tool, shown, label) => {
+        expect(titles([proposal("only", tool, shown), execute("exec", "completed")])).toEqual([
+          label,
+          label,
+        ]);
+      },
+    );
+
+    it("names a refused execute after its one open proposal too", () => {
+      expect(
+        titles([
+          proposal("commit", "keiko_git_commit", { gitOutcome: "prepared" }),
+          execute("refused", "not-done"),
+        ]),
+      ).toEqual(["Git commit", "Git commit"]);
+    });
+
+    // Audit of 488d2c939: a branch or sync proposal is open too, so one unredeemed stage proposal
+    // followed by a branch proposal leaves two open and the execute must not guess "Git stage".
+    it.each([
+      ["keiko_git_branch", "Create task branch"],
+      ["keiko_git_sync", "Git sync"],
+    ] as const)("counts a %s proposal among the open ones", (tool, label) => {
+      expect(
+        titles([
+          proposal("stage", "keiko_git_stage", { gitAction: "stage" }),
+          proposal("other", tool, { gitOutcome: "waiting-for-approval" }),
+          execute("which", "completed"),
+        ]),
+      ).toEqual(["Git stage", label, "Git operation"]);
+    });
+
+    it("keeps the generic label with no open proposal or with several", () => {
+      expect(titles([execute("alone", "completed")])).toEqual(["Git operation"]);
+      expect(
+        titles([
+          proposal("a", "keiko_git_commit", { gitOutcome: "prepared" }),
+          proposal("b", "keiko_git_stage", { gitAction: "stage" }),
+          execute("which", "completed"),
+        ]),
+      ).toEqual(["Git commit", "Git stage", "Git operation"]);
+    });
   });
 
   // Lab T37 audit (#4271): a refused Git step between succeeded calls must not fold into the
@@ -769,7 +1066,7 @@ describe("CodingWorkbenchTimeline", () => {
       const { container } = render(
         <I18nProvider>
           <Timeline
-            active={false}
+            active
             events={[]}
             activity={activityLike(feedWithGitOutcomes())}
             questions={IDLE_QUESTIONS}
@@ -825,7 +1122,7 @@ describe("CodingWorkbenchTimeline", () => {
       const text = (state: string): string =>
         container.querySelector(`[data-tool-state="${state}"]`)?.textContent ?? "";
       expect(text("waiting-for-trust")).toContain("Wartet auf Freigabe");
-      expect(text("waiting-for-trust")).toContain("noch nicht zugelassen");
+      expect(text("waiting-for-trust")).toContain("noch nicht freigegeben");
       expect(text("no-runnable-steps")).toContain("Nichts auszuführen");
       expect(text("no-runnable-steps")).toContain("für diese Anfrage nichts gefunden");
       expect(text("no-runnable-steps")).not.toContain("definiert kein Skript");
@@ -3220,9 +3517,10 @@ describe("Timeline — error report on a failed run", () => {
   });
 });
 
-// #4491: a run that changed code without a passing check after its last change names the concrete
-// gap in one plain sentence and offers "Run the check now" in place of the error report: nothing
-// broke inside Keiko, and the person can act on the sentence.
+// #4491, amended by the 2026-11-28 owner decision: a run that failed on a verification gap (a failed
+// check, a check that could not start, a spent budget, or an old stored row) names the concrete gap
+// in one plain sentence under the ordinary failed-run title. It offers neither the error report nor
+// any "Run the check now" button: nothing broke inside Keiko, and the button no longer exists.
 describe("Timeline — verification gap on a failed run", () => {
   const RUN_ID = "run-272120967981827964065820685403290179367";
   const GAP_SENTENCES = {
@@ -3255,56 +3553,35 @@ describe("Timeline — verification gap on a failed run", () => {
     };
   }
 
-  function renderGap(
-    gap: keyof typeof GAP_SENTENCES | undefined,
-    onRunCheck?: () => void,
-  ): ReturnType<typeof render> {
+  function renderGap(gap: keyof typeof GAP_SENTENCES | undefined): ReturnType<typeof render> {
     return render(
       <Timeline
         events={[gapEvent(gap)]}
         activity={activityLike(bareFeed())}
         questions={IDLE_QUESTIONS}
-        onRunCheck={onRunCheck}
       />,
     );
   }
 
   it.each(Object.entries(GAP_SENTENCES))(
-    "names the gap %s and ends with what the person can do",
+    "names the gap %s under the ordinary failed-run title, with no check button",
     (gap, sentence) => {
-      const { container } = renderGap(gap as keyof typeof GAP_SENTENCES, vi.fn());
+      const { container } = renderGap(gap as keyof typeof GAP_SENTENCES);
       expect(container).toHaveTextContent(sentence);
-      expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+      expect(container).toHaveTextContent(/Coding run failed/u);
+      expect(container).not.toHaveTextContent(/Changes not checked/u);
       expect(container).not.toHaveTextContent(/internal error/iu);
+      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
     },
   );
 
-  it("offers Run the check now and no error report, and the button submits the request", () => {
-    const onRunCheck = vi.fn();
-    renderGap("check-failed", onRunCheck);
-
-    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Run the check now" }));
-    expect(onRunCheck).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the generic sentence, with the button, for a run settled before the gap was recorded", () => {
-    const { container } = renderGap(undefined, vi.fn());
+  it("keeps the generic sentence for a run settled before the gap was recorded", () => {
+    const { container } = renderGap(undefined);
     expect(container).toHaveTextContent(/The task is not verified/u);
-    expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/Changes not checked/u);
+    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
-  });
-
-  it("shows neither button when a new request cannot be sent, and the sentence still reads right", () => {
-    for (const gap of Object.keys(GAP_SENTENCES) as (keyof typeof GAP_SENTENCES)[]) {
-      const { container, unmount } = renderGap(gap);
-      expect(container).toHaveTextContent(GAP_SENTENCES[gap]);
-      // The sentence names the next step, never a control that may not be on the card.
-      expect(container).not.toHaveTextContent(/Run the check now|Select/u);
-      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
-      unmount();
-    }
   });
 
   it("restores the gap with the settled snapshot after a reload", () => {
@@ -3326,14 +3603,12 @@ describe("Timeline — verification gap on a failed run", () => {
         events={[{ ...gapEvent(), failureCode: "runtime-failed" }]}
         activity={activityLike(bareFeed())}
         questions={IDLE_QUESTIONS}
-        onRunCheck={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
   });
 
-  it("speaks German on the card and on the button", async () => {
+  it("speaks German on the card, with the ordinary failed-run title and no button", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     try {
@@ -3343,12 +3618,13 @@ describe("Timeline — verification gap on a failed run", () => {
             events={[gapEvent("no-check-run")]}
             activity={activityLike(bareFeed())}
             questions={IDLE_QUESTIONS}
-            onRunCheck={vi.fn()}
           />
         </I18nProvider>,
       );
       expect(container).toHaveTextContent(/lief keine Prüfung/u);
-      expect(screen.getByRole("button", { name: "Prüfung nachholen" })).toBeInTheDocument();
+      expect(container).toHaveTextContent(/Coding-Lauf fehlgeschlagen/u);
+      expect(container).not.toHaveTextContent(/Änderungen nicht geprüft/u);
+      expect(screen.queryByRole("button", { name: "Prüfung nachholen" })).toBeNull();
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
     }

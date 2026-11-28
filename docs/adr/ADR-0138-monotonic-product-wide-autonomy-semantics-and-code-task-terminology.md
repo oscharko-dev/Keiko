@@ -293,7 +293,9 @@ is:
    "A run on its base branch makes its own task branch"). It is a local ref write, not a delivery:
    Full access creates it inside the validated envelope without an ask; Supervised workspace and
    Ask for approval ask the operator about the exact branch name on the governed ask lane (action
-   `git-branch`, a one-use proof bound to the digest of the name). The shell's `git checkout -b`,
+   `git-branch`, a one-use proof bound to the digest of the name). The ask carries the validated name only to the
+   authenticated in-memory review channel, hash-bound to that digest, so the card shows the exact
+   branch; it never reaches the Activity Log. The shell's `git checkout -b`,
    `switch` and `branch` stay reserved in every mode. The hard denials are unchanged and the
    immutable envelope is not widened: only the server-owned per-run branch record moves.
 

@@ -599,6 +599,117 @@ describe("POST /api/task-workspaces/local", () => {
     });
   });
 
+  // U-3: selecting the checkout that already is the active workspace changes nothing, so it must
+  // not end the settled run's undo window (admission) nor purge its activity (selection).
+  it("leaves the held undo window and the activity alone when the checkout is already active", async () => {
+    const fixture = await localRouteFixture();
+    const first = (await (await postLocal()).json()) as {
+      readonly active: { readonly instance: { readonly workspaceId: string } };
+    };
+    fixture.admitWorkspaceSelection.mockClear();
+    fixture.selectLocal.mockClear();
+
+    const again = await postLocal();
+
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({
+      active: { instance: { workspaceId: first.active.instance.workspaceId } },
+    });
+    expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+    expect(fixture.selectLocal).not.toHaveBeenCalled();
+    // The timeline shows the no-op as an activate line with the closed outcome `unchanged`.
+    expect(fixture.sink.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "task-workspace.lifecycle",
+          correlationId: "local-route-regression",
+          extra: expect.objectContaining<Record<string, unknown>>({
+            operation: "activate",
+            outcome: "unchanged",
+          }) as unknown,
+        }),
+      ]),
+    );
+
+    const switched = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId: first.active.instance.workspaceId, requestedBy: "u" }),
+    });
+    expect(switched.status).toBe(200);
+    expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+  });
+
+  // A managed worktree of the same root standing on the requested branch is another workspace: a
+  // Local selection must run its own validation, never answer with the worktree's view.
+  it("does not treat an active worktree on the requested branch as the Local checkout", async () => {
+    const fixture = await localRouteFixture();
+    const created = (await (await provision("t1")).json()) as ProvisionBody;
+    await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId: created.instance.workspaceId, requestedBy: "u" }),
+    });
+    expect(fixture.pointer.get()?.workspaceId).toBe(created.instance.workspaceId);
+    fixture.admitWorkspaceSelection.mockClear();
+
+    const response = await postLocal({
+      root: repoRoot,
+      branch: created.instance.taskBranch,
+      requestedBy: "u",
+    });
+
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+    expect(fixture.selectLocal).toHaveBeenCalledOnce();
+    expect(JSON.stringify(await response.json())).not.toContain(created.instance.workspaceId);
+  });
+
+  it("records the unchanged selection on the route's injected sink", async () => {
+    const fixture = await localRouteFixture();
+    await postLocal();
+    const injected = createBufferedServerLogSink();
+    await rebuild({
+      store: deps.store,
+      workspaceLifecycle: deps.workspaceLifecycle,
+      codingRuntimeOrchestrator: deps.codingRuntimeOrchestrator,
+      activityLog: injected,
+    });
+    fixture.sink.events.length = 0;
+
+    await postLocal();
+
+    expect(injected.events.map((event) => event.op)).toContain("task-workspace.lifecycle");
+    expect(fixture.sink.events.map((event) => event.op)).not.toContain("task-workspace.lifecycle");
+  });
+
+  // A managed worktree has its own activation: re-selecting it is never answered as a no-op.
+  it("still activates an already active managed worktree through its own admission", async () => {
+    const fixture = await localRouteFixture();
+    const created = (await (await provision("t1")).json()) as ProvisionBody;
+    const activate = (): Promise<Response> =>
+      fetch(`${baseUrl()}/api/task-workspaces/active`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ workspaceId: created.instance.workspaceId, requestedBy: "u" }),
+      });
+    await activate();
+    fixture.admitWorkspaceSelection.mockClear();
+
+    expect((await activate()).status).toBe(200);
+
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+  });
+
+  it("still admits a selection of another branch of the active checkout", async () => {
+    const fixture = await localRouteFixture();
+    await postLocal();
+    fixture.admitWorkspaceSelection.mockClear();
+
+    await postLocal({ root: repoRoot, branch: "other-branch", requestedBy: "u" });
+
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+  });
+
   it("returns 503 when the lifecycle is unavailable", async () => {
     expect((await postLocal()).status).toBe(503);
   });

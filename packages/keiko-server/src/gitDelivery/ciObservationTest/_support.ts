@@ -90,7 +90,6 @@ function createRun(snapshots: CodingRuntimeSnapshotStore, issueFree: boolean): v
     authorityDigest: DIGEST,
     bindingDigest: DIGEST,
     provenanceDigest: DIGEST,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
     ...(issueFree

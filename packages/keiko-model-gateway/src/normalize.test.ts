@@ -51,6 +51,66 @@ function malformedToolCallMessage(payload: unknown): string {
   throw new Error("expected normalizeChatResponse to throw MalformedToolCallError");
 }
 
+describe("normalizeChatResponse prompt-cache usage", () => {
+  const total = (usage: Record<string, unknown>): number | undefined =>
+    normalizeChatResponse(chatPayload({ usage }), "m", BASE_USAGE).usage.totalPromptTokens;
+
+  it.each([
+    ["Anthropic-style cache read", { cache_read_input_tokens: 29_800 }, 30_000],
+    [
+      "Anthropic-style read and creation",
+      { cache_read_input_tokens: 20_000, cache_creation_input_tokens: 9_800 },
+      30_000,
+    ],
+    [
+      "OpenAI-style cached_tokens a backend leaves out",
+      { prompt_tokens_details: { cached_tokens: 29_800 } },
+      30_000,
+    ],
+  ])("adds %s the provider reports beside prompt_tokens", (_name, extra, expected) => {
+    expect(total({ prompt_tokens: 200, completion_tokens: 5, ...extra })).toBe(expected);
+  });
+
+  it("never counts cached tokens twice when prompt_tokens already includes them", () => {
+    expect(
+      total({
+        prompt_tokens: 30_000,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 29_800 },
+        cache_read_input_tokens: 29_800,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("flags Anthropic-style cache fields inside prompt_tokens as an ambiguous layout", () => {
+    // Input 5000 with cache_read 3000 is 8000 if exclusive and 5000 if inclusive: never guessed.
+    const usage = normalizeChatResponse(
+      chatPayload({
+        usage: { prompt_tokens: 5_000, completion_tokens: 5, cache_read_input_tokens: 3_000 },
+      }),
+      "m",
+      BASE_USAGE,
+    ).usage;
+    expect(usage.totalPromptTokens).toBeUndefined();
+    expect(usage.promptCacheLayoutAmbiguous).toBe(true);
+  });
+
+  it("does not flag an OpenAI-style cached_tokens subset or a usage without cache fields", () => {
+    for (const usage of [
+      { prompt_tokens: 5_000, prompt_tokens_details: { cached_tokens: 3_000 } },
+      { prompt_tokens: 5_000 },
+    ]) {
+      const normalized = normalizeChatResponse(chatPayload({ usage }), "m", BASE_USAGE).usage;
+      expect(normalized.promptCacheLayoutAmbiguous).toBeUndefined();
+      expect(normalized.totalPromptTokens).toBeUndefined();
+    }
+  });
+
+  it("reports no total for a usage without cache fields", () => {
+    expect(total({ prompt_tokens: 10, completion_tokens: 5 })).toBeUndefined();
+  });
+});
+
 describe("normalizeChatResponse", () => {
   it.each(["aborted", "insufficient_system_resource"])(
     "keeps interrupted provider finish %s as error",

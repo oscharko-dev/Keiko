@@ -372,7 +372,7 @@ export interface GeneratedOpenCodeBundle {
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly compaction: Readonly<Record<string, boolean | number>>;
-    readonly tool_output: Readonly<{ readonly max_bytes: number }>;
+    readonly tool_output: Readonly<{ readonly max_bytes: number; readonly max_lines: number }>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -550,7 +550,8 @@ export function createOpenCodeRuntimeAdapter(
     try {
       const reconciled = await reconcileHistory(ports, state, new AbortController().signal);
       return reconciled ? ready : fail("sse-history-reconciliation");
-    } catch {
+    } catch (error) {
+      recordReconcileFailure(ports, error);
       return fail("sse-history-reconciliation");
     }
   };
@@ -1338,6 +1339,24 @@ function recordTurnPollFailure(
   });
 }
 
+function recordReconcileFailure(
+  ports: Pick<OpenCodeRuntimeAdapterPorts, "diagnostics" | "correlationId">,
+  cause: unknown,
+): void {
+  const { errorClass, frames, causeChain } = describeError(cause);
+  emitServerDiagnostic(ports.diagnostics, {
+    correlationId: correlationIdOrUnknown(ports.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.monitor",
+    source: "opencode.reconcile",
+    errorClass,
+    message: "runtime-lifecycle-failed",
+    code: "stage=reconcile:reason=history-reconcile-failed",
+    frames,
+    causeChain,
+  });
+}
+
 function monitorCauseToken(
   error: unknown,
 ): "events-ended" | "events-invalid" | "history-incomplete" | "history-invalid" | "stream-error" {
@@ -2004,7 +2023,9 @@ function toolApprovalProofSource(): readonly string[] {
     "  if (isGitBranch(request)) {",
     '    if (typeof request.branchName !== "string") throw new Error("keiko-tool-invalid");',
     "    const targetPathHash = await sha256Hex(request.branchName);",
-    "    return { targetId: `branch:${targetPathHash}`, targetPathHash };",
+    // The ask names the branch itself so the approval card shows it; the server re-derives the digest
+    // from it and refuses a mismatch (#4491 U-27).
+    "    return { targetId: `branch:${targetPathHash}`, targetPathHash, branchName: request.branchName };",
     "  }",
     '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
     "}",
@@ -2013,10 +2034,10 @@ function toolApprovalProofSource(): readonly string[] {
     "  const runId = process.env.KEIKO_CODING_RUN_ID;",
     "  const target = await toolApprovalTarget(request);",
     '  if (!runId || !target || typeof target.targetId !== "string") throw new Error("keiko-tool-invalid");',
-    "  const { targetId, targetPathHash } = target;",
+    "  const { targetId, targetPathHash, branchName } = target;",
     '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
     "  const approvalDigest = await sha256Hex(payload);",
-    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}) };",
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}), ...(branchName ? { branchName } : {}) };",
     "}",
   ];
 }
@@ -2027,7 +2048,7 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
     "function verificationPermission(args, approvalProof) {",
     '  if (typeof args.verifierId !== "string" || !approvalProof) throw new Error("keiko-tool-invalid");',
     "  return {",
-    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, ...approvalProof },',
+    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, packageDir: typeof args.packageDir === "string" ? args.packageDir : "", ...approvalProof },',
     "  };",
     "}",
     ...toolApprovalProofSource(),
@@ -2129,7 +2150,11 @@ function toolSourceFormat(
     assertOpen: [`    assertInvocationOpen(context, ${String(nativeCodeMode)});`],
     subscribeAbort: [],
     unsubscribeAbort: [],
-    result: "      return { content: modelContent(result, text), output: result, metadata: {} };",
+    // `truncated` is the producer's own opt-out: a result that already says whether it was cut is
+    // never shortened again at the model-visible cap, which would cut the facade's JSON in the
+    // middle. The facade bounds every result itself (CODING_TOOL_MAX_BODY_BYTES, per-tool windows).
+    result:
+      "      return { content: modelContent(result, text), output: result, metadata: { truncated: false } };",
     registrationEnd: ["      });"],
     end: ["}"],
   };

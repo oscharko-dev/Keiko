@@ -24,7 +24,6 @@ const SNAPSHOT: CodingRuntimeSnapshot = {
   authorityDigest: "d".repeat(64),
   bindingDigest: "e".repeat(64),
   provenanceDigest: "f".repeat(64),
-  toolCallCount: 0,
   patchByteCount: 0,
   modelRequestCount: 0,
 };

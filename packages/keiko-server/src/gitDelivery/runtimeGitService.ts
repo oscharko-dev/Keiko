@@ -8,20 +8,34 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import {
+  isCodingRuntimeGitResult,
+  type CodingRuntimeGitStageCause,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
+  createGitReadSession,
   readGitRevision,
   readGitStageCandidate,
   readGitStageSupport,
-  readGitRawWorktreeSnapshot,
+  readGitRawWorktreeSnapshotAtHead,
+  GitWorktreeReadError,
+  type GitReadFailureReason,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-tools";
-import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import {
+  readVerifiedCommitFacts,
+  readVerifiedCommitRead,
+  type VerifiedCommitRead,
+  verifiedBaseObjectId,
+  verifiedHeadObjectId,
+} from "./verifiedCommitFacts.js";
 import { mintProposalId } from "./proposalId.js";
 import type {
   VerifiedCommitRunContext,
@@ -43,9 +57,10 @@ import {
 import {
   admitStageSelection,
   admitUnstageSelection,
+  logLargeFilesStreamed,
   reviewStageSelection,
   runtimeGitDiff,
-  runtimeGitStatus,
+  runtimeGitStatusOfRaw,
   runtimeGitReadDeps,
   runtimeWorkspaceFs,
   type StageSelectionReview,
@@ -61,10 +76,20 @@ import {
   adoptionFailedResult,
   checkoutUncertainResult,
   runTaskBranch,
+  taskBranchAskRefusal,
   TaskBranchAdoptionFailure,
   type RuntimeGitTaskBranchPort,
 } from "./runtimeGitBranch.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
+import {
+  type GovernedIndexTransition,
+  noteGovernedIndexTransitions,
+  noteGovernedIndexUnproven,
+} from "../coding-runtime/governedIndexPaths.js";
+import {
+  type GovernedTransitionsUnproven,
+  readGovernedTransitions,
+} from "../coding-runtime/opencodeTurnIndex.js";
 import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -114,6 +139,7 @@ const RUNTIME_GIT_REASON_FIELD = {
     "authority-revoked",
     "proposal-unknown",
     "signal-aborted",
+    "deadline-exceeded",
     "run-not-live",
     "guard-rejected",
     "mode-unavailable",
@@ -173,9 +199,52 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
     state: RUNTIME_GIT_STATE_FIELD,
     reason: RUNTIME_GIT_REASON_FIELD,
     proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // Why a stage proposal was refused as `unsupported-transformation` (closed `CODING_RUNTIME_GIT_STAGE_CAUSES`);
+    // never a path, an attribute value or a configuration value.
+    stageCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      // A literal list (the registry reads literals); verifiedCommitService.test.ts pins it to the contract list.
+      values: [
+        "config-unsupported",
+        "filter-driver",
+        "attribute-filter",
+        "attribute-encoding",
+        "attribute-ident",
+        "attribute-line-ending",
+        "attribute-unreadable",
+        "content-conversion",
+      ],
+    },
+    // The files a stage or unstage proposal bound after directory pathspecs expanded; absent on a
+    // refusal that came before any expansion. `requestedCount` is the entries the request named.
     pathCount: { type: "integer", dataClass: "count", required: false },
+    requestedCount: { type: "integer", dataClass: "count", required: false },
     fileCount: { type: "integer", dataClass: "count", required: false },
+    // What the action cost (W-4, #4491): the Git processes its scope started and its wall time. The
+    // Windows lab paid 70 to 130 ms for each, so these two numbers show where a slow tool call went.
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
+    durationMs: { type: "integer", dataClass: "duration", required: false },
+    countsUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
+    readFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["truncated", "exit-nonzero", "spawn-failed"],
+    },
     truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // A governed stage or unstage succeeded but the index entries it wrote could not be proven, so
+    // the turn's Undo owns none of the paths it covered (closed `GovernedTransitionsUnproven`).
+    indexUnproven: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-transaction", "state-missing", "index-read-failed", "index-unreadable"],
+    },
+    // U-32: a task-branch step Keiko refused while it was still only an ask, before any approval
+    // card was shown; absent on every step that ran after a decision or without an ask.
+    refusedBeforeAsk: { type: "boolean", dataClass: "closed-enum", required: false },
     // #3902 AC2: the closed outcome of a fetch or pull (`GIT_SYNC_OUTCOMES`); the Git process lines
     // of the same correlation carry a failure's own error evidence.
     syncOutcome: {
@@ -240,11 +309,20 @@ interface RuntimeGitActivityFields {
     | CodingRuntimeGitStage["reason"]
     | CodingRuntimeGitBranch["reason"]
     | RuntimeGitRefusalReason
-    | RuntimeGitRefusalCondition;
+    | RuntimeGitRefusalCondition
+    | "deadline-exceeded";
   readonly proposalId?: string;
   readonly pathCount?: number;
+  readonly stageCause?: CodingRuntimeGitStageCause;
+  readonly requestedCount?: number;
   readonly fileCount?: number;
+  readonly gitSpawnCount?: number;
+  readonly durationMs?: number;
+  readonly countsUnavailable?: boolean;
+  readonly readFailure?: GitReadFailureReason;
   readonly truncated?: boolean;
+  readonly indexUnproven?: GovernedTransitionsUnproven;
+  readonly refusedBeforeAsk?: boolean;
   readonly syncOutcome?: GitSyncOutcome;
   readonly failureKind?: string;
   readonly errorClass?: string;
@@ -328,12 +406,13 @@ interface RuntimeGitOptions extends VerifiedCommitServiceOptions {
 function buildStageProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
+  requested: readonly string[],
   paths: readonly string[],
-  worktreeDigest: string,
-  review: StageSelectionReview,
+  basis: { readonly worktreeDigest: string; readonly review: StageSelectionReview },
   nowMs: number,
   proposalId: string,
 ): RuntimeGitProposal {
+  const { worktreeDigest, review } = basis;
   const command: GitStageCommand = {
     kind: "stage",
     pathspecs: [...paths],
@@ -341,7 +420,7 @@ function buildStageProposal(
     worktreeDigest,
     verified: { ...facts, branchName: context.headRef, baseRef: context.baseRef },
   };
-  return assembleProposal(context, facts, command, review, nowMs, proposalId);
+  return assembleProposal(context, facts, command, requested, review, nowMs, proposalId);
 }
 
 // An unstage proposal binds the same head, base and staged tree as a stage proposal, and carries
@@ -351,6 +430,7 @@ function buildStageProposal(
 function buildUnstageProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
+  requested: readonly string[],
   paths: readonly string[],
   review: StageSelectionReview,
   nowMs: number,
@@ -361,13 +441,14 @@ function buildUnstageProposal(
     pathspecs: [...paths],
     verified: { ...facts, branchName: context.headRef, baseRef: context.baseRef },
   };
-  return assembleProposal(context, facts, command, review, nowMs, proposalId);
+  return assembleProposal(context, facts, command, requested, review, nowMs, proposalId);
 }
 
 function assembleProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
   command: GitStageCommand | GitUnstageCommand,
+  requested: readonly string[],
   review: StageSelectionReview,
   nowMs: number,
   proposalId: string,
@@ -382,24 +463,28 @@ function assembleProposal(
     envelopeDigest: context.envelopeDigest,
     workspaceDigest: context.workspaceDigest,
     repositoryDigest: context.repositoryDigest,
-    headSha: facts.headSha,
-    baseSha: facts.baseSha,
+    headSha: verifiedHeadObjectId(facts),
+    baseSha: verifiedBaseObjectId(facts),
     stagedTreeDigest: facts.stagedTreeDigest,
   };
   return {
     proposalId,
     runId: context.runId,
-    context,
+    // The proposal outlives the call that made it; the call's Git read scope must not.
+    context: { ...context, readSession: undefined },
     command,
     binding,
-    expiresAtMs: nowMs + 300_000,
+    expiresAtMs: nowMs + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
     review: {
       requestId: proposalId,
-      paths: [...paths],
-      pathsTruncated: false,
+      paths: paths.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS),
+      pathsTruncated: paths.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+      // The scope the model asked for stays visible beside the expansion the operator approves.
+      requested: [...requested],
       fileCount: review.fileCount,
       addedLines: review.addedLines,
       deletedLines: review.deletedLines,
+      ...(review.countsUnavailable === true ? { countsUnavailable: true } : {}),
     },
   };
 }
@@ -445,17 +530,49 @@ function branchOutcome(result: CodingRuntimeGitBranch): RuntimeGitLogOutcome {
   return result.status === "blocked" ? "refused" : "failed";
 }
 
-function resultEvidence(result: RuntimeGitOutcome): RuntimeGitActivityFields {
+// Refusals that end a proposal before its directory pathspecs were expanded: the result still
+// carries the request's length (its contract needs a positive count), but no expanded set exists.
+const PRE_EXPANSION_REASONS: ReadonlySet<string> = new Set([
+  "proposal-limit",
+  "buffers-dirty",
+  "selection-unreviewed",
+]);
+
+function indexEvidence(
+  result: CodingRuntimeGitStage | CodingRuntimeGitUnstage,
+  request: RuntimeGitRequest,
+): RuntimeGitActivityFields {
+  const proposing = "phase" in request && request.phase === "propose" && "paths" in request;
+  const expanded = !(result.status === "blocked" && PRE_EXPANSION_REASONS.has(result.reason));
+  return {
+    state: result.status,
+    reason: result.reason,
+    proposalId: result.proposalId,
+    ...(result.kind === "stage" && result.cause !== undefined ? { stageCause: result.cause } : {}),
+    ...(expanded || !proposing ? { pathCount: result.pathCount } : {}),
+    ...(proposing ? { requestedCount: request.paths.length } : {}),
+  };
+}
+
+// Why a succeeded stage or unstage left the Undo nothing it could prove, keyed by the result object
+// the mutation returned so the wire result itself stays unchanged.
+const UNPROVEN_INDEX = new WeakMap<object, GovernedTransitionsUnproven>();
+
+function unprovenEvidence(result: RuntimeGitOutcome): {
+  readonly indexUnproven?: GovernedTransitionsUnproven;
+} {
+  const reason = UNPROVEN_INDEX.get(result);
+  return reason === undefined ? {} : { indexUnproven: reason };
+}
+
+function resultEvidence(
+  result: RuntimeGitOutcome,
+  request: RuntimeGitRequest,
+): RuntimeGitActivityFields {
   if (result.kind === "refused") return { state: "refused", reason: result.reason };
   if (result.kind === "branch") return { state: result.status, reason: result.reason };
   if (result.kind === "fetch" || result.kind === "pull") return syncEvidence(result);
-  if (result.kind === "stage" || result.kind === "unstage")
-    return {
-      state: result.status,
-      reason: result.reason,
-      proposalId: result.proposalId,
-      pathCount: result.pathCount,
-    };
+  if (result.kind === "stage" || result.kind === "unstage") return indexEvidence(result, request);
   return result.kind === "status"
     ? { state: "completed", fileCount: result.changes.length, truncated: result.truncated }
     : { state: "completed", fileCount: result.diff.totalFiles, truncated: result.diff.truncated };
@@ -471,9 +588,54 @@ function thrownGitCode(error: unknown): { readonly code?: string } {
     : {};
 }
 
+// The body-free structured evidence of a thrown Git read or stage helper.
+function failureEvidence(cause: unknown): Omit<RuntimeGitActivityFields, "state"> {
+  const detail = describeError(cause);
+  return {
+    failureKind: gitDeliveryActivityFailureKind(errorKindOf(cause)),
+    errorClass: detail.errorClass,
+    ...thrownGitCode(cause),
+    ...(cause instanceof GitWorktreeReadError && cause.reason !== undefined
+      ? { readFailure: cause.reason }
+      : {}),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
+}
+
+function isRedemption(request: RuntimeGitRequest): request is Extract<
+  RuntimeGitRequest,
+  { readonly phase: "execute" }
+> & {
+  readonly operation: "stage" | "unstage";
+} {
+  return (
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
+  );
+}
+
+// A task-branch ask whose run state could not be read: the structured failure, body-free, written
+// under the run's correlation before the ask goes on to a person (U-32).
+function logBranchAskUnreadable(
+  write: (extra: RuntimeGitActivityFields) => void,
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  write({
+    state: "failed",
+    refusedBeforeAsk: false,
+    failureKind: gitDeliveryActivityFailureKind(errorKindOf(error)),
+    errorClass: detail.errorClass,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
+}
+
 export class RuntimeGitService {
   private generation = 0;
   private branchStep: Promise<void> = Promise.resolve();
+  private readonly startedAtMs = new WeakMap<object, number>();
   private readonly proposals = new Map<string, RuntimeGitProposal>();
   private leases = new WeakMap<
     object,
@@ -552,12 +714,22 @@ export class RuntimeGitService {
         const result = await this.dispatch(context, request, guard);
         if (result.kind !== "refused" && !isCodingRuntimeGitResult(result))
           throw new Error("git-runtime-result-invalid");
-        this.log(context, phase, resultEvidence(result), resultOutcome(result));
+        this.log(
+          context,
+          phase,
+          { ...resultEvidence(result, request), ...unprovenEvidence(result) },
+          resultOutcome(result),
+        );
         if (context.stillAuthorized()) return result;
-        this.log(context, phase, { state: "withheld", reason: "authority-revoked" }, "refused");
+        this.log(
+          context,
+          phase,
+          { state: "withheld", reason: this.closedReason(context, guard) },
+          "refused",
+        );
         return REFUSED_AUTHORITY;
       } catch (error) {
-        return this.failed(context, phase, error);
+        return this.failed(context, phase, error, guard);
       }
     } finally {
       release?.();
@@ -582,30 +754,41 @@ export class RuntimeGitService {
     context: VerifiedCommitRunContext,
     phase: RuntimeGitPhase,
     error: unknown,
+    guard: CodingToolMutationGuard,
   ): RuntimeGitOutcome {
     if (context.signal?.aborted === true || !context.stillAuthorized()) {
-      this.log(context, phase, { state: "refused", reason: "authority-revoked" }, "refused");
+      this.log(
+        context,
+        phase,
+        { state: "refused", reason: this.closedReason(context, guard) },
+        "refused",
+      );
       return REFUSED_AUTHORITY;
     }
     const cause = error instanceof StageEffectFailure ? error.cause : error;
-    const failureKind = gitDeliveryActivityFailureKind(errorKindOf(cause));
-    const detail = describeError(cause);
-    this.log(
-      context,
-      phase,
-      {
-        state: "failed",
-        failureKind,
-        errorClass: detail.errorClass,
-        ...thrownGitCode(cause),
-        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-      },
-      "failed",
-    );
+    this.log(context, phase, { state: "failed", ...failureEvidence(cause) }, "failed");
     return error instanceof StageEffectFailure
       ? this.result(error.proposal, "failed", "execution-failed")
       : REFUSED_EXECUTION;
+  }
+  /**
+   * What the activity log names for a run whose read ended under it. The model-facing answer stays
+   * `authority-revoked`, but the log tells the truth: a signal closed by the tool's own deadline is
+   * `deadline-exceeded`, one closed while the run's authority still holds is a cancellation, and only
+   * a lapsed authority is a revocation (W-4: a deadline was logged as a revoked authority).
+   */
+  private closedReason(
+    context: VerifiedCommitRunContext,
+    guard: CodingToolMutationGuard,
+  ): "deadline-exceeded" | "signal-aborted" | "authority-revoked" {
+    // Deadline first, then the signal, then authority: the guard turns false at settlement even when
+    // no signal was aborted under the read.
+    const budget = guard.executionBudget;
+    if (budget !== undefined && budget.nowMs() >= budget.deadlineAtMs) return "deadline-exceeded";
+    if (context.signal?.aborted !== true) return "authority-revoked";
+    return this.options.context()?.stillAuthorized() === true
+      ? "signal-aborted"
+      : "authority-revoked";
   }
   private guardedContext(
     guard: CodingToolMutationGuard,
@@ -627,12 +810,17 @@ export class RuntimeGitService {
     const signals = [context.signal, signal].filter(
       (value): value is AbortSignal => value !== undefined,
     );
-    return {
+    const scoped = {
       ...context,
       signal: AbortSignal.any(signals),
-      stillAuthorized: () =>
+      stillAuthorized: (): boolean =>
         generation === this.generation && context.stillAuthorized() && guard.check(),
+      // One Git read scope per call: its processes are counted and its reads share one promisor
+      // verdict, and the next call (a redemption included) starts a new one.
+      readSession: createGitReadSession(),
     };
+    this.startedAtMs.set(scoped, this.now());
+    return scoped;
   }
   // Checked in the order the old silent `undefined` was decided, so the first true condition is the
   // one named: a closed signal before a missing run, a missing run before its guard, the guard
@@ -653,10 +841,20 @@ export class RuntimeGitService {
     guard: CodingToolMutationGuard,
   ): Promise<RuntimeGitOutcome> {
     const execution = this.options.execution ?? {};
-    const facts = await readVerifiedCommitFacts(context, execution);
-    if (request.operation === "status") return runtimeGitStatus(context, execution);
+    // A stage or unstage redemption reads the verified facts itself (`indexCurrent`, with the same
+    // authority and drift refusals), so it is not read twice: the duplicate read doubled a call that
+    // runs inside one fixed 30 s tool budget.
+    if (isRedemption(request))
+      return this.redeem(context, request.operation, request.proposalId, guard.stageApproval);
+    // One scan serves the facts and the status answer: a second raw read per status action
+    // doubled its Git process count (#4491, W-4).
+    const read = await readVerifiedCommitRead(context, execution);
+    const { facts, raw } = read;
+    if (request.operation === "status") return runtimeGitStatusOfRaw(raw);
     if (request.operation === "branch")
-      return this.branch(context, request.branchName, facts.headSha);
+      // An unborn head passes its all-zero object id: the branch step re-points HEAD instead of
+      // branching from a commit (#4491).
+      return this.branch(context, request.branchName, verifiedHeadObjectId(facts));
     if (request.operation === "fetch" || request.operation === "pull")
       return this.sync(context, request.operation);
     if (request.operation === "diff")
@@ -669,11 +867,11 @@ export class RuntimeGitService {
           request.paths,
         ),
       };
-    if (request.phase === "execute")
-      return this.redeem(context, request.operation, request.proposalId, guard.stageApproval);
+    // The proposal is built on the facts and the raw change list this one read made; redeeming it
+    // reads the repository again (`indexCurrent`) before anything is written.
     return request.operation === "stage"
-      ? this.propose(context, request.paths)
-      : this.proposeUnstage(context, request.paths);
+      ? this.propose(context, request.paths, read)
+      : this.proposeUnstage(context, request.paths, read);
   }
   // #3902 AC2: one fetch, or one fast-forward pull of the current branch from its upstream, through
   // the Git sync owner's own executor: the fixed argv, hardened runner, bounds and closed outcomes of
@@ -712,6 +910,35 @@ export class RuntimeGitService {
       ...(result.behind === undefined ? {} : { behind: result.behind }),
       truncated: result.truncated,
     };
+  }
+  /**
+   * U-32: the closed reason Keiko is already certain to refuse a task branch with, asked before a
+   * person is shown an approval card for it. The step's own name and scope checks answer it (never
+   * a second copy); the live Git checks stay with the step, which also stays the authoritative
+   * backstop because the run can change between the ask and the approval. Undefined whenever the
+   * state cannot be read (no live run, lapsed authority, a throwing workspace port): the ask then
+   * proceeds and the step judges after the approval, so this can only ever withhold a card.
+   */
+  public branchAskRefusal(branchName: string): CodingRuntimeGitBranch["reason"] | undefined {
+    let context: VerifiedCommitRunContext | undefined;
+    try {
+      context = this.options.context();
+      if (context?.stillAuthorized() !== true) return undefined;
+      const reason = taskBranchAskRefusal({ context, port: this.options.taskBranch, branchName });
+      if (reason !== undefined)
+        this.log(
+          context,
+          "branch",
+          { state: "refused", reason, refusedBeforeAsk: true },
+          "refused",
+        );
+      return reason;
+    } catch (error) {
+      logBranchAskUnreadable((extra) => {
+        this.log(context, "branch", extra, "failed");
+      }, error);
+      return undefined;
+    }
   }
   // #3907: one governed task branch for a run standing on its base branch (runtimeGitBranch.ts).
   // Whatever the branch change made stale, commit and push proposals and the verification they
@@ -803,77 +1030,123 @@ export class RuntimeGitService {
   // binding the operator's numbers to exactly the bytes the proposal will stage.
   private async propose(
     context: VerifiedCommitRunContext,
-    paths: readonly string[],
+    requested: readonly string[],
+    read: VerifiedCommitRead,
   ): Promise<IndexProposalResult> {
     this.pruneExpired();
     const proposalId = mintProposalId("stage");
+    let pathCount = requested.length;
     const refuse = (
       status: "blocked" | "drift",
       reason: CodingRuntimeGitStage["reason"],
-    ): CodingRuntimeGitStage => ({
-      kind: "stage",
-      proposalId,
-      status,
-      reason,
-      pathCount: paths.length,
-    });
+    ): CodingRuntimeGitStage => ({ kind: "stage", proposalId, status, reason, pathCount });
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("blocked", "proposal-limit");
     if (!context.buffersClean()) return refuse("blocked", "buffers-dirty");
     const execution = this.options.execution ?? {};
-    const facts = await readVerifiedCommitFacts(context, execution);
-    const selection = await admitStageSelection(context, execution, paths);
+    const { facts, raw } = read;
+    const selection = await admitStageSelection(context, execution, requested, raw);
     if (selection === undefined) return refuse("blocked", "selection-unreviewed");
+    // The request may name directories; everything below binds the concrete files they expanded to.
+    const paths = selection.map((entry) => entry.path);
+    pathCount = paths.length;
     const workspaceFs = runtimeWorkspaceFs(context);
-    const worktreeDigest = await readGitStageCandidate(context.workspace.root, paths, workspaceFs);
-    const review = await reviewStageSelection(context, execution, selection);
-    if (
-      (await readGitStageCandidate(context.workspace.root, paths, workspaceFs)) !== worktreeDigest
-    )
+    const basis = await this.settleExpanded(
+      context,
+      "stage-propose",
+      requested,
+      paths,
+      async () => ({
+        worktreeDigest: await this.candidateDigest(context, execution, paths, true),
+        review: await reviewStageSelection(context, execution, selection),
+      }),
+    );
+    if (basis === undefined) return refuse("blocked", "unsupported-transformation");
+    const { worktreeDigest } = basis;
+    if ((await this.candidateDigest(context, execution, paths, false)) !== worktreeDigest)
       return refuse("drift", "candidate-drift");
     const proposal = buildStageProposal(
       context,
       facts,
+      requested,
       paths,
-      worktreeDigest,
-      review,
+      basis,
       this.now(),
       proposalId,
     );
-    if (!(await readGitStageSupport(runtimeGitReadDeps(context, execution), paths, workspaceFs)))
-      return this.result(proposal, "blocked", "unsupported-transformation");
-    this.proposals.set(proposalId, proposal);
+    const deps = runtimeGitReadDeps(context, execution);
+    const support = await readGitStageSupport(deps, paths, workspaceFs);
+    if (support !== "supported")
+      return this.result(proposal, "blocked", "unsupported-transformation", support);
+    return this.stored(proposal);
+  }
+  // The open proposal's answer: it waits for the operator under Ask for approval, else it is ready.
+  private stored(proposal: RuntimeGitProposal): IndexProposalResult {
+    this.proposals.set(proposal.proposalId, proposal);
     return this.options.mode() === "governed-assist"
       ? this.result(proposal, "approval-required", "approval-required")
       : this.result(proposal, "ready", "none");
+  }
+  // A directory selection can reach one entry Keiko cannot read as a regular file (a submodule
+  // gitlink, an unreadable file, a directory in a file's place). That is a reasoned refusal the model
+  // can act on, with the structured failure on the log, instead of an opaque failure of the whole
+  // selection. A selection of exact paths keeps failing loudly, and a read that ended under a closed
+  // authority is still the authority refusal.
+  private async settleExpanded<T>(
+    context: VerifiedCommitRunContext,
+    phase: RuntimeGitPhase,
+    requested: readonly string[],
+    paths: readonly string[],
+    read: () => Promise<T>,
+  ): Promise<T | undefined> {
+    try {
+      return await read();
+    } catch (error) {
+      const expanded =
+        paths.length !== requested.length || paths.some((path, at) => path !== requested[at]);
+      if (!expanded || context.signal?.aborted === true || !context.stillAuthorized()) throw error;
+      const reason = "unsupported-transformation";
+      this.log(context, phase, { state: "blocked", reason, ...failureEvidence(error) }, "refused");
+      return undefined;
+    }
   }
   // #3902 AC2: unstaging gives a staged change back to the worktree. Admission is Git's own change
   // list (only staged, unconflicted paths); the review counts the staged lines it gives back.
   private async proposeUnstage(
     context: VerifiedCommitRunContext,
-    paths: readonly string[],
+    requested: readonly string[],
+    read: VerifiedCommitRead,
   ): Promise<CodingRuntimeGitUnstage> {
     this.pruneExpired();
     const proposalId = mintProposalId("unstage");
+    let pathCount = requested.length;
     const refuse = (reason: CodingRuntimeGitUnstage["reason"]): CodingRuntimeGitUnstage => ({
       kind: "unstage",
       proposalId,
       status: "blocked",
       reason,
-      pathCount: paths.length,
+      pathCount,
     });
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("proposal-limit");
     const execution = this.options.execution ?? {};
-    const facts = await readVerifiedCommitFacts(context, execution);
-    const selection = await admitUnstageSelection(context, execution, paths);
+    const { facts, raw } = read;
+    const selection = await admitUnstageSelection(context, execution, requested, raw);
     if (selection === undefined) return refuse("selection-unreviewed");
-    const review = await reviewStageSelection(context, execution, selection, "staged");
-    const proposal = buildUnstageProposal(context, facts, paths, review, this.now(), proposalId);
-    this.proposals.set(proposalId, proposal);
-    const result =
-      this.options.mode() === "governed-assist"
-        ? this.result(proposal, "approval-required", "approval-required")
-        : this.result(proposal, "ready", "none");
-    return { ...result, kind: "unstage" };
+    const paths = selection.map((entry) => entry.path);
+    pathCount = paths.length;
+    const review = await this.settleExpanded(context, "unstage-propose", requested, paths, () =>
+      reviewStageSelection(context, execution, selection, "staged"),
+    );
+    if (review === undefined) return refuse("unsupported-transformation");
+    const proposal = buildUnstageProposal(
+      context,
+      facts,
+      requested,
+      paths,
+      review,
+      this.now(),
+      proposalId,
+    );
+    return { ...this.stored(proposal), kind: "unstage" };
   }
   private async redeem(
     context: VerifiedCommitRunContext,
@@ -936,10 +1209,29 @@ export class RuntimeGitService {
       return this.stageCurrent(context, { ...proposal, command: proposal.command });
     const current = await readVerifiedCommitFacts(context, this.options.execution ?? {});
     return (
-      current.headSha === proposal.binding.headSha &&
-      current.baseSha === proposal.binding.baseSha &&
+      verifiedHeadObjectId(current) === proposal.binding.headSha &&
+      verifiedBaseObjectId(current) === proposal.binding.baseSha &&
       current.stagedTreeDigest === proposal.binding.stagedTreeDigest
     );
+  }
+  // The digest of the selected files' current content; the files above the inline bound are streamed
+  // (cancellable between chunks) and, on the proposal's first read, counted on the log.
+  private async candidateDigest(
+    context: VerifiedCommitRunContext,
+    execution: NonNullable<RuntimeGitOptions["execution"]>,
+    paths: readonly string[],
+    logStreamed: boolean,
+  ): Promise<string> {
+    const streamed = { signal: context.signal, largeFileCount: 0, streamedBytes: 0 };
+    const digest = await readGitStageCandidate(
+      context.workspace.root,
+      paths,
+      runtimeWorkspaceFs(context),
+      streamed,
+    );
+    if (logStreamed)
+      logLargeFilesStreamed(execution, context.correlationId, "stage-propose", streamed);
+    return digest;
   }
   private async stageCurrent(
     context: VerifiedCommitRunContext,
@@ -950,11 +1242,12 @@ export class RuntimeGitService {
       context.workspace.root,
       proposal.command.pathspecs,
       runtimeWorkspaceFs(context),
+      { signal: context.signal, largeFileCount: 0, streamedBytes: 0 },
     );
     return (
       context.buffersClean() &&
-      current.headSha === proposal.binding.headSha &&
-      current.baseSha === proposal.binding.baseSha &&
+      verifiedHeadObjectId(current) === proposal.binding.headSha &&
+      verifiedBaseObjectId(current) === proposal.binding.baseSha &&
       current.stagedTreeDigest === proposal.binding.stagedTreeDigest &&
       digest === proposal.command.worktreeDigest
     );
@@ -967,22 +1260,43 @@ export class RuntimeGitService {
     // Unsaved editor bytes matter to what staging records, never to what unstaging gives back.
     const buffersSettled = (): boolean =>
       proposal.command.kind === "unstage" || context.buffersClean();
-    const outcome = await executeGovernedMutation(
-      proposal.command,
-      claim,
-      context.workspace,
-      this.options.mutationDeps,
-      {
-        ...this.options.execution,
-        signal: context.signal,
-        beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
-        snapshotReader: () =>
-          readGitRawWorktreeSnapshot(runtimeGitReadDeps(context, this.options.execution ?? {})),
-      },
-      context.correlationId,
+    // The undo of the turn puts back only what governed staging changed, and only while the index
+    // still holds the entry the mutation wrote: the entries are read around the mutation (U-34b).
+    const {
+      value: outcome,
+      transitions,
+      unproven,
+    } = await readGovernedTransitions(
+      context.workspace.root,
+      proposal.command.pathspecs,
+      () =>
+        executeGovernedMutation(
+          proposal.command,
+          claim,
+          context.workspace,
+          this.options.mutationDeps,
+          {
+            ...this.options.execution,
+            signal: context.signal,
+            beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
+            ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
+            snapshotReader: () =>
+              readGitRawWorktreeSnapshotAtHead(
+                runtimeGitReadDeps(context, this.options.execution ?? {}),
+              ),
+          },
+          context.correlationId,
+        ),
+      (result) => result.outcome.status === "succeeded",
     );
     const status = outcome.outcome.status;
-    if (status === "succeeded") return this.result(proposal, "succeeded", "none");
+    if (status === "succeeded") {
+      this.recordGovernedIndex(context, proposal, transitions);
+      const result = this.result(proposal, "succeeded", "none");
+      // The one completion line `execute()` writes for this result carries why Undo owns nothing.
+      if (transitions === undefined && unproven !== undefined) UNPROVEN_INDEX.set(result, unproven);
+      return result;
+    }
     if (status === "blocked") return this.result(proposal, "blocked", outcome.outcome.category);
     if (status === "approval-required")
       return this.result(proposal, "approval-required", "approval-required");
@@ -990,10 +1304,21 @@ export class RuntimeGitService {
       ? this.result(proposal, status, "execution-uncertain")
       : this.result(proposal, status, "execution-failed");
   }
+  // The undo owns only what the index proved: an unobserved mutation withdraws its paths.
+  private recordGovernedIndex(
+    context: VerifiedCommitRunContext,
+    proposal: RuntimeGitProposal,
+    transitions: readonly GovernedIndexTransition[] | undefined,
+  ): void {
+    if (transitions === undefined)
+      noteGovernedIndexUnproven(context.runId, proposal.command.pathspecs);
+    else noteGovernedIndexTransitions(context.runId, transitions);
+  }
   private result(
     proposal: RuntimeGitProposal,
     status: CodingRuntimeGitStage["status"],
     reason: CodingRuntimeGitStage["reason"],
+    cause?: CodingRuntimeGitStageCause,
   ): IndexProposalResult {
     return {
       kind: proposal.command.kind,
@@ -1001,6 +1326,19 @@ export class RuntimeGitService {
       status,
       reason,
       pathCount: proposal.command.pathspecs.length,
+      ...(cause === undefined ? {} : { cause }),
+    };
+  }
+  // What the call has cost so far: the Git processes its scope started and the time since it began.
+  private cost(
+    context: VerifiedCommitRunContext | undefined,
+  ): Pick<RuntimeGitActivityFields, "gitSpawnCount" | "durationMs"> {
+    // A call that started no process (a refusal before its first read) has nothing to report.
+    if (context?.readSession === undefined || context.readSession.spawnCount === 0) return {};
+    const startedAtMs = this.startedAtMs.get(context);
+    return {
+      gitSpawnCount: context.readSession.spawnCount,
+      ...(startedAtMs === undefined ? {} : { durationMs: Math.max(0, this.now() - startedAtMs) }),
     };
   }
   // A refusal is not a failure: it is written at warn level so an unanswered Git call stands out in
@@ -1016,6 +1354,7 @@ export class RuntimeGitService {
       activityLogEvent(RUNTIME_GIT_OPERATION, runtimeGitLogOptions(context, extra, outcome), {
         phase,
         ...(context === undefined ? {} : { runId: context.runId }),
+        ...this.cost(context),
         ...extra,
       }),
     );

@@ -31,6 +31,22 @@ export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as c
 // controlled-repair operations; `cleanup` is the #448 governed cleanup operation (request + complete +
 // orphan removal). The union is additive — the evidence document stays content-free regardless of which
 // operation produced it.
+/**
+ * Which re-proof of the active-pointer read refused an in-place (Local checkout or folder) binding,
+ * so a pointer that vanished is located from the log alone (AGENTS.md section 8). Closed and
+ * content-free: the checks the read actually makes, in order. A membership-digest drift is NOT a
+ * cause here: the read never consults it; it surfaces as the project's `workspaceAvailable`.
+ */
+export type WorkspaceDriftCause =
+  | "instance-record-missing"
+  | "root-unregistered"
+  | "root-not-canonical"
+  | "git-state-unreadable"
+  | "branch-changed"
+  | "git-dir-identity-changed"
+  | "folder-identity-changed"
+  | "inspection-failed";
+
 export type WorkspaceLifecycleOperation =
   | "provision"
   | "activate"
@@ -57,6 +73,9 @@ export type WorkspaceLifecycleOutcome =
   | "blocked"
   | "failed"
   | "retry-required"
+  // A selection of the workspace that already is the active one changed nothing (U-3); logged
+  // only, never an evidence record.
+  | "unchanged"
   // #447: `reconciled` = a startup/explicit reconciliation classified the workspace;
   // `repaired` = a controlled repair completed; `operator-required` = the recommended recovery needs
   // an operator to act first, so no automatic mutation was attempted.

@@ -32,6 +32,7 @@ interface StateOpts {
   readonly withTestScript?: boolean;
   readonly files?: Record<string, string>;
   readonly spawn?: SpawnFn;
+  readonly now?: () => number;
 }
 
 function runState(
@@ -41,6 +42,7 @@ function runState(
   state: BugRunState;
   workspace: WorkspaceInfo;
   fs: WorkspaceFs;
+  files: Record<string, string>;
 } {
   const pkg =
     framework === "vitest"
@@ -55,7 +57,8 @@ function runState(
             ? { scripts: { test: framework === "node-test" ? "node --test" : "node test.js" } }
             : {}),
         });
-  const fs = memFs(ROOT, { "package.json": pkg, ...(opts.files ?? {}) });
+  const files: Record<string, string> = { "package.json": pkg, ...(opts.files ?? {}) };
+  const fs = memFs(ROOT, files);
   const workspace = detectWorkspace(ROOT, fs);
   const input: BugInvestigationInput = {
     workspaceRoot: ROOT,
@@ -67,6 +70,7 @@ function runState(
     {
       model: { call: () => Promise.reject(new Error("unused")) },
       fs,
+      ...(opts.now === undefined ? {} : { now: opts.now }),
       // These cases exercise plan resolution and command selection, not the egress boundary, and a
       // fake spawn cannot be sandboxed. The degrade mode is therefore requested BY NAME: it used to
       // be inferred from the injected spawn, which silently applied to governed production runs too
@@ -77,7 +81,7 @@ function runState(
     },
     computeBugFingerprint(input.report, "m"),
   );
-  return { state, workspace, fs };
+  return { state, workspace, fs, files };
 }
 
 function changed(path: string): PatchFileChange {
@@ -168,5 +172,43 @@ describe("runBugVerification (D11)", () => {
       "--test",
       "test/buggy.test.js",
     ]);
+  });
+});
+
+describe("the verification stage binds package scripts to the plan it built", () => {
+  it("runs the planned bytes when the scripts are unchanged", async () => {
+    const spawn = recordingSpawn();
+    const { state, workspace, fs } = runState("unknown", { withTestScript: true, spawn: spawn.fn });
+    scriptChildClose(spawn.child, { stdout: "1 passed", exitCode: 0 });
+    const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
+    expect(out.summary?.overallStatus).toBe("passed");
+    expect(spawn.calls()[0]?.args).toContain("node test.js");
+  });
+
+  it("denies, without a spawn, a package.json the model's patch rewrote after the plan was built", async () => {
+    const spawn = recordingSpawn();
+    const held: { files?: Record<string, string> } = {};
+    const {
+      state,
+      workspace,
+      fs,
+      files: store,
+    } = runState("unknown", {
+      withTestScript: true,
+      spawn: spawn.fn,
+      now: () => {
+        if (held.files !== undefined) {
+          held.files["package.json"] = JSON.stringify({
+            name: "d",
+            scripts: { test: "node steal.js" },
+          });
+        }
+        return 1;
+      },
+    });
+    held.files = store;
+    const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
+    expect(spawn.calls()).toHaveLength(0);
+    expect(out.summary?.results.map((result) => result.status)).toEqual(["denied"]);
   });
 });

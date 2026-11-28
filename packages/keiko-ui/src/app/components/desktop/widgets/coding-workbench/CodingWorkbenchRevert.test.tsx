@@ -49,6 +49,68 @@ describe("CodingWorkbenchRevertBar", () => {
     expect(screen.queryByRole("button", { name: "Undo last turn" })).toBeNull();
   });
 
+  it("offers Undo for a turn that only changed the Git index, and says no file content changed", () => {
+    renderBar({ ...NEWEST, fileCount: 0, additions: 0, deletions: 0, indexPathCount: 2 });
+
+    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "The last turn changed what is staged for 2 files; no file content changed.",
+    );
+  });
+
+  it("keeps a staged undo of an index-only turn on screen without counting zero files", () => {
+    renderBar({ staged: true, fileCount: 0, additions: 0, deletions: 0, index: "restored" });
+
+    expect(screen.getByRole("status")).toHaveTextContent("no file content changed");
+    expect(screen.getByRole("status")).not.toHaveTextContent("0 files");
+  });
+
+  it("says how many staged paths a partial index-only undo took back, and that the rest stay", () => {
+    const { unmount } = render(
+      <CodingWorkbenchRevertBar
+        revert={{
+          staged: true,
+          fileCount: 0,
+          additions: 0,
+          deletions: 0,
+          index: "partial",
+          indexPathCount: 64,
+        }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("undone for 64 files");
+    expect(status).toHaveTextContent("Some staged changes were left in place");
+    expect(status).not.toHaveTextContent("back to the earlier state and no file content changed");
+    unmount();
+    render(
+      <CodingWorkbenchRevertBar
+        revert={{ staged: true, fileCount: 0, additions: 0, deletions: 0, index: "unavailable" }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("no staged change was taken back");
+    expect(screen.getByRole("status")).toHaveTextContent("files may still be staged");
+  });
+
+  it.each([
+    ["changed-after-turn", "because the Git index changed after the turn"],
+    ["head-moved", "because the turn committed"],
+  ] as const)(
+    "says an index-only undo took nothing back when the outcome is %s",
+    (index, reason) => {
+      renderBar({ staged: true, fileCount: 0, additions: 0, deletions: 0, index });
+
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent("no staged change was taken back");
+      expect(status).toHaveTextContent(reason);
+      expect(status).not.toHaveTextContent("0 files");
+    },
+  );
+
   it("names a single file in the singular", () => {
     renderBar({ ...NEWEST, fileCount: 1 });
 
@@ -109,6 +171,26 @@ describe("CodingWorkbenchRevertBar", () => {
     expect(onRevert).toHaveBeenCalledExactlyOnceWith("restore");
   });
 
+  it("says what the undo did to the staged changes, and never claims more than it did", () => {
+    const { unmount } = render(
+      <CodingWorkbenchRevertBar
+        revert={{ ...STAGED, index: "restored" }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("are unstaged again");
+    unmount();
+    render(
+      <CodingWorkbenchRevertBar
+        revert={{ ...STAGED, index: "changed-after-turn" }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("files may still be staged");
+  });
+
   it("explains that a file edited since the undo is never overwritten", async () => {
     renderBar(STAGED);
     await userEvent.click(screen.getByRole("button", { name: "Restore changes" }));
@@ -118,11 +200,29 @@ describe("CodingWorkbenchRevertBar", () => {
     );
   });
 
-  it("disables Undo and says why when the last turn changed no file", () => {
+  it("renders no region when the newest turn changed no file and nothing is staged", () => {
     renderBar({ ...NEWEST, fileCount: 0, additions: 0, deletions: 0 });
 
-    expect(screen.getByRole("status")).toHaveTextContent("nothing to undo");
-    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeDisabled();
+    expect(screen.queryByRole("region", { name: "Last turn" })).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the bar while a mutation is in flight, even without changed files", () => {
+    renderBar({ ...NEWEST, fileCount: 0 }, { busy: true });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Applying…");
+  });
+
+  it("offers an enabled Undo whenever the newest turn changed a file", () => {
+    renderBar({ ...NEWEST, fileCount: 1 });
+
+    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeEnabled();
+  });
+
+  it("still offers Restore for a staged undo without file counts", () => {
+    renderBar({ ...STAGED, fileCount: 0 });
+
+    expect(screen.getByRole("button", { name: "Restore changes" })).toBeEnabled();
   });
 
   it("waits while a runtime mutation is in flight", async () => {
@@ -179,7 +279,6 @@ describe("CodingWorkbenchRevertBar", () => {
   it.each([
     ["an undo that can be made", NEWEST],
     ["a staged undo", STAGED],
-    ["a turn without changes", { ...NEWEST, fileCount: 0 }],
   ])("has no accessibility violations for %s", async (_name, revert) => {
     const { view } = renderBar(revert);
     expect(await axe(view.container)).toHaveNoViolations();

@@ -508,7 +508,7 @@ describe("observed issue journey handoff", () => {
     render(
       <CodingWorkbenchJourneyOutcome
         {...fixture}
-        changedFiles={{ status: "ready", fileCount, truncated: false }}
+        changedFiles={{ status: "ready", fileCount, totalCount: fileCount, truncated: false }}
       />,
     );
     expect(screen.getByText(sentence)).toBeInTheDocument();

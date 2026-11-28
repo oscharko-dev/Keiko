@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
+import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "./coding-workbench-runtime-constants.js";
 import {
   CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
   CODING_WORKBENCH_COMMAND_DESCRIPTION_MAX_CHARS,
   CODING_WORKBENCH_COMMANDS_MAX,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_STOP_CAUSES,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_PROMPT_DELIVERIES,
@@ -64,11 +66,45 @@ const TERMINAL_RUN_CAUSES = [
 ] as const;
 
 describe("Coding Workbench runtime API contracts", () => {
+  it("requires the repository the person sees, exact-keyed and bounded", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Fix issue",
+      requestedMode: "supervised-coding",
+    };
+    const expectedWorkspace = { root: "/work/repository-b" };
+    expect(parseCodingWorkbenchRuntimeStartRequest({ ...start, expectedWorkspace })).toEqual({
+      ok: true,
+      value: { ...start, expectedWorkspace },
+    });
+    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toMatchObject({ ok: false });
+    for (const bad of [
+      {},
+      { root: "" },
+      { root: "   " },
+      { root: 7 },
+      { root: "/a\0b" },
+      { root: "/".padEnd(4097, "x") },
+      { root: "/work/b", workspaceId: "ws-1" },
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...start, expectedWorkspace: bad }),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  // Refused before any run exists, so no run snapshot (whose failure_code column is a closed list)
+  // can ever carry it: it is a start-only refusal, not a run failure code.
+  it("keeps the selection-mismatch refusal out of the persisted run failure codes", () => {
+    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).not.toContain("workspace-selection-mismatch");
+  });
+
   it("accepts only a bounded preview precondition attached to an issue intent", () => {
     const start = {
       requestId: "request-1",
       taskIntent: "Fix issue",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     const accepted = { ...start, issueRef: "#42", expectedIssueBindingDigest: "a".repeat(64) };
     expect(parseCodingWorkbenchRuntimeStartRequest(accepted)).toEqual({
@@ -104,6 +140,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Try another approach",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     const wholeTask = { ...start, fork: { taskId: "chat-source-1" } };
     const beforeMessage = {
@@ -136,6 +173,7 @@ describe("Coding Workbench runtime API contracts", () => {
         requestId: "request-1",
         taskIntent: "Try another approach",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/work/repository-b" },
         fork,
       }),
     ).toMatchObject({ ok: false });
@@ -147,6 +185,7 @@ describe("Coding Workbench runtime API contracts", () => {
         requestId: "request-1",
         taskIntent: "Try another approach",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/work/repository-b" },
         conversationId: "chat-source-1",
         fork: { taskId: "chat-source-1" },
       }),
@@ -158,6 +197,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Investigate the failing unit test",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
       runtimePreference: "managed-gateway",
     };
 
@@ -225,6 +265,7 @@ describe("Coding Workbench runtime API contracts", () => {
         requestId: "request-1",
         taskIntent: "Review it",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/work/repository-b" },
         agent: "reviewer",
       }),
     ).toEqual({ ok: false, errors: ["agent is invalid"] });
@@ -267,6 +308,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Plan the migration before touching a file",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     for (const agent of CODING_WORKBENCH_AGENTS) {
       expect(parseCodingWorkbenchRuntimeStartRequest({ ...start, agent })).toEqual({
@@ -294,6 +336,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Use project memory for the repository",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
       projectMemory: { enabled: true },
     };
 
@@ -323,6 +366,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Implement the ticket and report back",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     const podId = "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10";
 
@@ -509,6 +553,35 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: true });
     expect(
       validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeAvailable: "yes" }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // U-37: a window reloaded with "Ask for approval" selected while its live run holds Full access is
+  // told what the run holds. Only an answer the server marks as anchored to the live run may exceed
+  // the request, and no answer may exceed the deployment ceiling.
+  it("accepts an effective mode wider than the request only when anchored to the live run", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
+    };
+    expect(validateCodingWorkbenchRuntimeReadiness(readiness)).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, liveRunAnchored: true }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, liveRunAnchored: false }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        ...readiness,
+        deploymentCeiling: "supervised-coding",
+        liveRunAnchored: true,
+      }),
     ).toMatchObject({ ok: false });
   });
 
@@ -895,6 +968,56 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // U-31: why Keiko's shutdown cancelled a run belongs to a cancelled snapshot only.
+  it("binds the stop cause to a cancelled snapshot only", () => {
+    const cancelled = {
+      schemaVersion: "1",
+      state: "cancelled",
+      revision: 5,
+      updatedAt: AT,
+      runId: "run-1",
+    };
+    for (const stopCause of CODING_WORKBENCH_STOP_CAUSES) {
+      const snapshot = { ...cancelled, stopCause };
+      expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({
+        ok: true,
+        value: snapshot,
+      });
+    }
+    expect(validateCodingWorkbenchRuntimeSnapshot(cancelled)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...cancelled, stopCause: "operator-stop" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...cancelled,
+        state: "failed",
+        stopCause: "server-shutdown-working",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // U-38: the detail refines the check-failed gap alone.
+  it("admits the verification gap detail only beside the check-failed gap", () => {
+    const failed = {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 5,
+      updatedAt: AT,
+      runId: "run-1",
+      failureCode: "verification-not-evidenced",
+      verificationGap: "check-failed",
+      verificationGapDetail: "unchanged-after-continuation",
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(failed)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...failed, verificationGap: "no-check-run" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...failed, verificationGapDetail: "invented" }),
+    ).toMatchObject({ ok: false });
+  });
+
   // #4491: the concrete gap of a run that settled without a passing check after its last change.
   it("binds the verification gap to a verification-not-evidenced snapshot and status frame only", () => {
     const failed = {
@@ -1032,6 +1155,7 @@ describe("Coding Workbench issue binding contract (#3385)", () => {
     requestId: "request-1",
     taskIntent: "Implement the accepted issue",
     requestedMode: "supervised-coding",
+    expectedWorkspace: { root: "/work/repository-b" },
   };
   const BINDING = {
     schemaVersion: "1",
@@ -1214,6 +1338,7 @@ describe("Coding Workbench runtime API failure branches", () => {
         requestId: "request-1",
         taskIntent: "Investigate",
         requestedMode: "root-access",
+        expectedWorkspace: { root: "/work/repository-b" },
       }),
     ).toMatchObject({ ok: false, errors: ["requestedMode is invalid"] });
     expect(
@@ -2111,6 +2236,7 @@ describe("Coding Workbench slash commands and first-prompt references", () => {
     requestId: "request-1",
     taskIntent: "Look at the notes",
     requestedMode: "supervised-coding",
+    expectedWorkspace: { root: "/work/repository-b" },
   };
   const followUp = { requestId: "request-1", expectedRevision: 4, taskIntent: "Review it" };
   const references = [{ path: "src/index.ts" }, { path: "docs/My Notes.md" }];
@@ -2358,6 +2484,7 @@ describe("Coding Workbench agent and skill mentions (#3906)", () => {
     requestId: "req_0000000000000001",
     taskIntent: "Ask @general to look at the notes.",
     requestedMode: "governed-assist",
+    expectedWorkspace: { root: "/work/repository-b" },
   };
 
   it("admits bounded agent and skill mentions with the span of the typed token", () => {
@@ -2544,6 +2671,7 @@ describe("explicit Coding Jira administrative connector scope", () => {
     requestId: "admin-start",
     taskIntent: "Review Jira administration",
     requestedMode: "autonomous-delivery",
+    expectedWorkspace: { root: "/work/repository-b" },
     jiraPodId: "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10",
   };
   it("accepts only the closed additional scope with an explicitly selected Pod", () => {
@@ -2575,5 +2703,68 @@ describe("explicit Coding Jira administrative connector scope", () => {
         connectorScopes: ["issue-tracker.admin"],
       }),
     ).toMatchObject({ ok: false });
+  });
+});
+
+describe("the refused agent model count fact (U-53)", () => {
+  const fact = {
+    schemaVersion: "1",
+    cursor: "run-1:3",
+    sequence: 3,
+    occurredAt: "2026-11-28T05:00:00.000Z",
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-agent-models-refused",
+    refusedAgentModelCount: 2,
+  };
+
+  it("admits a positive count on its own kind only", () => {
+    expect(validateCodingWorkbenchRuntimeSseEvent(fact).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, refusedAgentModelCount: -1 }).ok).toBe(
+      false,
+    );
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...fact, refusedAgentModelCount: "2" }).ok,
+    ).toBe(false);
+    const { refusedAgentModelCount: _count, ...withoutCount } = fact;
+    expect(validateCodingWorkbenchRuntimeSseEvent(withoutCount).ok).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind: "runtime-health" }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("the native subagent count fact (U-52)", () => {
+  const fact = {
+    schemaVersion: "1",
+    cursor: "run-1:3",
+    sequence: 3,
+    occurredAt: "2026-11-28T05:00:00.000Z",
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-subagents-changed",
+    activeSubagentCount: 2,
+  };
+
+  it("admits a count on its own kind only", () => {
+    expect(validateCodingWorkbenchRuntimeSseEvent(fact).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, activeSubagentCount: 0 }).ok).toBe(
+      true,
+    );
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, activeSubagentCount: -1 }).ok).toBe(
+      false,
+    );
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, activeSubagentCount: "2" }).ok).toBe(
+      false,
+    );
+    const { activeSubagentCount: _count, ...withoutCount } = fact;
+    expect(validateCodingWorkbenchRuntimeSseEvent(withoutCount).ok).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind: "runtime-health" }).ok,
+    ).toBe(false);
   });
 });

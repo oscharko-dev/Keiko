@@ -20,6 +20,9 @@ import type {
   OpenCodeCompactionActivity,
   OpenCodeReconciliationEvent,
 } from "./opencodeReconciler.js";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
+import { isSafeTaskBranchName } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { isRuntimeGitBranchName } from "./codingRuntimeGitIpc.js";
 import { isAdmissibleOpenCodeToolName, openCodeToolLogLabel } from "./opencodeNativeTools.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
@@ -353,6 +356,12 @@ const GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS = [
   ...GOVERNED_VERIFICATION_METADATA_KEYS,
   "targetPathHash",
 ] as const;
+// A governed task branch's ask also names the branch (a validated ref name, not a secret) so the
+// approval card shows what Approve creates; the server re-derives the digest from it (#4491 U-27).
+const GOVERNED_BRANCH_METADATA_KEYS = [
+  ...GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS,
+  "branchName",
+] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
 // `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
@@ -477,11 +486,7 @@ function projectGovernedCommandPermission(
   metadata: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const actionKind = metadata.actionKind;
-  const metadataKeys =
-    (actionKind === "verification-command" && metadata.commandLabel === "targeted-test") ||
-    actionKind === "git-branch"
-      ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
-      : GOVERNED_VERIFICATION_METADATA_KEYS;
+  const metadataKeys = governedCommandMetadataKeys(actionKind, metadata.commandLabel);
   if (
     !exactRecord(metadata, metadataKeys) ||
     typeof actionKind !== "string" ||
@@ -502,6 +507,32 @@ function projectGovernedCommandPermission(
     : { type: "permission-request", requestId, ...metadata };
 }
 
+// A governed verification's ask also names the package folder the call asked for, so the approval
+// card can show the command that package plans (ADR-0124 D6); the empty string is "none".
+function governedCommandMetadataKeys(
+  actionKind: unknown,
+  commandLabel: unknown,
+): readonly string[] {
+  const targeted = commandLabel === "targeted-test";
+  if (actionKind === "verification-command") {
+    return [
+      ...(targeted
+        ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
+        : GOVERNED_VERIFICATION_METADATA_KEYS),
+      "packageDir",
+    ];
+  }
+  return actionKind === "git-branch"
+    ? GOVERNED_BRANCH_METADATA_KEYS
+    : GOVERNED_VERIFICATION_METADATA_KEYS;
+}
+
+function validAskPackageDir(metadata: Record<string, unknown>): boolean {
+  if (metadata.actionKind !== "verification-command") return !Object.hasOwn(metadata, "packageDir");
+  const dir = metadata.packageDir;
+  return dir === "" || (typeof dir === "string" && dir.length <= 512 && GOVERNED_PATH.test(dir));
+}
+
 function validCommandApproval(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
@@ -511,7 +542,7 @@ function validCommandApproval(
   const targetPathHash = metadata.targetPathHash;
   return (
     typeof commandLabel === "string" &&
-    validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
+    validGovernedAsk(metadata, commandLabel) &&
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
@@ -521,6 +552,28 @@ function validCommandApproval(
       ? typeof targetPathHash === "string" && /^[0-9a-f]{64}$/u.test(targetPathHash)
       : targetPathHash === undefined) &&
     sameStrings(properties.patterns, [commandLabel])
+  );
+}
+
+// The branch the ask names must be printable and its digest IS the approved target, so the card can
+// never show a name other than the one Approve binds to. Whether Git accepts the name stays the Git
+// service's decision (a refusal the model can act on), so an unusual name is shown, not dropped.
+function validAskBranchName(metadata: Record<string, unknown>): boolean {
+  if (metadata.actionKind !== "git-branch") return !Object.hasOwn(metadata, "branchName");
+  const name = metadata.branchName;
+  return (
+    isRuntimeGitBranchName(name) &&
+    stripUnsafeFormatChars(name) === name &&
+    isSafeTaskBranchName(name) &&
+    createHash("sha256").update(name, "utf8").digest("hex") === metadata.targetPathHash
+  );
+}
+
+function validGovernedAsk(metadata: Record<string, unknown>, commandLabel: string): boolean {
+  return (
+    validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
+    validAskPackageDir(metadata) &&
+    validAskBranchName(metadata)
   );
 }
 

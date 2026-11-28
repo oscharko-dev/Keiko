@@ -3225,6 +3225,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "browserWidget.common.yes": "yes",
   "browserWidget.common.no": "no",
   "browserWidget.status.screenshotReady": "Screenshot ready (dry-run) — press Apply to persist.",
+  "browserWidget.status.eventsGap":
+    "Live events were paused briefly while another stream needed the connection. Events from that gap are not shown.",
   "browserWidget.status.persistedAs": "Persisted as {path}.",
   "browserWidget.status.persistedAsPrefix": "Persisted as",
   "browserWidget.status.currentOrigin": "Current origin: {origin}",
@@ -3395,7 +3397,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.preview.qualityWarnings": "Suggestions",
   "commitComposer.preview.preflightFindings": "Checks",
   "commitComposer.preflight.branchProtectionUnavailable": "Remote branch rules could not be read",
-  "commitComposer.preflight.signedCommitsRequired": "Signed commits may be required",
+  "commitComposer.preflight.signedCommitsRequired":
+    "This branch requires signed commits. Keiko signs this commit; set up commit signing (signing key and commit.gpgsign) first or the commit fails",
   "commitComposer.warning.mixed-scope": "Mixed scope — changes span several areas",
   "commitComposer.warning.wip-marker": "Work-in-progress marker in the subject",
   "commitComposer.warning.large-change": "Large change — many files staged",
@@ -3408,6 +3411,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.violation.subject-too-long": "The subject line is too long",
   "commitComposer.violation.missing-issue-key": "Missing the required issue key",
   "commitComposer.violation.missing-signoff": "Missing the Signed-off-by trailer",
+  "commitComposer.violation.message-too-large":
+    "The commit message is too large (more than 64 KiB)",
   "gitClientWindow.error.noRepository": "Select a repository first.",
   "promptEnhancer.error.cancelled": "Request cancelled.",
   "promptEnhancer.error.failed": "Prompt enhancement failed. Please try again.",
@@ -6261,6 +6266,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.ui.new": "New",
   "gitClientWindow.ui.recent": "Recent",
   "gitClientWindow.ui.error": "Error",
+  "gitClientWindow.ui.commitLateError":
+    "The commit was recorded, although Git reported a late error. Check the repository state before you commit again.",
   "gitClientWindow.ui.commitSigningRecovery":
     "Git could not sign this commit. Check this repository's signing key (user.signingKey) and format (gpg.format). Make sure Keiko can run the signing tool (gpg for OpenPGP or ssh-keygen for SSH). Then click Commit again.",
   "figmaJson.ui.qiSource": "QI source",

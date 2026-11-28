@@ -476,6 +476,75 @@ describe("KeikoSelect interactions", () => {
     },
   ];
 
+  it("stays announced but does not open while busy", async () => {
+    const onOpen = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        busy
+        menuTitle="Strategy"
+        onOpen={onOpen}
+        onValueChange={vi.fn()}
+        sections={sections}
+        value="model"
+      />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    expect(trigger).toHaveAttribute("aria-disabled", "true");
+    expect(trigger).toHaveAttribute("aria-busy", "true");
+    expect(trigger).not.toBeDisabled();
+    await user.click(trigger);
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(trigger, { key: " " });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("closes an open menu when the control becomes busy", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ariaLabel: "Strategy",
+      menuTitle: "Strategy",
+      onValueChange: vi.fn(),
+      sections,
+      value: "model",
+    };
+    const { rerender } = render(<KeikoSelect {...props} />);
+    await user.click(screen.getByRole("combobox", { name: "Strategy" }));
+    expect(screen.getByRole("listbox", { name: "Strategy" })).toBeInTheDocument();
+    rerender(<KeikoSelect {...props} busy />);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Strategy" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("returns focus to the trigger when the control becomes busy with focus inside the menu", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ariaLabel: "Strategy",
+      menuTitle: "Strategy",
+      onValueChange: vi.fn(),
+      searchPlaceholder: "Search",
+      sections,
+      value: "model",
+    };
+    const { rerender } = render(<KeikoSelect {...props} />);
+    await user.click(screen.getByRole("combobox", { name: "Strategy" }));
+    const search = screen.getByPlaceholderText("Search");
+    search.focus();
+    expect(search).toHaveFocus();
+    rerender(<KeikoSelect {...props} busy />);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Strategy" })).toHaveFocus();
+  });
+
   it("commits the active option with keyboard navigation and returns focus to the trigger", async () => {
     const onValueChange = vi.fn();
     render(

@@ -1,13 +1,22 @@
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
-import { readGitRawWorktreeSnapshot } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  readGitRawWorktreeSnapshotAtHead,
+  sameGitHeadState,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
-import { readVerifiedCommitReview } from "./verifiedCommitReview.js";
+import {
+  readVerifiedCommitReview,
+  type VerifiedCommitReviewIncompleteCause,
+} from "./verifiedCommitReview.js";
 import { mintProposalId } from "./proposalId.js";
 import type {
   VerificationReport,
+  GitCommitSigningDecision,
+  GitCommitSigningReadFailure,
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
-  GitCommitMessageValidation,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   VerifiedCommitBinding,
@@ -21,6 +30,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
+import {
+  createGitReadSession,
+  type GitReadSession,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
@@ -31,6 +44,8 @@ import {
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
 import {
+  commitSigningOf,
+  commitSigningReadFailureOf,
   executeGovernedMutation,
   gitDeliveryActivityCode,
   gitDeliveryActivityErrorKind,
@@ -40,6 +55,8 @@ import {
 import {
   readVerifiedCommitFacts,
   sameVerifiedCommitFacts,
+  verifiedBaseObjectId,
+  verifiedHeadObjectId,
   untrackedOutsideCandidate,
   verifiedCommitMessageDigest,
 } from "./verifiedCommitFacts.js";
@@ -62,6 +79,7 @@ import type {
   VerifiedCommitService,
   VerifiedCommitServiceOptions,
   VerifiedCommitBlockingPaths,
+  VerifiedCommitMessageVerdict,
 } from "./verifiedCommitTypes.js";
 
 const VERIFIED_COMMIT_RESULT_REASONS = [
@@ -157,6 +175,9 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     untrackedCount: { type: "integer", dataClass: "count", required: false },
     verificationGeneration: { type: "integer", dataClass: "count", required: false },
     currentGeneration: { type: "integer", dataClass: "count", required: false },
+    proofAgeMs: { type: "integer", dataClass: "duration", required: false },
+    // The Git processes the operation's scope had started when the line was written (W-4, #4491).
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
     passed: { type: "boolean", dataClass: "closed-enum", required: false },
     verificationEvidenceId: {
       type: "string",
@@ -173,7 +194,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 6,
+      maxItems: 7,
       values: [
         "empty-subject",
         "missing-conventional-prefix",
@@ -181,9 +202,31 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
         "subject-too-long",
         "missing-issue-key",
         "missing-signoff",
+        "message-too-large",
       ],
     },
     violationCount: { type: "integer", dataClass: "count", required: false },
+    messagePolicyMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["keiko-conventional", "repository-native"],
+    },
+    messagePolicySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["setting", "repository", "fallback"],
+    },
+    reviewFileCount: { type: "integer", dataClass: "count", required: false },
+    reviewRenameCount: { type: "integer", dataClass: "count", required: false },
+    reviewPathsTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    reviewIncompleteCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["diff-truncated", "file-truncated", "payload-invalid"],
+    },
     attemptedStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -207,6 +250,24 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     frames: VERIFIED_COMMIT_FRAMES_FIELD,
     causeChain: VERIFIED_COMMIT_CAUSE_CHAIN_FIELD,
+    signing: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "configured",
+        "required-by-branch-protection",
+        "not-configured",
+        "not-configured-protection-unavailable",
+        "unknown-fail-closed",
+      ],
+    },
+    signingReadFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["timeout", "cancelled", "denied", "spawn", "truncated", "exit", "malformed"],
+    },
   },
   causal: "correlation",
   diagnosticWhen: [{ field: "failedCheckCount", positive: true }],
@@ -233,6 +294,8 @@ type VerifiedCommitActivityPhase =
 interface VerifiedCommitActivityFields {
   readonly verificationGeneration?: number;
   readonly currentGeneration?: number;
+  readonly proofAgeMs?: number;
+  readonly gitSpawnCount?: number;
   readonly reason?: VerifiedCommitReason;
   readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
   readonly unstagedCount?: number;
@@ -246,6 +309,12 @@ interface VerifiedCommitActivityFields {
   readonly stagedTreeDigest?: string;
   readonly violations?: NonNullable<VerifiedCommitResult["violations"]>;
   readonly violationCount?: number;
+  readonly reviewIncompleteCause?: VerifiedCommitReviewIncompleteCause;
+  readonly messagePolicyMode?: "keiko-conventional" | "repository-native";
+  readonly messagePolicySource?: "setting" | "repository" | "fallback";
+  readonly reviewFileCount?: number;
+  readonly reviewRenameCount?: number;
+  readonly reviewPathsTruncated?: boolean;
   readonly attemptedStatus?: VerifiedCommitStatus;
   readonly attemptedReason?: VerifiedCommitReason;
   readonly effectPhase?: "pre-effect" | "post-effect";
@@ -254,6 +323,8 @@ interface VerifiedCommitActivityFields {
   readonly code?: string;
   readonly frames?: readonly string[];
   readonly causeChain?: readonly string[];
+  readonly signing?: GitCommitSigningDecision;
+  readonly signingReadFailure?: GitCommitSigningReadFailure;
 }
 
 function verifiedCommitErrorFields(
@@ -280,7 +351,16 @@ function failedVerificationCheckCount(report: VerificationReport): number {
   ).length;
 }
 
-const TTL_MS = 5 * 60 * 1000;
+// A verification proof is bound to its candidate by content (`sameVerifiedCommitFacts`, the run
+// context), not by the clock: the same facts in the same run are as true after 6 minutes as after
+// one, and a slow local model's turn can take longer than any short wall-clock bound (live defect
+// V-2). Only a backstop remains: no proof outlives the longest run the product allows.
+const VERIFICATION_PROOF_BACKSTOP_MS = MAX_RUNTIME_MAX_DURATION_MINUTES * 60 * 1000;
+
+function proofAgeExpired(startedAtMs: number, nowMs: number): boolean {
+  return nowMs - startedAtMs >= VERIFICATION_PROOF_BACKSTOP_MS;
+}
+
 interface VerificationTicket {
   readonly context: VerifiedCommitRunContext;
   readonly facts: VerifiedCommitFacts;
@@ -312,7 +392,7 @@ function verificationRejection(
   )
     return "verification-failed";
   if (!sameVerifiedCommitFacts(before.facts, after)) return "candidate-drift";
-  if (now - before.startedAtMs >= TTL_MS) return "verification-stale";
+  if (proofAgeExpired(before.startedAtMs, now)) return "verification-stale";
   return undefined;
 }
 
@@ -327,15 +407,15 @@ function failingEvidence(
     report.workspaceRoot === before.context.workspace.root &&
     commitVerificationReportFailed(report, before.startedAtMs, now) &&
     sameVerifiedCommitFacts(before.facts, after) &&
-    now - before.startedAtMs < TTL_MS
+    !proofAgeExpired(before.startedAtMs, now)
   );
 }
 
 // The same staged candidate on the same head and base; untracked files outside it are not compared.
 function sameCommitCandidate(a: VerifiedCommitFacts, b: VerifiedCommitFacts): boolean {
   return (
-    a.headSha === b.headSha &&
-    a.baseSha === b.baseSha &&
+    sameGitHeadState(a.head, b.head) &&
+    sameGitHeadState(a.base, b.base) &&
     a.stagedTreeDigest === b.stagedTreeDigest &&
     a.repositoryDigest === b.repositoryDigest
   );
@@ -358,7 +438,7 @@ function untrackedEvidence(
     ran &&
     sameCommitCandidate(before.facts, after) &&
     (after.clean || untrackedOutsideCandidate(context, after)) &&
-    now - before.startedAtMs < TTL_MS
+    !proofAgeExpired(before.startedAtMs, now)
   );
 }
 
@@ -459,6 +539,17 @@ function kernelReason(result: GitMutationLifecycleResult): VerifiedCommitReason 
   }
 }
 
+function signingActivity(
+  result: GitMutationLifecycleResult,
+): Pick<VerifiedCommitActivityFields, "signing" | "signingReadFailure"> {
+  const signing = commitSigningOf(result.outcome);
+  const signingReadFailure = commitSigningReadFailureOf(result.outcome);
+  return {
+    ...(signing === undefined ? {} : { signing }),
+    ...(signingReadFailure === undefined ? {} : { signingReadFailure }),
+  };
+}
+
 function kernelDetails(
   result: GitMutationLifecycleResult,
 ): Pick<VerifiedCommitResult, "blockReason" | "preflightFindings"> {
@@ -471,28 +562,82 @@ function kernelDetails(
 // #3390: `messageAllowed` accepts a plain boolean (existing wiring) or the full validation the
 // pure git-commit-policy validator already computes; only the latter carries closed violation
 // codes the model can self-correct against instead of asking the operator.
-function messagePolicyAllowed(value: boolean | GitCommitMessageValidation): boolean {
+function messagePolicyAllowed(value: boolean | VerifiedCommitMessageVerdict): boolean {
   return typeof value === "boolean" ? value : value.ok;
 }
 
 function messagePolicyViolationDetails(
-  value: boolean | GitCommitMessageValidation,
+  value: boolean | VerifiedCommitMessageVerdict,
 ): Pick<VerifiedCommitResult, "violations"> {
   return typeof value === "boolean" || value.ok ? {} : { violations: value.violations };
 }
 
+function commitCommand(
+  context: VerifiedCommitRunContext,
+  facts: VerifiedCommitFacts,
+  message: string,
+): VerifiedCommitProposal["command"] {
+  return {
+    kind: "commit",
+    message,
+    allowEmpty: false,
+    verified: {
+      head: facts.head,
+      stagedTreeDigest: facts.stagedTreeDigest,
+      branchName: context.headRef,
+      baseRef: context.baseRef,
+      base: facts.base,
+    },
+  };
+}
+
+function reviewActivity(
+  review: VerifiedCommitProposal["review"],
+  renameCount: number,
+): Pick<
+  VerifiedCommitActivityFields,
+  "reviewFileCount" | "reviewRenameCount" | "reviewPathsTruncated"
+> {
+  return {
+    reviewFileCount: review.fileCount,
+    reviewRenameCount: renameCount,
+    reviewPathsTruncated: review.pathsTruncated,
+  };
+}
+
+function messagePolicyActivity(
+  value: boolean | VerifiedCommitMessageVerdict,
+): Pick<VerifiedCommitActivityFields, "messagePolicyMode" | "messagePolicySource"> {
+  if (typeof value === "boolean") return {};
+  return {
+    ...(value.policyMode === undefined ? {} : { messagePolicyMode: value.policyMode }),
+    ...(value.policySource === undefined ? {} : { messagePolicySource: value.policySource }),
+  };
+}
+
+// The Git processes a commit call had started, once it started any (a refusal before its first read
+// reports nothing).
+function commitCost(session: GitReadSession | undefined): { readonly gitSpawnCount?: number } {
+  return session === undefined || session.spawnCount === 0
+    ? {}
+    : { gitSpawnCount: session.spawnCount };
+}
+
+// The proposal an execution runs, in a Git read scope of its own: the proposal outlives the call that
+// made it, so the scope that call held (and the promisor verdict in it) never reaches an execution.
 function guardedProposal(
   proposal: VerifiedCommitProposal,
   guard: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined } | undefined,
 ): VerifiedCommitProposal {
-  if (guard === undefined) return proposal;
+  const scoped = { ...proposal.context, readSession: createGitReadSession() };
+  if (guard === undefined) return { ...proposal, context: scoped };
   const signals = [proposal.context.signal, guard.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   return {
     ...proposal,
     context: {
-      ...proposal.context,
+      ...scoped,
       signal: AbortSignal.any(signals),
       stillAuthorized: () => proposal.context.stillAuthorized() && guard.check(),
     },
@@ -542,6 +687,24 @@ type VerificationTicketIdentity = Pick<VerifiedCommitRunContext, "runId" | "corr
   readonly verificationGeneration: number;
 };
 
+/** What a recorded result may carry beyond its status and reason. */
+interface VerifiedCommitRecordExtras {
+  readonly headSha?: string | undefined;
+  readonly details?: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations">;
+  readonly activity?: Pick<
+    VerifiedCommitActivityFields,
+    | "reviewIncompleteCause"
+    | "reviewFileCount"
+    | "reviewRenameCount"
+    | "reviewPathsTruncated"
+    | "messagePolicyMode"
+    | "messagePolicySource"
+    | "signing"
+    | "signingReadFailure"
+  >;
+  readonly proofAgeMs?: number | undefined;
+}
+
 class VerifiedCommitController implements VerifiedCommitService {
   // Weak, body-free log identities survive invalidation without retaining any authority or facts.
   private readonly ticketIdentities = new WeakMap<object, VerificationTicketIdentity>();
@@ -570,6 +733,9 @@ class VerifiedCommitController implements VerifiedCommitService {
       ? {
           ...context,
           stillAuthorized: () => this.generation === generation && context.stillAuthorized(),
+          // One Git read scope per call (a verification step, a proposal): its processes are counted
+          // and its reads share one promisor verdict. It ends with the call.
+          readSession: createGitReadSession(),
         }
       : undefined;
   }
@@ -745,25 +911,36 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (verification === undefined) return this.recordMissingProof(context, binding, facts);
     if (!verification.passed && !this.admitsFailedVerification(verification))
       return this.record(context, binding, "verification-failed", "verification-failed");
-    if (
-      !contextMatches(context, verification.context) ||
-      !this.candidateCurrent(context, verification.facts, facts) ||
-      this.now() - verification.startedAtMs >= TTL_MS
-    )
-      return this.record(context, binding, "drift", "verification-stale");
-    const messagePolicy = await this.options.messageAllowed(message, context.workspace);
+    const proofAgeMs = this.now() - verification.startedAtMs;
+    const driftReason = this.proofDriftReason(context, verification, facts);
+    if (driftReason !== undefined)
+      return this.record(context, binding, "drift", driftReason, { proofAgeMs });
+    const messagePolicy = await this.options.messageAllowed(
+      message,
+      context.workspace,
+      context.correlationId,
+    );
     if (!messagePolicyAllowed(messagePolicy))
-      return this.record(
-        context,
-        binding,
-        "blocked",
-        "message-policy",
-        undefined,
-        messagePolicyViolationDetails(messagePolicy),
-      );
+      return this.record(context, binding, "blocked", "message-policy", {
+        details: messagePolicyViolationDetails(messagePolicy),
+        activity: messagePolicyActivity(messagePolicy),
+      });
     if (hasIssueClosingDirective(message))
       return this.record(context, binding, "blocked", "issue-directive");
     return this.prepareProposal(context, facts, binding, message, !verification.passed);
+  }
+
+  // Why a passing proof no longer describes this candidate, or undefined while it still does: the
+  // run context moved, the staged candidate moved, or the proof outlived its backstop.
+  private proofDriftReason(
+    context: VerifiedCommitRunContext,
+    verification: VerificationProof,
+    facts: VerifiedCommitFacts,
+  ): "verification-stale" | "candidate-drift" | undefined {
+    if (!contextMatches(context, verification.context)) return "verification-stale";
+    if (!this.candidateCurrent(context, verification.facts, facts)) return "candidate-drift";
+    if (proofAgeExpired(verification.startedAtMs, this.now())) return "verification-stale";
+    return undefined;
   }
 
   // Full access commits what the human asked for even when the candidate's checks ran red (owner
@@ -812,38 +989,40 @@ class VerifiedCommitController implements VerifiedCommitService {
     verificationFailed: boolean,
   ): Promise<VerifiedCommitResult> {
     const awaiting = this.result(binding, "approval-required", "approval-required");
-    const review = await readVerifiedCommitReview(
+    const read = await readVerifiedCommitReview(
       context,
       awaiting,
       message,
       this.options.execution ?? {},
     );
-    if (review === undefined) return this.record(context, binding, "blocked", "review-incomplete");
+    if ("incomplete" in read) return this.reviewIncomplete(context, binding, read.incomplete);
+    const review = read.review;
     const afterReview = await this.facts(context);
     if (!this.candidateCurrent(context, facts, afterReview))
       return this.record(context, binding, "drift", "candidate-drift");
     const proposal: VerifiedCommitProposal = {
       binding,
       review,
-      context,
-      expiresAtMs: this.now() + TTL_MS,
+      // The proposal outlives this call; the call's Git read scope must not.
+      context: { ...context, readSession: undefined },
+      expiresAtMs: this.now() + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
       ...(verificationFailed ? { verificationFailed: true as const } : {}),
-      command: {
-        kind: "commit",
-        message,
-        allowEmpty: false,
-        verified: {
-          headSha: facts.headSha,
-          stagedTreeDigest: facts.stagedTreeDigest,
-          branchName: context.headRef,
-          baseRef: context.baseRef,
-          baseSha: facts.baseSha,
-        },
-      },
+      command: commitCommand(context, facts, message),
     };
     this.proposals.clear();
     this.proposals.set(binding.proposalId, proposal);
-    return this.record(context, binding, "approval-required", "approval-required");
+    return this.record(context, binding, "approval-required", "approval-required", {
+      activity: reviewActivity(review, read.renameCount),
+    });
+  }
+
+  private reviewIncomplete(
+    context: VerifiedCommitRunContext,
+    binding: VerifiedCommitBinding,
+    cause: VerifiedCommitReviewIncompleteCause,
+  ): VerifiedCommitResult {
+    const activity = { reviewIncompleteCause: cause };
+    return this.record(context, binding, "blocked", "review-incomplete", { activity });
   }
 
   private binding(
@@ -858,8 +1037,8 @@ class VerifiedCommitController implements VerifiedCommitService {
       runtimeAuthorityDigest: context.runtimeAuthorityDigest,
       workspaceDigest: context.workspaceDigest,
       repositoryDigest: facts.repositoryDigest,
-      baseSha: facts.baseSha,
-      parentSha: facts.headSha,
+      baseSha: verifiedBaseObjectId(facts),
+      parentSha: verifiedHeadObjectId(facts),
       stagedTreeDigest: facts.stagedTreeDigest,
       verificationEvidenceId: this.proof?.evidenceId ?? "verification-unavailable",
       messageDigest: verifiedCommitMessageDigest(message),
@@ -953,8 +1132,8 @@ class VerifiedCommitController implements VerifiedCommitService {
     const facts = await this.facts(proposal.context);
     return (
       (facts.clean || this.admitsUntracked(proposal.context, facts)) &&
-      facts.headSha === proposal.binding.parentSha &&
-      facts.baseSha === proposal.binding.baseSha &&
+      verifiedHeadObjectId(facts) === proposal.binding.parentSha &&
+      verifiedBaseObjectId(facts) === proposal.binding.baseSha &&
       facts.stagedTreeDigest === proposal.binding.stagedTreeDigest &&
       facts.repositoryDigest === proposal.binding.repositoryDigest
     );
@@ -1112,9 +1291,12 @@ class VerifiedCommitController implements VerifiedCommitService {
         {
           ...this.options.execution,
           signal: context.signal,
+          ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
           beforeCommitRefUpdate: () => this.contextIsCurrent(context),
           snapshotReader: () =>
-            readGitRawWorktreeSnapshot(runtimeGitReadDeps(context, this.options.execution ?? {})),
+            readGitRawWorktreeSnapshotAtHead(
+              runtimeGitReadDeps(context, this.options.execution ?? {}),
+            ),
         },
         context.correlationId,
       );
@@ -1124,14 +1306,11 @@ class VerifiedCommitController implements VerifiedCommitService {
           : undefined;
       if (result.outcome.status === "succeeded" && headSha === undefined)
         return this.record(context, binding, "recovery-required", "execution-uncertain");
-      return this.record(
-        context,
-        binding,
-        kernelStatus(result),
-        kernelReason(result),
+      return this.record(context, binding, kernelStatus(result), kernelReason(result), {
         headSha,
-        kernelDetails(result),
-      );
+        details: kernelDetails(result),
+        activity: signingActivity(result),
+      });
     } catch (error) {
       this.log(context, "execute", { state: "failed", ...verifiedCommitErrorFields(error) }, true);
       return this.record(context, binding, "recovery-required", "execution-uncertain");
@@ -1169,17 +1348,18 @@ class VerifiedCommitController implements VerifiedCommitService {
     binding: VerifiedCommitBinding,
     status: VerifiedCommitStatus,
     reason: VerifiedCommitReason,
-    headSha?: string,
-    details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
+    { headSha, details = {}, activity = {}, proofAgeMs }: VerifiedCommitRecordExtras = {},
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
     if (!this.persist(context, binding, status, reason, result))
       return this.result(binding, "recovery-required", "execution-uncertain");
     this.log(context, "result", {
+      ...activity,
       state: status,
       reason,
       proposalId: binding.proposalId,
       stagedTreeDigest: binding.stagedTreeDigest,
+      ...(proofAgeMs === undefined ? {} : { proofAgeMs }),
       ...(result.violations === undefined
         ? {}
         : { violations: result.violations, violationCount: result.violations.length }),
@@ -1250,7 +1430,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   }
 
   private log(
-    context: Pick<VerifiedCommitRunContext, "runId" | "correlationId">,
+    context: Pick<VerifiedCommitRunContext, "runId" | "correlationId" | "readSession">,
     phase: VerifiedCommitActivityPhase,
     extra: VerifiedCommitActivityFields,
     failed = false,
@@ -1267,7 +1447,13 @@ class VerifiedCommitController implements VerifiedCommitService {
               }
             : {}),
         },
-        { phase, runId: context.runId, ...extra },
+        {
+          phase,
+          runId: context.runId,
+          // What the commit call cost, on the line that settles it.
+          ...(phase === "result" ? commitCost(context.readSession) : {}),
+          ...extra,
+        },
       ),
     );
   }

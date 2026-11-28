@@ -25,7 +25,7 @@ import {
 } from "node:fs";
 import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -599,6 +599,66 @@ describe("GET /api/projects", () => {
 });
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────
+describe("a Keiko installation's program files are never a project (ADR-0121 D9)", () => {
+  function previousInstallationPayload(): string {
+    const payload = join(tmp, "Keiko159", "Keiko", "system", "Keiko", "app");
+    mkdirSync(payload, { recursive: true });
+    return payload;
+  }
+
+  async function register(path: string): Promise<Response> {
+    return fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  it("lists the stored row of another installation's payload unreadable and keeps ordinary projects readable", async () => {
+    const payload = previousInstallationPayload();
+    store.createProject(payload);
+    store.createProject(projDir);
+    const res = await fetch(url("/api/projects"));
+    const body = (await res.json()) as { projects: { path: string; readable: boolean }[] };
+    const readable = Object.fromEntries(body.projects.map((p) => [p.path, p.readable]));
+    expect(readable).toEqual({ [payload]: false, [projDir]: true });
+  });
+
+  it("refuses to register another installation's payload and still registers an ordinary folder", async () => {
+    const payload = previousInstallationPayload();
+    expect((await register(payload)).status).toBe(403);
+    expect((await register(`${payload}${sep}`)).status).toBe(403);
+    expect(store.listProjects()).toEqual([]);
+    expect((await register(projDir)).status).toBe(201);
+  });
+
+  it("refuses a link to a payload by the name the operating system gives it", async () => {
+    const payload = previousInstallationPayload();
+    const alias = join(tmp, "innocent-link");
+    symlinkSync(payload, alias, "dir");
+    expect((await register(alias)).status).toBe(403);
+    store.createProject(payload);
+    const res = await fetch(url("/api/projects"));
+    const body = (await res.json()) as { projects: { path: string; readable: boolean }[] };
+    expect(body.projects.every((project) => !project.readable)).toBe(true);
+  });
+
+  it("judges a Windows-shaped payload path unreadable without touching the file system", async () => {
+    const windowsPayload = "C:\\Users\\x\\Keiko\\system\\Keiko\\app\\";
+    const row = {
+      path: windowsPayload,
+      name: "app",
+      createdAt: 1,
+      lastOpenedAt: 1,
+      favorite: false,
+    };
+    await restartWithDeps({ store: { ...store, listProjects: () => [row] } });
+    const res = await fetch(url("/api/projects"));
+    const body = (await res.json()) as { projects: { path: string; readable: boolean }[] };
+    expect(body.projects).toMatchObject([{ path: windowsPayload, readable: false }]);
+  });
+});
+
 describe("POST /api/projects", () => {
   it.each(["revoked", "invalidated", "restricted"] as const)(
     "preserves %s script trust when an existing project is explicitly reopened",

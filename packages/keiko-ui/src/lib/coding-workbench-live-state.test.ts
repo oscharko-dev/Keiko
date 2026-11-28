@@ -445,6 +445,26 @@ describe("Coding Workbench live state", () => {
   });
 });
 
+describe("a run stream that waits for a free browser connection", () => {
+  it("records the wait and clears it without touching the stream resource", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(initial.streamCapacityWaiting).toBe(false);
+    const waiting = codingWorkbenchRuntimeReducer(initial, {
+      kind: "stream-capacity-waiting",
+      waiting: true,
+    });
+    expect(waiting.streamCapacityWaiting).toBe(true);
+    expect(waiting.stream).toBe(initial.stream);
+    expect(
+      codingWorkbenchRuntimeReducer(waiting, { kind: "stream-capacity-waiting", waiting: true }),
+    ).toBe(waiting);
+    expect(
+      codingWorkbenchRuntimeReducer(waiting, { kind: "stream-capacity-waiting", waiting: false })
+        .streamCapacityWaiting,
+    ).toBe(false);
+  });
+});
+
 describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
   function startable(pairing: CodingWorkbenchPairingState | null): CodingWorkbenchRuntimeState {
     return codingWorkbenchRuntimeReducer(readyState(false, pairing), {
@@ -760,6 +780,16 @@ describe("mode selection, setup plans, and mutation failures", () => {
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
 
+  it("keeps the run a successful mutation was acknowledged with, and none otherwise", () => {
+    const acknowledged = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-a",
+    });
+    expect(acknowledged.mutation).toMatchObject({ status: "idle", acknowledgedRunId: "run-a" });
+    const plain = codingWorkbenchRuntimeReducer(acknowledged, { kind: "mutation-complete" });
+    expect(plain.mutation).not.toHaveProperty("acknowledgedRunId");
+  });
+
   it("drops a refusal given under an earlier session, and leaves every other mutation alone", () => {
     const failed = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "mutation-failed",
@@ -824,6 +854,54 @@ describe("mode selection, setup plans, and mutation failures", () => {
         snapshot: snapshot({ revision: 5, state: "running", pendingPermission: undefined }),
       });
       expect(next.mutation).toMatchObject({ status: "idle", error: null });
+    });
+
+    it("remembers which action failed and why, so a superseded failure never reads as success (U-14)", () => {
+      const start = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "mutation-start",
+        mutation: "start",
+        requestId: "req-1",
+      });
+      const refused = codingWorkbenchRuntimeReducer(start, {
+        kind: "mutation-failed",
+        error: { ...failure, code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT" },
+      });
+      const next = codingWorkbenchRuntimeReducer(refused, {
+        kind: "run-set",
+        snapshot: snapshot({ runId: "run-other", revision: 2, state: "running" }),
+      });
+      expect(next.mutation).toMatchObject({
+        status: "idle",
+        supersededFailure: { kind: "start", code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT" },
+      });
+      const restarted = codingWorkbenchRuntimeReducer(next, {
+        kind: "mutation-start",
+        mutation: "start",
+        requestId: "req-2",
+      });
+      expect(restarted.mutation.supersededFailure).toBeUndefined();
+    });
+
+    it("is a plain idle mutation when the superseded failure carried no error (U-14)", () => {
+      const next = codingWorkbenchRuntimeReducer(
+        {
+          ...readyState(),
+          mutation: {
+            status: "error",
+            kind: "start",
+            requestId: "req-1",
+            error: null,
+            failedAgainst: { runId: null, revision: 0 },
+          },
+        },
+        { kind: "run-set", snapshot: snapshot({ runId: "run-other", revision: 2 }) },
+      );
+      expect(next.mutation).toStrictEqual({
+        status: "idle",
+        kind: null,
+        requestId: null,
+        error: null,
+      });
     });
 
     it("clears the error when a different run replaces the one the action targeted", () => {
@@ -969,5 +1047,177 @@ describe("prompt inputs the server offers", () => {
       delivery: false,
       references: false,
     });
+  });
+});
+
+describe("a refused action belongs to the attempt that produced it (U-42, U-46)", () => {
+  const UNVERIFIED = {
+    runtimePreference: "managed-gateway",
+    modelSource: "keiko-model-gateway",
+    runtimeSource: "keiko-sidecar",
+    available: true,
+    verification: "unverified",
+  } as const;
+
+  function refused(code: string): CodingWorkbenchRuntimeState {
+    const base = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "source-set",
+      source: UNVERIFIED,
+    });
+    return codingWorkbenchRuntimeReducer(base, {
+      kind: "mutation-failed",
+      error: { code, message: "redacted", retryable: true, correlationId: "corr-refused" },
+    });
+  }
+
+  it("clears the alert of the previous task when the person leaves it (U-42)", () => {
+    const left = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
+      kind: "refusal-dismissed",
+    });
+    expect(left.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("keeps the failure of a run that is still live when a task is left", () => {
+    const live = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({ runId: "run-1", state: "running", pendingPermission: undefined }),
+    });
+    const failedStop = codingWorkbenchRuntimeReducer(live, {
+      kind: "mutation-failed",
+      error: { code: "CODING_RUNTIME_STOP_FAILED", message: "redacted", retryable: true },
+    });
+    expect(codingWorkbenchRuntimeReducer(failedStop, { kind: "refusal-dismissed" })).toBe(
+      failedStop,
+    );
+  });
+
+  it("clears the failure of a run that has ended when a task is left", () => {
+    const ended = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({ runId: "run-1", state: "succeeded", pendingPermission: undefined }),
+    });
+    const failed = codingWorkbenchRuntimeReducer(ended, {
+      kind: "mutation-failed",
+      error: { code: "CODING_RUNTIME_INVALID_INTENT", message: "redacted", retryable: true },
+    });
+    const left = codingWorkbenchRuntimeReducer(failed, { kind: "refusal-dismissed" });
+    expect(left.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("never ends a pending action when a task is left", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "request-1",
+    });
+    expect(codingWorkbenchRuntimeReducer(pending, { kind: "refusal-dismissed" })).toBe(pending);
+  });
+
+  it("clears a model-unavailable refusal once the source reports the model as admitted (U-46)", () => {
+    const admitted = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_MODEL_UNAVAILABLE"), {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "verified" },
+    });
+    expect(admitted.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("keeps a model-unavailable refusal while the model is still not admitted", () => {
+    const state = refused("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    const reread = codingWorkbenchRuntimeReducer(state, { kind: "source-set", source: UNVERIFIED });
+    expect(reread.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    const failedProbe = codingWorkbenchRuntimeReducer(state, {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "failed" },
+    });
+    expect(failedProbe.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+  });
+
+  it("keeps the refusal through a bare re-read that reports the same admitted model (U-46)", () => {
+    const verified = { ...UNVERIFIED, verification: "verified" } as const;
+    const admitted = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "source-set",
+      source: verified,
+    });
+    const refusedState = codingWorkbenchRuntimeReducer(admitted, {
+      kind: "mutation-failed",
+      error: {
+        code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+        message: "redacted",
+        retryable: true,
+        correlationId: "corr-refused",
+      },
+    });
+    const loading = codingWorkbenchRuntimeReducer(refusedState, {
+      kind: "resource-loading",
+      resource: "source",
+    });
+    const reread = codingWorkbenchRuntimeReducer(loading, { kind: "source-set", source: verified });
+    expect(reread.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+  });
+
+  it("still ends the refusal through the production loading step when the model became admitted", () => {
+    const loading = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_MODEL_UNAVAILABLE"), {
+      kind: "resource-loading",
+      resource: "source",
+    });
+    const admitted = codingWorkbenchRuntimeReducer(loading, {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "verified" },
+    });
+    expect(admitted.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("drops the late failure of a Start the person already left, but keeps it pending until then", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "old-start",
+    });
+    const left = codingWorkbenchRuntimeReducer(
+      codingWorkbenchRuntimeReducer(pending, { kind: "refusal-dismissed" }),
+      { kind: "pending-start-left" },
+    );
+    expect(left.mutation.status).toBe("pending");
+    const late = codingWorkbenchRuntimeReducer(left, {
+      kind: "mutation-failed",
+      requestId: "old-start",
+      error: { code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT", message: "redacted", retryable: true },
+    });
+    expect(late.mutation).toMatchObject({ status: "idle", error: null, cancelled: true });
+  });
+
+  it("ignores a failure of an attempt that is no longer the one shown", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "new-start",
+    });
+    const late = codingWorkbenchRuntimeReducer(pending, {
+      kind: "mutation-failed",
+      requestId: "old-start",
+      error: { code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT", message: "redacted", retryable: true },
+    });
+    expect(late).toBe(pending);
+  });
+
+  it("keeps every other refusal when a source read reports an admitted model", () => {
+    const state = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "verified" },
+    });
+    expect(state.mutation.error?.code).toBe("CODING_RUNTIME_INVALID_INTENT");
+  });
+
+  it("ends a model-unavailable refusal when another model is selected, and no other one", () => {
+    const another = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_MODEL_UNAVAILABLE"), {
+      kind: "select-model",
+      modelId: "another-model",
+    });
+    expect(another.mutation).toMatchObject({ status: "idle", error: null });
+    const other = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
+      kind: "select-model",
+      modelId: "another-model",
+    });
+    expect(other.mutation.error?.code).toBe("CODING_RUNTIME_INVALID_INTENT");
   });
 });

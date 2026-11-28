@@ -29,6 +29,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { arch, homedir, platform, release, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -135,6 +136,23 @@ const USAGE = `Usage (as the account under proof, on a Mac):
   --defer-form     ${FORMS.join(" | ")}: leave that form out; the evidence names it as deferred
                    and certifies nothing
 `;
+
+/**
+ * The first published version whose start request states the repository the person sees. An
+ * older release parses start requests exact-keyed and refuses the field, so the driver speaks the
+ * protocol of the version under proof; from this version on the statement is required.
+ */
+export const EXPECTED_WORKSPACE_SINCE = "1.5.11";
+
+/** True when the published `version` (x.y.z) requires the start to state its repository. */
+export function startStatesRepository(version) {
+  const parse = (text) => String(text).split(".").map(Number);
+  const [major, minor, patch] = parse(version);
+  const [sinceMajor, sinceMinor, sincePatch] = parse(EXPECTED_WORKSPACE_SINCE);
+  if (major !== sinceMajor) return major > sinceMajor;
+  if (minor !== sinceMinor) return minor > sinceMinor;
+  return patch >= sincePatch;
+}
 
 export class FormsRefusal extends Error {}
 
@@ -381,10 +399,13 @@ async function codingRun(baseUrl, context, timeoutMs = RUN_TIMEOUT_MS) {
   );
   ensure(activated.status < 300, `model activation answered HTTP ${String(activated.status)}`);
   await selectLabCheckout(post, context.repository, "main");
+  const repository = await realpath(context.repository);
   const runId = await startRun(session, {
+    repository,
     text: TASK_TEXT,
     mode: MODES[1],
     model: CUSTOMER_SHAPE_MODEL,
+    statesRepository: startStatesRepository(context.options.version),
   });
   const snapshot = await watchRun(session, runId, {
     approve: "none",

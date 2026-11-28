@@ -12,6 +12,7 @@ import {
   boundedToolText,
   openCodeToolDetail,
   redactToolTexts,
+  shortenedOutput,
   toolOutputPreview,
   withoutCutSecretStart,
 } from "./codingSafeActivityToolDetail.js";
@@ -329,5 +330,177 @@ describe("the deployment's own secrets in a live update", () => {
     const presentation = { command: { text: "ls", truncated: false } };
     expect(redactToolTexts(presentation, [SECRET])).toEqual(presentation);
     expect(redactToolTexts(presentation, [])).toBe(presentation);
+  });
+});
+
+// PERF-2: the pinned runtime keeps the start of a result longer than its cap, ends the content with
+// a marker naming the lines kept and the whole output's lines, and sets `metadata.truncated`.
+describe("a result the runtime shortened for the model", () => {
+  const MARKER_PATH = "/private/state/home/.local/share/opencode/tool-output/tool_0123456789ab";
+  const shortenedState = (head: string, total: number, kept: number): Record<string, unknown> => ({
+    status: "completed",
+    input: { command: "npm test" },
+    metadata: { exit: 0, truncated: true, outputPath: MARKER_PATH },
+    content: [
+      { type: "text", text: head },
+      {
+        type: "text",
+        text: `[showing lines 1-${String(kept)} of ${String(total)}; full output saved to ${MARKER_PATH}]`,
+      },
+    ],
+  });
+
+  it("reports the bytes and lines the model kept, and never the path", () => {
+    const head = lines(380, "tap");
+    const state = shortenedState(head, 200_000, 380);
+    const detail = openCodeToolDetail("shell", shellPart(state), state, "succeeded");
+    expect(detail.outputShortened).toEqual({
+      keptBytes: Buffer.byteLength(head, "utf8"),
+      keptLines: 380,
+      totalLines: 200_000,
+    });
+    expect(isCodingSafeActivityToolPresentation(detail)).toBe(true);
+    expect(JSON.stringify(detail.outputShortened)).not.toContain("tool-output");
+  });
+
+  it("keeps the byte count alone when the runtime stated no usable line counts", () => {
+    const unstated = "head\n[output cut]";
+    const noGain = "head\n[showing lines 1-9 of 9; full output saved to /p]";
+    for (const [text, kept] of [
+      [unstated, unstated],
+      [noGain, "head"],
+    ] as const) {
+      const state = {
+        status: "completed",
+        metadata: { truncated: true },
+        content: [{ type: "text", text }],
+      };
+      expect(shortenedOutput(state)).toEqual({ keptBytes: Buffer.byteLength(kept, "utf8") });
+    }
+  });
+
+  it("states nothing for a result the runtime did not shorten", () => {
+    for (const metadata of [{ truncated: false }, { exit: 0 }, undefined]) {
+      const state = { status: "completed", metadata, content: [{ type: "text", text: "ok" }] };
+      expect(shortenedOutput(state)).toBeUndefined();
+      expect(openCodeToolDetail("shell", shellPart(state), state, "succeeded")).not.toHaveProperty(
+        "outputShortened",
+      );
+    }
+  });
+});
+
+describe("the output a shell streams while it runs and keeps when it is stopped", () => {
+  const streamed = `${TOKEN}\nserve ready\ntick 1\ntick 2`;
+
+  it.each(["running", "failed", "cancelled"] as const)(
+    "shows the streamed output of a %s call with the credential floor applied",
+    (displayState) => {
+      const status = displayState === "running" ? "running" : "error";
+      const state = { status, input: { command: "npm run serve" }, metadata: { output: streamed } };
+      const detail = openCodeToolDetail("shell", shellPart(state), state, displayState);
+      expect(detail.output?.lineCount).toBe(4);
+      expect(detail.output?.head).toContain("serve ready\ntick 1\ntick 2");
+      expect(JSON.stringify(detail)).not.toContain(TOKEN);
+    },
+  );
+
+  it("prefers the finished result over the streamed copy and ignores a non-text value", () => {
+    const done = {
+      status: "completed",
+      input: { command: "ls" },
+      content: [{ type: "text", text: "final" }],
+      metadata: { exit: 0, output: "streamed" },
+    };
+    expect(openCodeToolDetail("shell", shellPart(done), done, "succeeded").output?.head).toBe(
+      "final",
+    );
+    const odd = { status: "running", input: { command: "ls" }, metadata: { output: 7 } };
+    expect(openCodeToolDetail("shell", shellPart(odd), odd, "running")).not.toHaveProperty(
+      "output",
+    );
+  });
+
+  it("shows no streamed output for a tool that is not a shell", () => {
+    const state = { status: "running", input: {}, metadata: { output: "file text" } };
+    expect(openCodeToolDetail("read", shellPart(state), state, "running")).not.toHaveProperty(
+      "output",
+    );
+  });
+});
+
+describe("a subagent call's agent, description and prompt (U-52)", () => {
+  const secret = "fixture-deployment-secret-2026";
+  const state = {
+    status: "completed",
+    input: {
+      agent: "explore",
+      description: "Count test files",
+      prompt: `Count the test files. Token ${TOKEN}`,
+    },
+  };
+
+  it("projects the agent and description as facts and the prompt as detail under the credential floor", () => {
+    const detail = openCodeToolDetail("subagent", shellPart(state), state, "succeeded");
+    expect(detail.agentName).toEqual({ text: "explore", truncated: false });
+    expect(detail.taskDescription).toEqual({ text: "Count test files", truncated: false });
+    expect(detail.taskPrompt?.text).toContain("Count the test files.");
+    expect(JSON.stringify(detail)).not.toContain(TOKEN);
+    expect(isCodingSafeActivityToolPresentation(detail)).toBe(true);
+  });
+
+  it("bounds every text and leaves another tool's input alone", () => {
+    const long = {
+      status: "completed",
+      input: { agent: "a".repeat(500), description: "d".repeat(900), prompt: "p".repeat(5_000) },
+    };
+    const detail = openCodeToolDetail("subagent", shellPart(long), long, "succeeded");
+    expect(detail.agentName?.truncated).toBe(true);
+    expect(detail.taskDescription?.truncated).toBe(true);
+    expect(detail.taskPrompt?.truncated).toBe(true);
+    expect(isCodingSafeActivityToolPresentation(detail)).toBe(true);
+    const other = openCodeToolDetail("read", shellPart(state), state, "succeeded");
+    expect(other).not.toHaveProperty("agentName");
+  });
+
+  it("redacts a deployment secret in all three texts", () => {
+    const presentation = {
+      agentName: { text: `x${secret}`, truncated: false },
+      taskDescription: { text: `y ${secret}`, truncated: false },
+      taskPrompt: { text: `z ${secret}`, truncated: false },
+    };
+    const redacted = redactToolTexts(presentation, [secret]);
+    expect(JSON.stringify(redacted)).not.toContain(secret);
+    expect(isCodingSafeActivityToolPresentation(redacted)).toBe(true);
+  });
+});
+
+describe("a Code Mode program row keeps the neutral label", () => {
+  // The kind of an `execute` row would have to come from a call that ran. The tool part's state
+  // carries only the program's source and its returned value, so no kind is derived at all.
+  const program = (code: string): ReturnType<typeof openCodeToolDetail> => {
+    const state = { status: "completed", input: { code } };
+    return openCodeToolDetail("execute", shellPart(state), state, "succeeded");
+  };
+
+  it.each([
+    "debugger\n/tools.shell(/g.lastIndex; return 1;",
+    "for await (const x of xs) /tools.shell(/.test(x); return 1;",
+    'if (false) tools.shell("x"); return 1;',
+    'return await tools.shell({ command: "ls" });',
+    'return await tools.bash({ command: "ls" });',
+    'return await tools.automation.create({ name: "x" });',
+    'return await tools.fixture.echo({ text: "a" });',
+    'return "tools.shell(";',
+    "return typeof tools.automation.create;",
+    "// tools.shell({ command: 'ls' })\nreturn 1;",
+    "return 1 + 1;",
+  ])("names no kind for a program, whatever its source mentions: %s", (code) => {
+    expect(program(code)).not.toHaveProperty("programKind");
+  });
+
+  it("carries nothing of the program's text", () => {
+    const detail = program('return await tools.automation.create({ prompt: "SECRET_BODY" });');
+    expect(JSON.stringify(detail)).not.toContain("SECRET_BODY");
   });
 });

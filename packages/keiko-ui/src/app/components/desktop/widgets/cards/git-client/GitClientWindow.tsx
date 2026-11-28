@@ -11,7 +11,7 @@
 // (contract §7). Styling composes existing globals.css tokens via inline styles (ADR-0051); no new CSS.
 // See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   Dispatch,
@@ -64,7 +64,11 @@ import {
   useHandedOffRepositoryConnection,
   useMountedRef,
 } from "./useHandedOffRepositoryConnection";
-import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
+import {
+  type AmbientRefresh,
+  statusFingerprintDiffers,
+  useRepositoryStatusRefresh,
+} from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import {
@@ -951,22 +955,22 @@ function repositoryToolbarList(
 // "GitRead…", but kept as one type so the wire vocabulary and this file's own can never drift apart.
 type GitReadOperation = ClientGitRetryOperation;
 
+// A manual retry's read carries its minted id; every read carries the signal that ends it when a
+// newer read of the same window supersedes it, so the BFF stops the Git work nobody waits for.
+interface GitReadFetchOptions {
+  readonly correlationId?: string | undefined;
+  readonly signal: AbortSignal;
+}
+
 // One repository read of the window: how it is fetched, when an answer that resolved is still a
 // failed read, and — only then — the closed reason it gave. `for-each-ref` or a transient
 // `git status` failing answers HTTP 200 with `available: false`, and that gets the same message and
 // Retry as a rejection (PR #3625 review).
-// A manual retry's read carries its minted id; an automatic read is sent exactly as before.
-function retryReadOptions(
-  correlationId: string | undefined,
-): [] | [{ readonly correlationId: string }] {
-  return correlationId === undefined ? [] : [{ correlationId }];
-}
-
 interface GitReadSpec<T> {
   readonly operation: GitReadOperation;
   // `correlationId` is a manual retry's minted id, sent with its request so the server's lines for
   // that read join the retry's attempt and settlement lines; an automatic read passes none.
-  readonly fetch: (client: GitClientSeam, path: string, correlationId?: string) => Promise<T>;
+  readonly fetch: (client: GitClientSeam, path: string, options: GitReadFetchOptions) => Promise<T>;
   readonly failureKey: (response: T) => OptionalWidgetMessageKey | null;
   readonly reason: (response: T) => GitWireUnavailableReason | undefined;
 }
@@ -986,8 +990,7 @@ function safeGitWireUnavailableReason(
 // other unavailable reason is still explained by the changes pane itself, never as a failure.
 const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
   operation: "status-read",
-  fetch: (client, path, correlationId) =>
-    client.getStatus(path, ...retryReadOptions(correlationId)),
+  fetch: (client, path, options) => client.getStatus(path, options),
   failureKey: (response) =>
     !response.available && isFailedGitRead(response.reason)
       ? "gitClientWindow.status.loadFailed"
@@ -997,16 +1000,14 @@ const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
 
 const BRANCHES_READ: GitReadSpec<GitBranchListResponse> = {
   operation: "branches-read",
-  fetch: (client, path, correlationId) =>
-    client.listBranches(path, ...retryReadOptions(correlationId)),
+  fetch: (client, path, options) => client.listBranches(path, options),
   failureKey: (response) => (response.available ? null : "gitClientWindow.branch.loadFailed"),
   reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
 
 const SUMMARY_READ: GitReadSpec<GitRepositorySummary> = {
   operation: "summary-read",
-  fetch: (client, path, correlationId) =>
-    client.getSummary(path, ...retryReadOptions(correlationId)),
+  fetch: (client, path, options) => client.getSummary(path, options),
   failureKey: (response) => (response.available ? null : "gitClientWindow.sync.summaryUnavailable"),
   reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
@@ -1032,6 +1033,9 @@ interface GitReadInput<T> {
   readonly redemptions: number;
   readonly statusRevision: number;
   readonly onLoaded?: ((response: T) => void) | undefined;
+  // PERF-5: a response this load may adopt instead of reading again (the ambient probe's fresh
+  // status). Never used for a manual Retry, which always reads.
+  readonly takePrefetched?: ((path: string) => T | null) | undefined;
 }
 
 const IDLE_READ: GitReadState<never> = {
@@ -1172,9 +1176,21 @@ function settleGitReadResponse<T>(args: GitReadSettleArgs<T>, response: T): void
   }
 }
 
+// A newer read of the window aborts the older read's request; the rejection that follows is that
+// supersession itself, never a failure of the read.
+function isCancelledRead(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"
+  );
+}
+
 function settleGitReadFailure<T>(args: GitReadSettleArgs<T>, error: unknown): void {
   const retryCorrelationId = takeRetryCorrelationId(args.retryAttempts, args.sequence);
   if (args.sequenceRef.current !== args.sequence) {
+    if (isCancelledRead(error)) {
+      reportIfSuperseded(args.spec.operation, retryCorrelationId);
+      return;
+    }
     // The newer read keeps owning the window, but a superseded retry whose request itself rejected
     // is still a failed request: one that failed in the browser reached no server line that could
     // recover its kind, frames or cause, so it reports as a failed retry (PR #3625 review).
@@ -1189,11 +1205,30 @@ function settleGitReadFailure<T>(args: GitReadSettleArgs<T>, error: unknown): vo
   }
 }
 
+// A probed status waits at most this long for the refresh it triggered; a later one reads again.
+const PROBED_STATUS_TTL_MS = 2_000;
+
+interface ProbedStatus {
+  readonly path: string;
+  readonly response: GitRepositoryStatusResponse;
+  readonly at: number;
+}
+
+// The older read's answer is ignored by its sequence; ending its request also stops its Git work.
+function supersedeGitRead(ref: RefObject<AbortController | null>): AbortSignal {
+  ref.current?.abort();
+  const controller = new AbortController();
+  ref.current = controller;
+  return controller.signal;
+}
+
 function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
   const { client, selectedPath, spec, optionalT, redemptions, statusRevision, onLoaded } = input;
+  const { takePrefetched } = input;
   const [state, setState] = useState<GitReadState<T>>(IDLE_READ);
   const sequenceRef = useRef(0);
   const retryAttemptsRef = useRef(new Map<number, string>());
+  const inFlightRef = useRef<AbortController | null>(null);
   const load = useCallback(
     (manualRetry: boolean): void => {
       if (selectedPath === null) {
@@ -1202,6 +1237,7 @@ function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
       }
       sequenceRef.current += 1;
       const sequence = sequenceRef.current;
+      const signal = supersedeGitRead(inFlightRef);
       const retryCorrelationId = manualRetry
         ? mintGitReadRetryAttempt(spec.operation, sequence, retryAttemptsRef.current)
         : undefined;
@@ -1216,12 +1252,17 @@ function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
         setState,
         onLoaded,
       };
-      void spec.fetch(client, selectedPath, retryCorrelationId).then(
+      const prefetched = manualRetry ? null : (takePrefetched?.(selectedPath) ?? null);
+      const read =
+        prefetched === null
+          ? spec.fetch(client, selectedPath, { correlationId: retryCorrelationId, signal })
+          : Promise.resolve(prefetched);
+      void read.then(
         (response) => settleGitReadResponse(args, response),
         (error: unknown) => settleGitReadFailure(args, error),
       );
     },
-    [client, onLoaded, optionalT, selectedPath, spec],
+    [client, onLoaded, optionalT, selectedPath, spec, takePrefetched],
   );
   useEffect(() => {
     load(false);
@@ -1403,6 +1444,7 @@ export function GitClientWindow({
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [statusRevision, setStatusRevision] = useState(0);
   const [commitStatusRevision, setCommitStatusRevision] = useState(0);
+  const [diffRevision, setDiffRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
   const [revealRequestId, setRevealRequestId] = useState(0);
@@ -1466,7 +1508,22 @@ export function GitClientWindow({
     setSelectedChangePath(selectedChangeResolver(response.changes, setDiffScope));
   }, []);
   const readInput = { client, selectedPath, optionalT, redemptions, statusRevision };
-  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: onStatusLoaded });
+  // PERF-5: the ambient probe already holds a fresh status when it finds a difference; the refresh
+  // it triggers adopts that response instead of reading the same status a second time.
+  const probedStatusRef = useRef<ProbedStatus | null>(null);
+  const takeProbedStatus = useCallback((path: string): GitRepositoryStatusResponse | null => {
+    const probed = probedStatusRef.current;
+    probedStatusRef.current = null;
+    return probed !== null && probed.path === path && Date.now() - probed.at <= PROBED_STATUS_TTL_MS
+      ? probed.response
+      : null;
+  }, []);
+  const statusRead = useGitRead({
+    ...readInput,
+    spec: STATUS_READ,
+    onLoaded: onStatusLoaded,
+    takePrefetched: takeProbedStatus,
+  });
   // #3651: a failed branch read must not be silently mapped to "no branches" — that disabled both
   // switching and New branch with no explanation and no retry.
   const branchesRead = useGitRead({ ...readInput, spec: BRANCHES_READ });
@@ -1542,7 +1599,8 @@ export function GitClientWindow({
     void client.listRepositories().then(
       (res) => {
         if (reposRequestSequenceRef.current !== requestSequence) return;
-        setRepositories(res.projects);
+        // A root the read surface refuses (Keiko's own program files, ADR-0121 D9) has no Git view.
+        setRepositories(res.projects.filter((project) => project.readable !== false));
         setReposLoading(false);
       },
       (err: unknown) => {
@@ -1740,7 +1798,64 @@ export function GitClientWindow({
   const refreshStatus = useCallback((): void => {
     setStatusRevision((revision): number => revision + 1);
   }, []);
-  useRepositoryStatusRefresh(selectedPath, mutationRepositoryRoot, refreshStatus);
+  // U-35: what the window shows and whether it is reading, as the ambient probe needs them
+  // without re-subscribing on every settled read.
+  const shownStatusRef = useRef<GitRepositoryStatusResponse | null>(null);
+  const windowBusyRef = useRef(false);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const windowBusy =
+    statusRead.loading ||
+    staging.flow.busy ||
+    commit.flow.busy ||
+    branchActions.flow.busy ||
+    syncBusy;
+  useLayoutEffect((): void => {
+    shownStatusRef.current = statusRead.projectKey === selectedPath ? statusRead.response : null;
+    windowBusyRef.current = windowBusy;
+  }, [selectedPath, statusRead.projectKey, statusRead.response, windowBusy]);
+  const ambientRefresh = useMemo(
+    (): AmbientRefresh => ({
+      // No probe or focus check runs while a read or a mutation is in flight.
+      isBusy: (): boolean => windowBusyRef.current,
+      discardProbed: (): void => {
+        probedStatusRef.current = null;
+      },
+      // Returning to the window re-reads the shown diff even when the status did not change: a
+      // file that was already unstaged and changed again keeps its path, status and counters.
+      refreshDiff: (): void => {
+        setDiffRevision((revision): number => revision + 1);
+      },
+      // A minimized window stays mounted under a hidden ancestor while the document is visible.
+      isPaused: (): boolean => workspaceRef.current?.checkVisibility?.() === false,
+      watchRendered: (onRendered: () => void): (() => void) => {
+        const root = workspaceRef.current;
+        if (root === null || typeof ResizeObserver === "undefined") return (): void => undefined;
+        let wasRendered = root.checkVisibility?.() !== false;
+        const observer = new ResizeObserver((): void => {
+          const rendered = root.checkVisibility?.() !== false;
+          if (rendered && !wasRendered) onRendered();
+          wasRendered = rendered;
+        });
+        observer.observe(root);
+        return (): void => observer.disconnect();
+      },
+      probe: async (signal): Promise<boolean> => {
+        if (selectedPath === null) return false;
+        const fresh = await client.getStatus(selectedPath, { signal });
+        // Read what is shown only now: a refresh or mutation may have settled during the request.
+        // A window that shows no status (the read before failed) adopts the first one that works.
+        const shown = shownStatusRef.current;
+        const changed =
+          !windowBusyRef.current && (shown === null || statusFingerprintDiffers(shown, fresh));
+        if (changed) {
+          probedStatusRef.current = { path: selectedPath, response: fresh, at: Date.now() };
+        }
+        return changed;
+      },
+    }),
+    [client, selectedPath],
+  );
+  useRepositoryStatusRefresh(selectedPath, mutationRepositoryRoot, refreshStatus, ambientRefresh);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;
@@ -2361,7 +2476,7 @@ export function GitClientWindow({
 
   const visibleSummaryError = readErrorForDisplay(summaryRead.error, activeStatus);
   return (
-    <div style={WORKSPACE_STYLE} aria-label="Git">
+    <div ref={workspaceRef} style={WORKSPACE_STYLE} aria-label="Git">
       <h2 className="rv-sr-only">Git</h2>
       <p
         role="status"
@@ -2492,7 +2607,7 @@ export function GitClientWindow({
                       onScopeChange={setDiffScope}
                       revealRequestId={revealRequestId}
                       onRevealFile={revealEditorFile}
-                      revision={statusRevision}
+                      revision={statusRevision + diffRevision}
                     />
                   )}
                 </div>

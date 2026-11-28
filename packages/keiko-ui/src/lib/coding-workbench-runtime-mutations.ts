@@ -19,6 +19,8 @@ import {
   type CodingWorkbenchRuntimeForkRequest,
   type CodingWorkbenchRuntimeInboxAction,
   type CodingWorkbenchRuntimeRevertAction,
+  CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+  CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
@@ -36,10 +38,55 @@ import {
   submitCodingWorkbenchRuntimeInboxAction,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
+import { ApiError } from "./api-shared-primitives";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorEvidence } from "./client-error-evidence";
+import { correlationIdOf } from "./client-error-summary";
+import { bffRequestErrorKind } from "./http";
+import { getActiveTaskWorkspace } from "./task-workspace-api";
 import {
   offeredCodingWorkbenchAgents,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
+
+/** The error code a start answers with when the server's active workspace is not the one shown. */
+export const SELECTION_MISMATCH_ERROR_CODE = "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH";
+
+// A start is sent only while the server itself reports an active workspace. A repository deleted
+// and cloned again at the same path invalidates the server's pointer while the window still shows
+// the repository as bound; the doomed request then failed with a raw authority code. Reading the
+// pointer first turns that into the named, recoverable selection refusal, which makes the window
+// read its binding again and bind what it shows. A failed read is not an answer: the start goes on
+// and the server stays the authority.
+function correlationFields(error: unknown): { readonly correlationId?: string } {
+  const correlationId = correlationIdOf(error);
+  return correlationId === undefined ? {} : { correlationId };
+}
+
+async function requireServerActiveWorkspace(): Promise<void> {
+  let active: Awaited<ReturnType<typeof getActiveTaskWorkspace>>;
+  try {
+    active = await getActiveTaskWorkspace();
+  } catch (error) {
+    reportClientDiagnostic("[keiko] coding workbench start pre-check unreadable", {
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+      ...correlationFields(error),
+    });
+    return;
+  }
+  if (active !== null) return;
+  reportClientDiagnostic("[keiko] coding workbench start held: server has no active workspace", {
+    kind: "other",
+    errorKind: "validation-failed",
+  });
+  throw new ApiError(
+    SELECTION_MISMATCH_ERROR_CODE,
+    "The server has no active workspace for the repository shown.",
+    409,
+  );
+}
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
@@ -122,6 +169,7 @@ function startRequest(
     taskIntent,
     ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     requestedMode: current.requestedMode,
+    expectedWorkspace: { root: options.expectedWorkspaceRoot },
     runtimePreference: current.runtimePreference,
     projectMemory: { enabled: options.projectMemoryEnabled },
     ...managedGatewayModelSelection(current),
@@ -169,8 +217,10 @@ export function createStartMutation(
   return {
     requestId: id,
     mayInstallNewRun: true,
-    run: (signal) =>
-      startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options), signal),
+    run: async (signal): Promise<CodingWorkbenchRuntimeSnapshot> => {
+      await requireServerActiveWorkspace();
+      return startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options), signal);
+    },
   };
 }
 
@@ -352,12 +402,21 @@ export function createFollowUpMutation(
   };
 }
 
-// A succeeded run is admitted while the server holds its runtime for undo (#3904 AC3).
-const REVERT_STATES: ReadonlySet<string> = new Set(["running", "paused", "succeeded"]);
+// A settled run (succeeded or failed) is admitted while the server holds its runtime for undo
+// (#3904 AC3); the contract owns the list so the browser gate cannot drift from the server (U-41).
+const REVERT_STATES: ReadonlySet<string> = new Set([
+  ...CODING_WORKBENCH_RUNTIME_REVERT_LIVE_STATES,
+  ...CODING_WORKBENCH_RUNTIME_REVERT_HELD_STATES,
+]);
+
+/** Whether a revert is admitted in this run state: the one rule the button and the gate share. */
+export function revertAdmitsRunState(state: string | undefined): boolean {
+  return state !== undefined && REVERT_STATES.has(state);
+}
 
 /**
  * Undo or restore of the run's newest turn (B3, S04): bound to the observed revision like a
- * follow-up, and only against a live run or a succeeded run whose undo window is open. The server
+ * follow-up, and only against a live run or a settled run whose undo window is open. The server
  * refuses everything else; this keeps the browser from sending a request it knows cannot be
  * admitted.
  */
@@ -367,7 +426,7 @@ export function createRevertMutation(
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
-  if (!runId || snapshot === null || !REVERT_STATES.has(snapshot.state))
+  if (!runId || snapshot === null || !revertAdmitsRunState(snapshot.state))
     throw codingWorkbenchRuntimeActionError(
       "The last turn can only be undone while the run is open.",
     );
@@ -428,6 +487,7 @@ export function createInboxMutation(
 export function createRetryMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  expectedWorkspaceRoot: string,
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
@@ -445,6 +505,7 @@ export function createRetryMutation(
           requestId: id,
           taskIntent,
           requestedMode: current.requestedMode,
+          expectedWorkspace: { root: expectedWorkspaceRoot },
           runtimePreference: current.runtimePreference,
           ...managedGatewayModelSelection(current),
           ...startAgentSelection(current),
