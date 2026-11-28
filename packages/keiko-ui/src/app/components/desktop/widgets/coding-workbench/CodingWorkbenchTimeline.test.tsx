@@ -645,11 +645,48 @@ describe("CodingWorkbenchTimeline", () => {
     );
 
     expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
-    const prepared = container.querySelector<HTMLDetailsElement>('[data-tool-state="prepared"]');
-    expect(prepared?.open).toBe(false);
-    expect(prepared).toHaveTextContent("Prepared");
-    expect(prepared).toHaveTextContent("Prepared here; no further decision is needed.");
-    expect(prepared).not.toHaveTextContent("Succeeded");
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    const committed = container.querySelector<HTMLDetailsElement>('[data-tool-state="committed"]');
+    expect(committed?.open).toBe(false);
+    expect(committed).toHaveTextContent("Committed");
+    expect(committed).not.toHaveTextContent("Prepared");
+    expect(committed).not.toHaveTextContent("Succeeded");
+  });
+
+  // Live, Full access (#4491): the commit proposal is answered as prepared, policy executes it, and
+  // the proposal row kept reading "Prepared" beside the "Git operation - Succeeded" row.
+  it("shows an authorized commit proposal as committed once its execute step succeeded", () => {
+    const feed = feedWithRepeatedTools();
+    const tools = [
+      {
+        callId: "git-commit-proposal",
+        tool: "keiko_git_commit",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "prepared", bridgeDurationMs: 9 },
+      },
+      {
+        callId: "git-commit-execute",
+        tool: "keiko_git_execute",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+      },
+    ] as const;
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-commit", messages: [], tools: [...tools], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="committed"]')).toHaveTextContent("Committed");
   });
 
   // Lab 2026-11-27 (Full access): a proposal the policy authorized needs no decision, and a run that
@@ -838,7 +875,9 @@ describe("CodingWorkbenchTimeline", () => {
     oneRedeemed.remove();
 
     const bothRedeemed = renderTools([...proposals, execute("exec-1"), execute("exec-2")]);
-    expect(bothRedeemed.querySelectorAll('[data-tool-state="prepared"]')).toHaveLength(2);
+    expect(bothRedeemed.querySelectorAll('[data-tool-state="committed"]')).toHaveLength(1);
+    expect(bothRedeemed.querySelectorAll('[data-tool-state="carried-out"]')).toHaveLength(1);
+    expect(bothRedeemed.querySelector('[data-tool-state="prepared"]')).toBeNull();
     expect(bothRedeemed.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
   });
 

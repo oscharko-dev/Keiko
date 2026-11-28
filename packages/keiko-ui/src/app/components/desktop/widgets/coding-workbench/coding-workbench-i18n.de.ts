@@ -850,6 +850,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.dependencies-unavailable": "Abhängigkeiten fehlen",
   "codingWorkbench.activity.toolState.not-done": "Nicht durchgeführt",
   "codingWorkbench.activity.toolState.prepared": "Vorbereitet",
+  "codingWorkbench.activity.toolState.committed": "Committet",
+  "codingWorkbench.activity.toolState.carried-out": "Erledigt",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.denied": "Abgelehnt",
   "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",

@@ -717,7 +717,7 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
     if (item.kind !== "tool") return;
     if (item.tool.tool === "keiko_git_execute") {
       if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
-    } else if (item.tool.presentation?.gitOutcome === "waiting-for-approval") {
+    } else if (isOpenGitProposal(item.tool)) {
       open.push(index);
     }
     // The wire row carries no proposal id, so an execute cannot be paired with the one proposal it
@@ -731,6 +731,13 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
     }
   });
   return marked;
+}
+
+// A proposal waits for a person's decision or, once policy or the person authorized it, only for its
+// execute step: both are redeemed by the same completed execute (Full access, #4491).
+function isOpenGitProposal(tool: CodingSafeActivityTool): boolean {
+  const outcome = tool.presentation?.gitOutcome;
+  return outcome === "waiting-for-approval" || outcome === "prepared";
 }
 
 function markSuperseded(marked: TimelineItem[], indexes: readonly number[]): void {
@@ -1813,8 +1820,15 @@ type UnrunVerificationOutcome = Extract<
 // as a completed call, so its tool state reads "succeeded" for a step that never happened. The server's
 // closed Git outcome decides the badge instead: still waiting for the human, or not done.
 type UnfinishedGitState = "not-done" | "waiting-for-approval" | "prepared";
+// A proposal that a completed execute step carried out: a commit reads "committed", any other
+// governed Git step "carried-out", never "prepared" beside the execute row that finished it.
+type RedeemedGitState = "committed" | "carried-out";
 type ShownToolState =
-  CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome | UnfinishedGitState;
+  | CodingSafeActivityTool["state"]
+  | "exited"
+  | UnrunVerificationOutcome
+  | UnfinishedGitState
+  | RedeemedGitState;
 
 const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOutcome> = new Set([
   "waiting-for-trust",
@@ -1861,8 +1875,10 @@ function succeededToolState(
 ): ShownToolState {
   const git = unfinishedGitState(tool.presentation?.gitOutcome);
   if (git === undefined) return "succeeded";
+  if (superseded && (git === "waiting-for-approval" || git === "prepared")) {
+    return tool.tool === "keiko_git_commit" ? "committed" : "carried-out";
+  }
   if (git !== "waiting-for-approval") return git;
-  if (superseded) return "prepared";
   return runEnded ? "not-done" : git;
 }
 
@@ -1965,6 +1981,8 @@ function toolOutcomeSentence(
   state: ShownToolState,
   t: CodingWorkbenchTranslate,
 ): string | undefined {
+  // A proposal its execute step carried out is finished: its badge says so and needs no sentence.
+  if (state === "committed" || state === "carried-out") return undefined;
   if (state === "prepared") return t("codingWorkbench.activity.git.prepared");
   // A carried-out Git step needs no sentence beyond its "Succeeded" badge.
   const gitOutcome = tool.presentation?.gitOutcome;

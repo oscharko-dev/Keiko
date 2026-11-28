@@ -49,7 +49,9 @@
 .statusBadge[data-tone="success"],
 .resourceState[data-tone="success"],
 .activityBadge[data-state="succeeded"],
-.activityBadge[data-state="completed"] {
+.activityBadge[data-state="completed"],
+.activityBadge[data-state="committed"],
+.activityBadge[data-state="carried-out"] {
   color: var(--feedback-success);
 }
 

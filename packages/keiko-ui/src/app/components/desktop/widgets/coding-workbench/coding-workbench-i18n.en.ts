@@ -815,6 +815,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.dependencies-unavailable": "Dependencies missing",
   "codingWorkbench.activity.toolState.not-done": "Not done",
   "codingWorkbench.activity.toolState.prepared": "Prepared",
+  "codingWorkbench.activity.toolState.committed": "Committed",
+  "codingWorkbench.activity.toolState.carried-out": "Done",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
