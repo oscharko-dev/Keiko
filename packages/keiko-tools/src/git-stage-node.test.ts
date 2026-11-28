@@ -1546,7 +1546,7 @@ describe("the first governed stage of a repository whose index was never written
 
   it("leaves no private index behind when the stage is refused", async () => {
     const repo = freshRepository();
-    const refused = { ...context(repo), authorized: () => false };
+    const refused: GitStageEffectContext = { ...context(repo), authorized: (): boolean => false };
     await expect(stageExactFiles(refused, unbornRequest())).resolves.toBe(false);
     expect(existsSync(join(repo, ".git", "index"))).toBe(false);
     expect(existsSync(join(repo, ".git", "index.lock"))).toBe(false);
