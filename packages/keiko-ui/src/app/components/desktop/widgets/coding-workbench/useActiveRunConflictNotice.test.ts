@@ -139,7 +139,12 @@ describe("useActiveRunConflictNotice (U-14)", () => {
     hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: TASK });
     expect(hook.result.current.visible).toBe(true);
 
-    hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: "", revision: 2 });
+    hook.rerender({
+      mutation: superseded("start", CONFLICT),
+      runState: "succeeded",
+      draft: "",
+      revision: 2,
+    });
     expect(hook.result.current.visible).toBe(false);
     expect(hook.result.current.taskIntent).toBe(TASK);
   });

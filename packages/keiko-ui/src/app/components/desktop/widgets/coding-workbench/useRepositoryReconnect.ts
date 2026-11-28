@@ -94,21 +94,13 @@ function useReconnectStatus(): {
   return { failed, setFailed, reconnecting, setReconnecting };
 }
 
-/**
- * Reconnects a drifted folder through the same `reconnectProject` call the Git window uses. It runs
- * only from `choose`, which the picker calls on the person's selection click — never on mount.
- * On success the catalog is read again and the folder is selected, but only while it is still the
- * person's latest choice; one request is in flight per folder.
- */
-export function useRepositoryReconnect(
-  repositories: readonly ProjectWithAvailability[],
+// One request per folder; where it settles follows the person's latest choice (see `settle`).
+function useReconnectRequest(
   reload: () => void,
-  onSelect: (root: string) => void,
-  onReconnected?: (() => void) | undefined,
-): RepositoryReconnect {
-  const { failed, setFailed, reconnecting, setReconnecting } = useReconnectStatus();
+  latest: { readonly current: string | null },
+  { setFailed, setReconnecting }: ReturnType<typeof useReconnectStatus>,
+): (path: string, apply: (path: string) => void) => void {
   const mounted = useMounted();
-  const latest = useRef<string | null>(null);
   const inFlight = useRef(new Set<string>());
   const settle = useCallback(
     (path: string, failure: ReconnectFailure, apply: (path: string) => void): void => {
@@ -126,9 +118,9 @@ export function useRepositoryReconnect(
       if (outcome === "selected") apply(path);
       reportReconnected(outcome);
     },
-    [mounted, reload, setFailed, setReconnecting],
+    [mounted, latest, reload, setFailed, setReconnecting],
   );
-  const reconnect = useCallback(
+  return useCallback(
     (path: string, apply: (path: string) => void): void => {
       if (inFlight.current.has(path)) return;
       inFlight.current.add(path);
@@ -145,6 +137,24 @@ export function useRepositoryReconnect(
     },
     [settle, setReconnecting],
   );
+}
+
+/**
+ * Reconnects a drifted folder through the same `reconnectProject` call the Git window uses. It runs
+ * only from `choose`, which the picker calls on the person's selection click — never on mount.
+ * On success the catalog is read again and the folder is selected, but only while it is still the
+ * person's latest choice; one request is in flight per folder.
+ */
+export function useRepositoryReconnect(
+  repositories: readonly ProjectWithAvailability[],
+  reload: () => void,
+  onSelect: (root: string) => void,
+  onReconnected?: (() => void) | undefined,
+): RepositoryReconnect {
+  const status = useReconnectStatus();
+  const { failed, setFailed, reconnecting } = status;
+  const latest = useRef<string | null>(null);
+  const reconnect = useReconnectRequest(reload, latest, status);
   const choose = useCallback(
     (path: string): void => {
       latest.current = path;

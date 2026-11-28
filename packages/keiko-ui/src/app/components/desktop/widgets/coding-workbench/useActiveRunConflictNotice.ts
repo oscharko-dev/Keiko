@@ -102,6 +102,30 @@ export function useActiveRunConflictNotice({
     reportClientDiagnostic("[keiko] coding workbench start refused: active-run-elsewhere");
   }, [mutation, setTaskIntent]);
 
+  useNoticeEnd({ runIsActive, run: state.run, armed, sawRun, armedRun, setVisible });
+
+  const edits = useHeldTaskEdits({ held: kept !== null, setKept, setVisible, setTaskIntent });
+  return { visible, taskIntent: kept ?? taskIntent, ...edits };
+}
+
+// The notice ends with the other run: when it is seen ending, or when a fresh read after the
+// refusal finds no active run (the run may have ended before this window ever read it, so it is
+// never seen active and the notice would stay for good).
+function useNoticeEnd({
+  runIsActive,
+  run,
+  armed,
+  sawRun,
+  armedRun,
+  setVisible,
+}: {
+  readonly runIsActive: boolean;
+  readonly run: CodingWorkbenchRuntimeState["run"];
+  readonly armed: { current: boolean };
+  readonly sawRun: { current: boolean };
+  readonly armedRun: { readonly current: string | undefined };
+  readonly setVisible: (visible: boolean) => void;
+}): void {
   useEffect(() => {
     if (runIsActive) sawRun.current = true;
     else if (sawRun.current) {
@@ -109,20 +133,15 @@ export function useActiveRunConflictNotice({
       sawRun.current = false;
       setVisible(false);
     }
-  }, [runIsActive]);
+  }, [runIsActive, armed, sawRun, setVisible]);
 
-  // The other window's run may have ended before this window read it: it is never seen active, so
-  // the notice would stay for good. A fresh read after the refusal that finds no active run ends it.
   useEffect(() => {
-    if (!armed.current || runIsActive || state.run.status !== "ready") return;
-    if (runReadKey(state.run.value) === armedRun.current) return;
+    if (!armed.current || runIsActive || run.status !== "ready") return;
+    if (runReadKey(run.value) === armedRun.current) return;
     armed.current = false;
     sawRun.current = false;
     setVisible(false);
-  }, [state.run, runIsActive]);
-
-  const edits = useHeldTaskEdits({ held: kept !== null, setKept, setVisible, setTaskIntent });
-  return { visible, taskIntent: kept ?? taskIntent, ...edits };
+  }, [run, runIsActive, armed, sawRun, armedRun, setVisible]);
 }
 
 // The person's own ways to end the held task: an edit replaces it, a deliberate reset drops it and

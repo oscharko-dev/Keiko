@@ -173,12 +173,7 @@ function RetryButton({
   const t = useCodingWorkbenchTranslate();
   if (retry === undefined) return null;
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      className={styles.cmpMessageFork}
-      onClick={retry}
-    >
+    <button ref={buttonRef} type="button" className={styles.cmpMessageFork} onClick={retry}>
       {t("codingWorkbench.history.retry")}
     </button>
   );

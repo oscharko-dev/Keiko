@@ -112,9 +112,7 @@ export function requestGatewayModelCatalogRefresh(
   // bootstrap's activated-only list (U-45). The request is kept, for a short while and only while
   // its requester is mounted: the returned cleanup (an unmounting window) drops it.
   const kept =
-    catalogRefreshConsumers === 0
-      ? { check: options.check === true, at: Date.now() }
-      : undefined;
+    catalogRefreshConsumers === 0 ? { check: options.check === true, at: Date.now() } : undefined;
   if (kept !== undefined) unservedCatalogRefreshes.push(kept);
   window.dispatchEvent(
     new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
@@ -122,7 +120,8 @@ export function requestGatewayModelCatalogRefresh(
     }),
   );
   return (): void => {
-    if (kept !== undefined) unservedCatalogRefreshes = unservedCatalogRefreshes.filter((r) => r !== kept);
+    if (kept !== undefined)
+      unservedCatalogRefreshes = unservedCatalogRefreshes.filter((r) => r !== kept);
   };
 }
 
