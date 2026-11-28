@@ -39,6 +39,10 @@ export interface LargeFileAnalysis {
   // The number of line breaks when every one is CRLF, no other CR occurs and there is at least one;
   // otherwise `undefined`. It is the streaming form of the in-memory `allLineBreaksCrlf`.
   readonly crlfBreaks: number | undefined;
+  // Whether a line feed without a carriage return before it occurs, and whether a carriage return
+  // without a line feed after it occurs: the two shapes a CRLF checkout would change or leave alone.
+  readonly loneLf: boolean;
+  readonly loneCr: boolean;
 }
 
 /**
@@ -53,14 +57,27 @@ export async function analyzeLargeFile(
   options: GitStageReadOptions,
 ): Promise<LargeFileAnalysis> {
   const hash = createHash(blobAlgorithm(hashLength)).update(`blob ${String(file.size)}\0`);
-  const state = { hasNul: false, breaks: 0, previousCr: false, uniform: true };
+  const state = {
+    hasNul: false,
+    breaks: 0,
+    previousCr: false,
+    uniform: true,
+    loneLf: false,
+    loneCr: false,
+  };
   await streamGitStageFile(root, file, options, (chunk) => {
     hash.update(chunk);
     state.hasNul ||= chunk.includes(0);
     for (const byte of chunk) {
-      if (state.previousCr && byte !== LF) state.uniform = false;
+      if (state.previousCr && byte !== LF) {
+        state.uniform = false;
+        state.loneCr = true;
+      }
       if (byte === LF) {
-        if (!state.previousCr) state.uniform = false;
+        if (!state.previousCr) {
+          state.uniform = false;
+          state.loneLf = true;
+        }
         state.breaks += 1;
       }
       state.previousCr = byte === CR;
@@ -71,6 +88,8 @@ export async function analyzeLargeFile(
     objectId: hash.digest("hex"),
     hasNul: state.hasNul,
     crlfBreaks: crlf ? state.breaks : undefined,
+    loneLf: state.loneLf,
+    loneCr: state.loneCr || state.previousCr,
   };
 }
 

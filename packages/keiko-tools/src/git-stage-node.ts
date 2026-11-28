@@ -147,6 +147,48 @@ function allLineBreaksCrlf(bytes: Uint8Array): boolean {
   }
   return breaks > 0;
 }
+// The line-break shape of a file's bytes, as the checkout decision reads it. The streaming reader
+// (`analyzeLargeFile`) reports the same three facts for a large file, so one rule judges both.
+interface LineShape {
+  readonly hasNul: boolean;
+  readonly loneLf: boolean;
+  readonly loneCr: boolean;
+}
+function lineShapeOf(bytes: Uint8Array): LineShape {
+  let hasNul = false;
+  let loneLf = false;
+  let loneCr = false;
+  bytes.forEach((byte, index) => {
+    if (byte === 0) hasNul = true;
+    if (byte === LF && bytes[index - 1] !== CR) loneLf = true;
+    if (byte === CR && bytes[index + 1] !== LF) loneCr = true;
+  });
+  return { hasNul, loneLf, loneCr };
+}
+/**
+ * Whether checking the raw bytes out again reproduces them, for a path whose own `eol` attribute
+ * declares the CRLF checkout. That checkout rewrites each line feed without a carriage return before
+ * it as CRLF, so a file with one is not what the index would give back. (A checkout that only the
+ * effective `core.autocrlf` chooses is Git's own `git add` semantics for a line-feed file and stays
+ * admitted.) Under `text=auto` Git leaves a file it
+ * judges binary (a NUL) or one with a bare carriage return alone. Equal clean hashes (`converted ===
+ * raw`) say only that staging converts nothing, never that checkout converts nothing.
+ */
+function checkoutKeepsRawBytes(
+  plan: Extract<StagePlan, { kind: "convert" }>,
+  shape: LineShape,
+): boolean {
+  if (!plan.declared || plan.checkout !== "crlf" || !shape.loneLf) return true;
+  return plan.auto && (shape.hasNul || shape.loneCr);
+}
+// The staged object a plan chose, unless it is the raw one and checkout would rewrite its bytes.
+function checkedChoice(
+  chosen: "raw" | "converted" | undefined,
+  plan: Extract<StagePlan, { kind: "convert" }>,
+  shape: LineShape,
+): "raw" | "converted" | undefined {
+  return chosen === "raw" && !checkoutKeepsRawBytes(plan, shape) ? undefined : chosen;
+}
 function withoutCrlf(bytes: Uint8Array): Uint8Array {
   return bytes.filter((byte, index) => byte !== CR || bytes[index + 1] !== LF);
 }
@@ -219,7 +261,14 @@ const INDEX_WITH_CR = new Set(["crlf", "mixed"]);
  */
 type StagePlan =
   | { readonly kind: "none" }
-  | { readonly kind: "convert"; readonly auto: boolean; readonly checkout: StageCheckout };
+  | {
+      readonly kind: "convert";
+      readonly auto: boolean;
+      readonly checkout: StageCheckout;
+      // True when the path's own `eol` attribute chose the checkout line break; false when only the
+      // effective `core.autocrlf` did.
+      readonly declared: boolean;
+    };
 type StageCheckout = "crlf" | "lf" | "unknown";
 interface GitStageLineEndingAttributes {
   readonly text: string;
@@ -249,10 +298,16 @@ function stagePlan(
       kind: "convert",
       auto: attributes.text === "auto",
       checkout: eol ?? configuredCheckout(lineEndings),
+      declared: eol !== undefined,
     };
-  if (eol !== undefined) return { kind: "convert", auto: false, checkout: eol };
+  if (eol !== undefined) return { kind: "convert", auto: false, checkout: eol, declared: true };
   if (lineEndings === "exact") return NO_CONVERSION;
-  return { kind: "convert", auto: true, checkout: configuredCheckout(lineEndings) };
+  return {
+    kind: "convert",
+    auto: true,
+    checkout: configuredCheckout(lineEndings),
+    declared: false,
+  };
 }
 /**
  * Which object Git's own staging stores for bytes it would convert: `raw` when an `auto` path's
@@ -292,8 +347,9 @@ async function stagedObjectId(
   const raw = await hashObject(ctx, file.bytes, false);
   const conversion: StageConversion = { autocrlf: AUTOCRLF_OF[lineEndings], path: file.path };
   const converted = await hashObject(ctx, file.bytes, false, conversion);
-  const choice =
+  const chosen =
     converted === raw ? "raw" : await convertedChoice(ctx, file, plan, converted, indexClass);
+  const choice = checkedChoice(chosen, plan, lineShapeOf(file.bytes));
   if (choice === undefined) return undefined;
   if (!write) return choice === "raw" ? raw : converted;
   return hashObject(ctx, file.bytes, true, choice === "raw" ? undefined : conversion);
@@ -388,10 +444,11 @@ async function stagedLargeObjectId(
   const converted = await hashLargeObject(ctx, file, false, conversion);
   const analysis = await analyzeLargeFile(ctx.workspaceRoot, file, raw.length, streamOptions(ctx));
   assertSameObject(raw, analysis.objectId);
-  const choice =
+  const chosen =
     converted === raw
       ? "raw"
       : await convertedLargeChoice(ctx, file, plan, converted, indexClass, analysis);
+  const choice = checkedChoice(chosen, plan, analysis);
   if (choice === undefined) return undefined;
   if (!write) return choice === "raw" ? raw : converted;
   const written = await hashLargeObject(ctx, file, true, choice === "raw" ? undefined : conversion);

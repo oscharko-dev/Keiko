@@ -347,6 +347,21 @@ describe("a large file stages", () => {
     );
   });
 
+  it("refuses a large line-feed file under a declared CRLF checkout and admits its all-CRLF form", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, ".gitattributes"), "* text eol=crlf\n");
+    writeFileSync(join(repo, "doc.txt"), textOfSize(2 * MIB));
+    await expect(gitStageFilesSupported(context(repo), ["doc.txt"], "exact")).resolves.toBe(false);
+    writeFileSync(
+      join(repo, "doc.txt"),
+      textOfSize(2 * MIB)
+        .toString("latin1")
+        .replaceAll("\n", "\r\n"),
+      "latin1",
+    );
+    await expect(gitStageFilesSupported(context(repo), ["doc.txt"], "exact")).resolves.toBe(true);
+  });
+
   it("fails closed with its own code when a large file changes while Git reads it", async () => {
     const repo = repository();
     writeGenerated(repo);
