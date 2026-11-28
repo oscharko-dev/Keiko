@@ -557,6 +557,16 @@ function captureErrorFields(error: unknown): {
   };
 }
 
+/**
+ * Identical base and head revisions are the ordinary "nothing changed yet" state (for example
+ * right after a commit moved HEAD onto the run's base), not a technical failure: it is logged at
+ * the default level without an error kind or stack frames. Every other unavailable reason stays a
+ * warning.
+ */
+function isOrdinaryNoChange(snapshot: GitChangeSnapshotResult): boolean {
+  return snapshot.outcome === "unavailable" && snapshot.reason === "identical-revisions";
+}
+
 function logCapture(
   log: ServerLogSink,
   input: GitChangeSnapshotCaptureInput,
@@ -568,7 +578,8 @@ function logCapture(
       GIT_SNAPSHOT_CAPTURE_OPERATION,
       {
         correlationId: input.correlationId,
-        ...(snapshot.outcome === "failed" || snapshot.outcome === "unavailable"
+        ...((snapshot.outcome === "failed" || snapshot.outcome === "unavailable") &&
+        !isOrdinaryNoChange(snapshot)
           ? {
               level: "warn" as const,
               errorKind: captureEnvelopeErrorKind(
@@ -632,7 +643,7 @@ async function captureSnapshot(
     return { snapshot: content.snapshot, ...(reference === undefined ? {} : { reference }) };
   } catch (error) {
     const snapshot = captureFailure(input, startedAt, error);
-    logCapture(ctx.log, input, snapshot, error);
+    logCapture(ctx.log, input, snapshot, isOrdinaryNoChange(snapshot) ? undefined : error);
     return { snapshot };
   }
 }
