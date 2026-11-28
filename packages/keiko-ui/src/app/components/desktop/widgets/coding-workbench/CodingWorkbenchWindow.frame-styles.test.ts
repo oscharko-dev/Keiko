@@ -98,4 +98,15 @@ describe("Coding Workbench conversation width", () => {
     expect(block).toContain("width: 100%;");
     expect(block).not.toMatch(/760px|min\(/u);
   });
+
+  // The composer stands under the conversation as Chat's does (`.chatw-foot .composer` has no max
+  // width): a centred 760 px composer under a full-width feed was misaligned on a wide window.
+  it("aligns the composer and its context line with the full-width stream", () => {
+    const dock = cssBlock(".composerDock");
+    const context = cssBlock(".composerContext");
+
+    expect(dock).toContain("width: calc(100% - 2 * var(--space-5));");
+    expect(context).toContain("width: 100%;");
+    expect(`${dock}${context}`).not.toMatch(/760px/u);
+  });
 });
