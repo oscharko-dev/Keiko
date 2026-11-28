@@ -11,10 +11,6 @@ import {
   admitDirectBrowserStream,
   resetBrowserStreamCapacityForTests,
 } from "../../../../../lib/browser-stream-capacity";
-import {
-  resetClientDiagnosticWriter,
-  setClientDiagnosticWriter,
-} from "../../../../../lib/client-diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import {
@@ -642,143 +638,45 @@ describe("useEditorAgentBridge — observed activity state (Issue #2120)", () =>
   });
 });
 
-// #4491: the stream is a background stream. A yield closes it for an essential stream and the server
-// keeps no replay, so the bridge never yields mid-action and re-reads its state when it reopens.
-describe("useEditorAgentBridge — yielding the connection to an essential stream", () => {
-  const SESSION = "session-yield";
+// #4491: the bridge stream is essential and never yields. The server treats a dropped bridge as an
+// unavailable session and keeps no replay, so a gap would lose actions and their results.
+describe("useEditorAgentBridge — holding its connection", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+  });
 
-  beforeEach(() => {
+  it("keeps its stream while its document is hidden and a visible tab's essential stream waits", async () => {
     vi.useFakeTimers();
     Object.defineProperty(navigator, "locks", {
       configurable: true,
       value: createOriginLocksFixture(),
     });
     resetBrowserStreamCapacityForTests();
-  });
-
-  afterEach(() => {
-    Reflect.deleteProperty(navigator, "locks");
-    resetBrowserStreamCapacityForTests();
-    resetClientDiagnosticWriter();
-  });
-
-  async function advance(ms: number): Promise<void> {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(ms);
-    });
-  }
-
-  async function mountBridge(onAgentActivity: () => void): Promise<Mock<RegisterSnapshot>> {
-    const registerSnapshot = registeredSnapshot(capability("Y"));
     renderHook(() =>
       useEditorAgentBridge({
-        agentSessionId: SESSION,
+        agentSessionId: "session-hold",
         controllers: makeControllers(),
-        registerSnapshot,
+        registerSnapshot: registeredSnapshot(capability("H")),
         onConflict: vi.fn(),
-        onAgentActivity,
       }),
     );
-    await advance(EDITOR_SNAPSHOT_DEBOUNCE_MS);
-    expect(createSourceSpy).toHaveBeenCalledOnce();
-    return registerSnapshot;
-  }
-
-  function fillWithEssentialStreams(): { readonly release: () => void } {
-    const holders = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
-    const waiter = admitDirectBrowserStream(() => undefined);
-    return {
-      release: (): void => {
-        waiter.release();
-        holders.forEach((holder) => holder.release());
-      },
-    };
-  }
-
-  it("closes the stream for an essential one, then reopens it and reads its state again", async () => {
-    const writer = vi.fn();
-    setClientDiagnosticWriter(writer);
-    const onAgentActivity = vi.fn();
-    const registerSnapshot = await mountBridge(onAgentActivity);
-    const registrations = registerSnapshot.mock.calls.length;
-    const source = latestEventSource();
-    const essential = fillWithEssentialStreams();
-    await advance(10_000);
-    expect(source.closed).toBe(true);
-    expect(createSourceSpy).toHaveBeenCalledOnce();
-    essential.release();
-    await advance(5_000);
-    expect(createSourceSpy).toHaveBeenCalledTimes(2);
-    await advance(EDITOR_SNAPSHOT_DEBOUNCE_MS);
-    expect(registerSnapshot.mock.calls.length).toBeGreaterThan(registrations);
-    expect(onAgentActivity).toHaveBeenCalled();
-    const messages = writer.mock.calls.map(([message]) => String(message));
-    expect(messages.filter((message) => message.includes("yielded origin capacity"))).toHaveLength(
-      1,
-    );
-    expect(
-      messages.filter((message) => message.includes("editor agent stream resynchronized")),
-    ).toHaveLength(1);
-  });
-
-  it("does not resynchronize a stream that never yielded", async () => {
-    const onAgentActivity = vi.fn();
-    await mountBridge(onAgentActivity);
-    await advance(60_000);
-    expect(createSourceSpy).toHaveBeenCalledOnce();
-    expect(onAgentActivity).not.toHaveBeenCalled();
-  });
-
-  it("keeps the stream while an action it delivered awaits its result, for a bounded grace", async () => {
-    await mountBridge(vi.fn());
-    const source = latestEventSource();
-    act(() => {
-      emitAction(source, SESSION, "mid-action");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(EDITOR_SNAPSHOT_DEBOUNCE_MS);
     });
-    const essential = fillWithEssentialStreams();
-    await advance(15_000);
+    expect(createSourceSpy).toHaveBeenCalledOnce();
+    const source = latestEventSource();
+    const others = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
     expect(source.closed).toBe(false);
-    await advance(10_000);
-    expect(source.closed).toBe(true);
-    essential.release();
-  });
-
-  it("yields as soon as the delivered action has its result", async () => {
-    await mountBridge(vi.fn());
-    const source = latestEventSource();
-    act(() => {
-      emitAction(source, SESSION, "short-action");
-    });
-    const essential = fillWithEssentialStreams();
-    await advance(8_000);
-    expect(source.closed).toBe(false);
-    act(() => {
-      emitResult(source, SESSION, "short-action", "succeeded");
-    });
-    await advance(6_000);
-    expect(source.closed).toBe(true);
-    essential.release();
-  });
-
-  it("holds exactly its slot lease's contention timer until the bridge disables, then none", async () => {
-    const hook = renderHook(
-      ({ enabled }: { enabled: boolean }) =>
-        useEditorAgentBridge({
-          agentSessionId: SESSION,
-          controllers: makeControllers(),
-          enabled,
-          registerSnapshot: registeredSnapshot(capability("Z")),
-          onConflict: vi.fn(),
-        }),
-      { initialProps: { enabled: true } },
-    );
-    await advance(EDITOR_SNAPSHOT_DEBOUNCE_MS);
     expect(createSourceSpy).toHaveBeenCalledOnce();
-    // The lease's five-second contention check is the one timer alive while the stream is held.
-    expect(vi.getTimerCount()).toBe(1);
-    hook.rerender({ enabled: false });
-    // Disabling the bridge releases the lease within the same act, with no flush: nothing is left.
-    expect(vi.getTimerCount()).toBe(0);
-    hook.unmount();
+    others.forEach((admission) => admission.release());
   });
 });
