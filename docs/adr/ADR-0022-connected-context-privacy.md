@@ -919,6 +919,13 @@ receive their final monotonic sensitivity before one scalar span is emitted. Kno
 private keys and configured secret literals remain unconditional. Malformed inferred code, parser
 stack exhaustion and the existing source-size ceiling produce body-free refusals; a connected source
 with an unavailable projection is omitted through the existing read-failure/uncertainty path.
+YAML nesting is bounded before the pinned parser runs (2026-11-28): the parser recurses per level and
+overflowed the stack at roughly 2,200 levels (about 230 on a small stack), so text nested deeper than
+512 block levels is refused up front as a depth refusal (`YamlDepthRefusal`, a `RangeError`), closed
+and body-free exactly like parser stack exhaustion. The projection's walks keep explicit stacks and
+never spread a result list into call arguments (`appendAll`), so a listing with many entries does
+not exhaust a small stack and mask the remaining output. The credential-floor content path never
+invokes the YAML projection; the strict path stays fail-closed.
 Java parses run in a worker thread with a heap ceiling and a deadline that grows with the text
 (2026-11-06, #4212): the pinned java-parser's ALL(*) prediction grows superlinearly on some invalid
 expressions (400 characters took 21 s, 1,600 exhausted a 4 GB heap) and keeps its DFA caches across

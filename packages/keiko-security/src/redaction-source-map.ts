@@ -1,5 +1,14 @@
 export const REDACTION_PLACEHOLDER = "[REDACTED]";
 
+/**
+ * Appends every item without spreading it into call arguments. `push(...items)` places one
+ * argument per item on the call stack, so the result list of a long input (one span per scalar)
+ * overflows it with a RangeError long before memory is short.
+ */
+export function appendAll<T>(target: T[], items: Iterable<T>): void {
+  for (const item of items) target.push(item);
+}
+
 export interface SourceTextEdit {
   readonly start: number;
   readonly end: number;

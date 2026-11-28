@@ -1,4 +1,4 @@
-import { REDACTION_PLACEHOLDER } from "./redaction-source-map.js";
+import { REDACTION_PLACEHOLDER, appendAll } from "./redaction-source-map.js";
 import { createRequire } from "node:module";
 import type { Document, Node, Scalar } from "yaml";
 import type { ProjectionPorts, RedactionSpan } from "./redaction-code.js";
@@ -12,7 +12,72 @@ function yamlApi(): typeof import("yaml") {
   return parser;
 }
 
+/**
+ * The pinned parser composes nesting by recursion, one generator frame per level, so a document
+ * nested a few thousand levels deep (about 230 on a small stack) overflows the stack mid-parse.
+ * Real configuration is far shallower. Deeper text is refused up front with an explicit outcome
+ * that every projection owner already treats as a depth refusal, closed and body-free, instead of
+ * running the parser to the edge of the stack.
+ */
+export const MAX_YAML_NESTING = 512;
+
+export class YamlDepthRefusal extends RangeError {
+  constructor() {
+    super("YAML nesting exceeds the projection depth limit");
+    this.name = "YamlDepthRefusal";
+  }
+}
+
+/** Block depth over indentation columns and compact `- ` / `? ` markers, in one linear pass. */
+export function yamlNestingExceeds(text: string, limit = MAX_YAML_NESTING): boolean {
+  const columns: number[] = [];
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const found = text.indexOf("\n", lineStart);
+    const lineEnd = found < 0 ? text.length : found;
+    if (lineDepthExceeds(text, lineStart, lineEnd, columns, limit)) return true;
+    lineStart = lineEnd + 1;
+  }
+  return false;
+}
+
+function skipSpaces(text: string, from: number, end: number): number {
+  let at = from;
+  while (at < end && text.charCodeAt(at) === 0x20) at += 1;
+  return at;
+}
+
+/** A `-` or `?` indicator followed by blank or the line end opens one more compact level. */
+function opensCompactLevel(text: string, at: number, end: number): boolean {
+  if (!"-?".includes(text.charAt(at))) return false;
+  return at + 1 >= end || " \t\r".includes(text.charAt(at + 1));
+}
+
+function closeDeeperColumns(columns: number[], column: number): void {
+  while ((columns.at(-1) ?? -1) >= column) columns.pop();
+}
+
+function lineDepthExceeds(
+  text: string,
+  start: number,
+  end: number,
+  columns: number[],
+  limit: number,
+): boolean {
+  let at = skipSpaces(text, start, end);
+  if (at >= end || "#\r".includes(text.charAt(at))) return false;
+  closeDeeperColumns(columns, at - start);
+  for (;;) {
+    columns.push(at - start);
+    if (columns.length > limit) return true;
+    if (!opensCompactLevel(text, at, end)) return false;
+    at = skipSpaces(text, at + 1, end);
+    if (at >= end || text.charAt(at) === "#") return false;
+  }
+}
+
 function parsePrivacyDocument(text: string): Document {
+  if (yamlNestingExceeds(text)) throw new YamlDepthRefusal();
   return yamlApi().parseDocument(text, { keepSourceTokens: true, uniqueKeys: false });
 }
 
@@ -182,7 +247,7 @@ function appendYamlKeyChildren(
 ): void {
   const api = yamlApi();
   if (api.isAlias(key)) pending.push(aliases.get(key));
-  else if (api.isSeq(key)) pending.push(...key.items);
+  else if (api.isSeq(key)) appendAll(pending, key.items);
   else if (api.isMap(key)) for (const pair of key.items) pending.push(pair.key, pair.value);
 }
 
@@ -293,8 +358,7 @@ function yamlCommentSpans(text: string, ports: ProjectionPorts): readonly Redact
     const span = yamlCommentSpan(value, ports);
     if (span !== undefined) spans.push(span);
     else {
-      const fields: unknown[] = Object.values(value);
-      pending.push(...fields);
+      appendAll(pending, Object.values(value) as unknown[]);
     }
   }
   return spans;
@@ -362,17 +426,34 @@ function yamlCommentSpan(value: object, ports: ProjectionPorts): RedactionSpan |
       };
 }
 
+/** Walks the mapping tree with an explicit stack: nesting depth never reaches the call stack. */
 function complexYaml(
-  value: unknown,
+  root: unknown,
   text: string,
   includeFlow = false,
   includePlainMultiline = true,
 ): boolean {
+  const pending: unknown[] = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (yamlApi().isNode(value) && canonicalPlaceholder(text, value)) continue;
+    if (complexYamlNode(value, text, includeFlow, includePlainMultiline)) return true;
+    if (yamlApi().isMap(value)) for (const pair of value.items) pending.push(pair.key, pair.value);
+  }
+  return false;
+}
+
+/** Whether this node alone makes the document complex; a map's entries are walked by the caller. */
+function complexYamlNode(
+  value: unknown,
+  text: string,
+  includeFlow: boolean,
+  includePlainMultiline: boolean,
+): boolean {
   const api = yamlApi();
-  if (api.isNode(value) && canonicalPlaceholder(text, value)) return false;
   if (api.isAlias(value) || api.isSeq(value)) return true;
   if (api.isScalar(value)) return complexYamlScalar(value, text, includePlainMultiline);
-  return complexYamlMap(value, text, includeFlow, includePlainMultiline);
+  return includeFlow && api.isMap(value) && value.flow === true;
 }
 
 function complexYamlScalar(value: Scalar, text: string, includePlainMultiline: boolean): boolean {
@@ -383,23 +464,6 @@ function complexYamlScalar(value: Scalar, text: string, includePlainMultiline: b
       value.range !== undefined &&
       value.range !== null &&
       /[\r\n]/u.test(text.slice(value.range[0], value.range[1])))
-  );
-}
-
-function complexYamlMap(
-  value: unknown,
-  text: string,
-  includeFlow: boolean,
-  includePlainMultiline: boolean,
-): boolean {
-  return (
-    yamlApi().isMap(value) &&
-    ((includeFlow && value.flow === true) ||
-      value.items.some(
-        (pair) =>
-          complexYaml(pair.key, text, includeFlow, includePlainMultiline) ||
-          complexYaml(pair.value, text, includeFlow, includePlainMultiline),
-      ))
   );
 }
 

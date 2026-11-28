@@ -11,7 +11,7 @@ import type {
   RedactionSpan,
   SourceRedactionLanguage,
 } from "./redaction-code.js";
-import { REDACTION_PLACEHOLDER } from "./redaction-source-map.js";
+import { REDACTION_PLACEHOLDER, appendAll } from "./redaction-source-map.js";
 import { maskedLiteralBody } from "./redaction-typescript.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
@@ -191,7 +191,7 @@ function projectFile(
   const literals: RedactionSpan[] = [];
   for (const [index, entry] of sources.entries()) {
     const projection = projections[index];
-    if (projection !== undefined) literals.push(...imageSpans(entry.image, projection, scoped));
+    if (projection !== undefined) appendAll(literals, imageSpans(entry.image, projection, scoped));
   }
   addMetadataSpans(text, file, ports, literals);
   if (report.syntaxRefusals + report.depthRefusals + report.sizeRefusals > 0)
@@ -237,7 +237,7 @@ function credentialFloorFile(
   for (const { image } of images) {
     const spans = flooredImageSpans(image, masked);
     if (spans === undefined) return undefined;
-    literals.push(...spans);
+    appendAll(literals, spans);
   }
   addMetadataSpans(text, file, ports, literals);
   ports.onUnparsedDiffHunkFloor?.();
