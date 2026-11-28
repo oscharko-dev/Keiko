@@ -422,16 +422,21 @@ const WAITING_FOR_CONNECTION_LABEL = "Verification: waiting for a free connectio
 // The status each waiting root had before the wait, so a wait that ends, with or without an
 // admission, puts back exactly what it replaced.
 const waitingRoots = new Map<string, SharedRunState>();
+// A wait episode is on: a root that starts a run during it joins it.
+let waitEpisodeActive = false;
 
 // Only roots that depend on the stream (a run starting, or one whose stream must reconnect) show
 // the wait; a subscribed root with nothing to run never does.
+function joinWait(root: string): void {
+  const entry = projectStates.get(root);
+  if (entry === undefined || waitingRoots.has(root)) return;
+  waitingRoots.set(root, entry.pendingState ?? entry.state);
+  emit(root, entry, { running: true, label: WAITING_FOR_CONNECTION_LABEL });
+}
+
 function showWaiting(): void {
-  for (const root of sourceDependentRoots()) {
-    const entry = projectStates.get(root);
-    if (entry === undefined || waitingRoots.has(root)) continue;
-    waitingRoots.set(root, entry.pendingState ?? entry.state);
-    emit(root, entry, { running: true, label: WAITING_FOR_CONNECTION_LABEL });
-  }
+  waitEpisodeActive = true;
+  for (const root of sourceDependentRoots()) joinWait(root);
 }
 
 // A status another event already replaced is left alone: only the wait's own label is undone.
@@ -444,6 +449,7 @@ function endWaiting(): void {
     }
   }
   waitingRoots.clear();
+  waitEpisodeActive = false;
 }
 
 function showWaitingForConnection(waiting: boolean): void {
@@ -645,6 +651,7 @@ function startRun(root: string, kinds: readonly VerificationKind[], targetPath?:
   entry.cancelRequested = false;
   if (sharedSourceReconnectAttempts > 0) setVerificationSourceHealth(root, "reconnecting");
   emit(root, entry, { running: true, label: "Verification: starting…" });
+  if (waitEpisodeActive) joinWait(root);
   void startAfterStreamReady(root, kinds, entry, entry.startToken, targetPath);
 }
 
@@ -715,6 +722,7 @@ export function resetEditorVerificationRunStateForTests(): void {
   projectIdByRunId.clear();
   rootsAwaitingFreshTerminal.clear();
   waitingRoots.clear();
+  waitEpisodeActive = false;
   totalListenerCount = 0;
 }
 

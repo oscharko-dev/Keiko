@@ -1478,4 +1478,27 @@ describe("useEditorVerificationRun waiting status", () => {
     expect(result.current.statusBarRun?.label).toBe(before);
     held.forEach((admission) => admission.release());
   });
+
+  it("lets a root that starts a run during a wait join it, and restores both afterwards", async () => {
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await advance(0);
+    const first = render();
+    const second = renderHook(() => useEditorVerificationRun({ root: "/other", activeFile: null }));
+    await advance(0);
+    act(() => first.result.current.runWorkspaceVerification("typecheck"));
+    await advance(12_000);
+    expect(first.result.current.statusBarRun?.label).toBe(
+      "Verification: waiting for a free connection",
+    );
+    act(() => second.result.current.runWorkspaceVerification("typecheck"));
+    await advance(0);
+    expect(second.result.current.statusBarRun?.label).toBe(
+      "Verification: waiting for a free connection",
+    );
+    held[0]?.release();
+    await advance(2_000);
+    expect(first.result.current.statusBarRun?.label).toBe("Verification: starting…");
+    expect(second.result.current.statusBarRun?.label).toBe("Verification: starting…");
+    held.forEach((admission) => admission.release());
+  });
 });
