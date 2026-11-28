@@ -12,6 +12,7 @@ import {
   type IndexRead,
   type TurnIndexRecord,
   captureTurnIndex,
+  countRestorableTurnIndexPaths,
   reopenTurnIndex,
   restoreTurnIndex,
   settleTurnIndex,
@@ -176,6 +177,23 @@ describe("turn index restore", () => {
     });
 
     expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+
+  it("offers no undo for a turn whose restore would refuse because a person restaged one of its paths", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      writeFileSync(join(root, "b.txt"), "b changed\n");
+      git(root, "add", "a.txt", "b.txt");
+    });
+    await expect(countRestorableTurnIndexPaths(root, record, governedOf(record))).resolves.toBe(2);
+
+    writeFileSync(join(root, "a.txt"), "a changed again by the person\n");
+    git(root, "add", "a.txt");
+
+    const refused = await restoreTurnIndex(root, record, governedOf(record));
+    expect(refused).toEqual({ outcome: "changed-after-turn", restoredCount: 0 });
+    await expect(countRestorableTurnIndexPaths(root, record, governedOf(record))).resolves.toBe(0);
   });
 
   it("leaves a path the person staged after the turn alone", async () => {

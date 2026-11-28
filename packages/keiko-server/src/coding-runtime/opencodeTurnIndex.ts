@@ -391,12 +391,11 @@ export async function countRestorableTurnIndexPaths(
   if (images === undefined) return 0;
   if (images.live.headSha !== images.start.headSha || images.left.headSha !== images.start.headSha)
     return 0;
-  return touchedPaths(images.start, images.left).filter(
-    (path) =>
-      governed.written.has(path) &&
-      stateOf(images.live, path) === governed.written.get(path) &&
-      stateOf(images.live, path) !== stateOf(images.start, path),
-  ).length;
+  const verdict = restoreVerdict(images, governed);
+  return verdict.kind === "restore"
+    ? verdict.touched.filter((path) => stateOf(images.live, path) !== stateOf(images.start, path))
+        .length
+    : 0;
 }
 
 interface ProvenImages {
@@ -416,11 +415,21 @@ function provenImages(
   return { start, live, left };
 }
 
-async function restoreTouched(
-  root: string,
-  images: ProvenImages,
-  governed: GovernedIndexRecord,
-): Promise<TurnIndexRestoreResult> {
+/**
+ * What an undo would do with the proven images: nothing to take back, a refusal because a person
+ * restaged a path Keiko wrote, or a restore of `touched`. The one predicate both the restore and the
+ * offered count read, so Undo is never offered where the restore would refuse.
+ */
+type RestoreVerdict =
+  | { readonly kind: "nothing"; readonly unrecorded: TurnIndexRestoreResult["outcome"] }
+  | { readonly kind: "changed" }
+  | {
+      readonly kind: "restore";
+      readonly touched: readonly string[];
+      readonly unrecorded: TurnIndexRestoreResult["outcome"];
+    };
+
+function restoreVerdict(images: ProvenImages, governed: GovernedIndexRecord): RestoreVerdict {
   const { start, live, left } = images;
   const changed = touchedPaths(start, left);
   const touched = changed.filter((path) => governed.written.has(path));
@@ -429,18 +438,29 @@ async function restoreTouched(
   const unrecorded = unrecordedOutcome(changed.length > touched.length, governed);
   // An undo asked again after a restore finds the index already at the turn start: nothing to do.
   if (touched.every((path) => stateOf(live, path) === stateOf(start, path)))
-    return { outcome: unrecorded, restoredCount: 0 };
+    return { kind: "nothing", unrecorded };
   // A path the person staged after Keiko wrote it is theirs: the recorded entry is gone from it.
   if (touched.some((path) => stateOf(live, path) !== governed.written.get(path)))
-    return { outcome: "changed-after-turn", restoredCount: 0 };
+    return { kind: "changed" };
+  return { kind: "restore", touched, unrecorded };
+}
+
+async function restoreTouched(
+  root: string,
+  images: ProvenImages,
+  governed: GovernedIndexRecord,
+): Promise<TurnIndexRestoreResult> {
+  const verdict = restoreVerdict(images, governed);
+  if (verdict.kind === "nothing") return { outcome: verdict.unrecorded, restoredCount: 0 };
+  if (verdict.kind === "changed") return { outcome: "changed-after-turn", restoredCount: 0 };
   const result = await restoreInTransaction(root, {
-    start,
-    left,
-    touched,
+    start: images.start,
+    left: images.left,
+    touched: verdict.touched,
     written: governed.written,
   });
-  return result.outcome === "restored" && unrecorded !== undefined
-    ? { outcome: unrecorded, restoredCount: result.restoredCount }
+  return result.outcome === "restored" && verdict.unrecorded !== undefined
+    ? { outcome: verdict.unrecorded, restoredCount: result.restoredCount }
     : result;
 }
 
