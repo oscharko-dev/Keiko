@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "38708431d7e2f25aa466c6e0af39355dd916f460923afe762a981eeaaf0f8281",
+    "catalogDigest": "a0ccef75d3f46dcf8bdef10af2232f9030cf64a0cfdd626a1a81e2d2e4915d07",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16424,7 +16424,7 @@
         "proofIds": ["coding-runtime.revert.applied.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:80",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:894"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:956"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16557,7 +16557,7 @@
         "proofIds": ["coding-runtime.revert.refused.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:118",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:925"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:987"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26027,7 +26027,7 @@
         "proofIds": ["gateway.activation.persistence.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/model-activation-memory.ts:75",
-        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:728"]
+        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:742"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34594,6 +34594,12 @@
             "dataClass": "closed-enum",
             "required": false
           },
+          "indexUnproven": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["no-transaction", "state-missing", "index-read-failed", "index-unreadable"]
+          },
           "refusedBeforeAsk": {
             "type": "boolean",
             "dataClass": "closed-enum",
@@ -34661,8 +34667,8 @@
         "failureClasses": ["git-runtime-action"],
         "proofIds": ["git.runtime-action.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:169",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1309"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:173",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1354"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106535,6 +106541,12 @@
                   "required": false
                 },
                 {
+                  "name": "indexUnproven",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "pathCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -131001,7 +131013,7 @@
     {
       "op": "git.runtime-action",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:172",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:176",
       "package": "keiko-server"
     },
     {
