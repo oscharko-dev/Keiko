@@ -9240,6 +9240,34 @@ function applyVerifiedCapabilityUpdate(
           : preservedVerifiedCapabilityFields(entry.observation?.fields ?? {}),
     }))
     .filter((entry) => Object.keys(entry.fields).length > 0);
+  // The clear, the catalogue replacement and the re-record are ONE change: the durable activation
+  // record is written once from the settled set, never from the transient states between them.
+  const apply = (): RouteResult =>
+    applySettledCapabilityUpdate(
+      gatewayConfig,
+      { modelId, generation, updated, consumeObservation, correlationId },
+      observations,
+    );
+  return gatewayConfig.settleObservations?.(apply) ?? apply();
+}
+
+interface SettledCapabilityUpdate {
+  readonly modelId: string;
+  readonly generation: number;
+  readonly updated: GatewayConfig;
+  readonly consumeObservation: boolean;
+  readonly correlationId: string | undefined;
+}
+
+function applySettledCapabilityUpdate(
+  gatewayConfig: RuntimeGatewayConfig,
+  { modelId, generation, updated, consumeObservation, correlationId }: SettledCapabilityUpdate,
+  observations: readonly {
+    readonly modelId: string;
+    readonly fields: VerifiedModelCapabilityFields;
+    readonly observation: ReturnType<RuntimeGatewayConfig["verifiedCapability"]>;
+  }[],
+): RouteResult {
   if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }

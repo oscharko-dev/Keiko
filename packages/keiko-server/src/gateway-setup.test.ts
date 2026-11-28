@@ -15,6 +15,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -76,6 +77,7 @@ import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
+import { MODEL_ACTIVATION_FILE, createModelActivationMemory } from "./model-activation-memory.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 import {
   EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
@@ -568,6 +570,72 @@ describe("handleGatewaySetup", () => {
     expect(observation).toMatchObject({ fields: { conversationReady: true } });
     expect(observation?.fields.toolCalling).toBeUndefined();
     expect(observation?.generation).toBe(gatewayConfig.generation());
+    deps.store.close();
+  });
+
+  it("persists only the settled activation set once when a capability update is applied", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-settle-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-settle-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const modelIds = ["model/a", "model/b", "model/c"];
+    const rawConfig = {
+      providers: modelIds.map((modelId) => ({
+        modelId,
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "example-secret-token",
+        capability: { kind: "chat", contextWindow: 8_192, toolCalling: true },
+      })),
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    const events: ServerLogEvent[] = [];
+    const record = join(uiDir, MODEL_ACTIVATION_FILE);
+    const real = createModelActivationMemory({
+      path: record,
+      installationId: "installation-settle",
+      productVersion: "1.5.10",
+      log: { write: (event): void => void events.push(event) },
+    });
+    const synced: string[][] = [];
+    gatewayConfig.rememberActivations?.(
+      {
+        restore: (providers, correlationId) => real.restore(providers, correlationId),
+        recorded: () => real.recorded(),
+        settle: (reason, correlationId) => real.settle(reason, correlationId),
+        sync: (activated, reason, correlationId): void => {
+          synced.push(activated.map((entry) => entry.provider.modelId));
+          real.sync(activated, reason, correlationId);
+        },
+      },
+      "corr-settle-restore",
+    );
+    for (const modelId of modelIds)
+      gatewayConfig.recordVerifiedCapability(
+        modelId,
+        { conversationReady: true, toolCalling: false },
+        "2026-08-17T08:00:00.000Z",
+        gatewayConfig.generation(),
+      );
+    const before = readFileSync(record, "utf8");
+    synced.length = 0;
+    events.length = 0;
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model%2Fa" } },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    // One change, one settled set: no intermediate set with a model missing ever reaches the record.
+    expect(synced).toEqual([modelIds]);
+    expect(readFileSync(record, "utf8")).toBe(before);
+    expect(events.filter((event) => event.op === "gateway.activation.persistence")).toEqual([]);
     deps.store.close();
   });
 

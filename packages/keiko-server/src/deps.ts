@@ -740,6 +740,11 @@ export interface RuntimeGatewayConfig {
   readonly rememberActivations?:
     ((memory: ModelActivationMemory, correlationId: string) => void) | undefined;
   /**
+   * Runs one logical change to the observations (a catalogue update clears and re-records several)
+   * and lets the durable activation record see only the settled result, in one write.
+   */
+  readonly settleObservations?: (<T>(change: () => T) => T) | undefined;
+  /**
    * Retries a durable activation record that could not be written and says whether it is now in
    * line. True when nothing is remembered or nothing is outstanding.
    */
@@ -1834,6 +1839,8 @@ interface RuntimeGatewayState {
   readonly listeners: ReturnType<typeof gatewayConfigListeners>;
   /** Present once the installation identity is known; keeps activations across restarts. */
   activation?: ModelActivationMemory | undefined;
+  /** Set while one logical change is settling: the record is written once, when it ends. */
+  settling?: { dirty: boolean; reason: ActivationRemovalReason; correlationId: string } | undefined;
 }
 
 /** Keeps the durable activation record equal to the activated set after every change to it. */
@@ -1842,11 +1849,27 @@ function syncActivation(
   reason: ActivationRemovalReason,
   correlationId: string = UNKNOWN_CORRELATION_ID,
 ): void {
+  if (state.settling !== undefined) {
+    state.settling = { dirty: true, reason, correlationId };
+    return;
+  }
   state.activation?.sync(
     activatedModelsOf(state.observations, state.generation, state.config?.providers ?? []),
     reason,
     correlationId,
   );
+}
+
+function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T): T {
+  if (state.settling !== undefined) return change();
+  state.settling = { dirty: false, reason: "invalidated", correlationId: UNKNOWN_CORRELATION_ID };
+  try {
+    return change();
+  } finally {
+    const { dirty, reason, correlationId } = state.settling;
+    state.settling = undefined;
+    if (dirty) syncActivation(state, reason, correlationId);
+  }
 }
 
 function rememberRuntimeActivations(
@@ -2087,6 +2110,7 @@ function runtimeObservationFacets(
   | "recordVerifiedCapability"
   | "clearVerifiedCapability"
   | "rememberActivations"
+  | "settleObservations"
   | "settleActivationRecord"
 > {
   return {
@@ -2109,6 +2133,7 @@ function runtimeObservationFacets(
     rememberActivations(memory, correlationId): void {
       rememberRuntimeActivations(state, memory, correlationId);
     },
+    settleObservations: <T>(change: () => T): T => settleObservationChange(state, change),
     settleActivationRecord(reason, correlationId): boolean {
       return state.activation?.settle(reason, correlationId) ?? true;
     },
