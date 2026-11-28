@@ -4565,6 +4565,7 @@
     "editor.verification.windows-step-supervisor.cleanup",
     "editor.verification.windows-step-supervisor.copy-refused",
     "editor.verification.windows-step-supervisor.step-node-unreadable",
+    "editor.verification.windows-step-supervisor.unreadable",
     "egress-policy-attestation",
     "egress-request",
     "embedded-secret-material",
