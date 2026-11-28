@@ -133,6 +133,15 @@ describe("catalog refresh requests without a consumer (U-45)", () => {
     detachGatewayModelCatalogRefreshConsumer();
   });
 
+  it("serves a check only while a requester that asked for it is still mounted", () => {
+    const plain = requestGatewayModelCatalogRefresh();
+    const asked = requestGatewayModelCatalogRefresh({ check: true });
+    asked();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toEqual({ check: false });
+    detachGatewayModelCatalogRefreshConsumer();
+    plain();
+  });
+
   it("drops a kept request when its requester unmounts and when it has gone stale", () => {
     const drop = requestGatewayModelCatalogRefresh({ check: true });
     drop();

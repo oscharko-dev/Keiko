@@ -48,7 +48,9 @@ export const GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT =
 
 let pending = false;
 let catalogRefreshConsumers = 0;
-let unservedCatalogRefresh: { readonly check: boolean; readonly at: number } | undefined;
+// One entry per mounted requester: a merged `check` is served only while a requester that asked for
+// it is still mounted, so an unmounted window's check never outlives it.
+let unservedCatalogRefreshes: { readonly check: boolean; readonly at: number }[] = [];
 /** A kept request older than this is stale: the shell it waited for did not appear in time. */
 const UNSERVED_CATALOG_REFRESH_TTL_MS = 10_000;
 
@@ -111,19 +113,16 @@ export function requestGatewayModelCatalogRefresh(
   // its requester is mounted: the returned cleanup (an unmounting window) drops it.
   const kept =
     catalogRefreshConsumers === 0
-      ? {
-          check: unservedCatalogRefresh?.check === true || options.check === true,
-          at: Date.now(),
-        }
+      ? { check: options.check === true, at: Date.now() }
       : undefined;
-  if (kept !== undefined) unservedCatalogRefresh = kept;
+  if (kept !== undefined) unservedCatalogRefreshes.push(kept);
   window.dispatchEvent(
     new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
       detail: { check: options.check === true },
     }),
   );
   return (): void => {
-    if (kept !== undefined && unservedCatalogRefresh === kept) unservedCatalogRefresh = undefined;
+    if (kept !== undefined) unservedCatalogRefreshes = unservedCatalogRefreshes.filter((r) => r !== kept);
   };
 }
 
@@ -154,11 +153,12 @@ export function gatewayModelCatalogCorrelationId(event: Event): string | undefin
 export function attachGatewayModelCatalogRefreshConsumer():
   { readonly check: boolean } | undefined {
   catalogRefreshConsumers += 1;
-  const unserved = unservedCatalogRefresh;
-  unservedCatalogRefresh = undefined;
-  return unserved !== undefined && Date.now() - unserved.at <= UNSERVED_CATALOG_REFRESH_TTL_MS
-    ? { check: unserved.check }
-    : undefined;
+  const now = Date.now();
+  const fresh = unservedCatalogRefreshes.filter(
+    (request) => now - request.at <= UNSERVED_CATALOG_REFRESH_TTL_MS,
+  );
+  unservedCatalogRefreshes = [];
+  return fresh.length === 0 ? undefined : { check: fresh.some((request) => request.check) };
 }
 
 /** The consumer stopped listening; later requests are kept for the next one. */
