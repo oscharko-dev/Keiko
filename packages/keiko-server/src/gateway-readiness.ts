@@ -2397,7 +2397,7 @@ function recordReadinessObservation(
     observedGeneration,
   );
   if (report.overallStatus === "failed") {
-    recordFailedReadinessObservation(deps, report, observedGeneration);
+    recordFailedReadinessObservation(deps, report, observedGeneration, correlationId);
     return;
   }
   const observation = verifiedCapabilityObservation(report.probes);
@@ -2513,13 +2513,18 @@ function recordFailedReadinessObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  correlationId: string,
 ): void {
   const chat = report.probes.find((probe) => probe.name === "chat");
   const failure =
     chat?.status === "failed" && busySignal(chat.warning) !== undefined ? "transient" : undefined;
   if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration, failure)) return;
   if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
-  deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+  // A proven failure also removes the durable activation record (owner decision 2026-11-28).
+  deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration, {
+    cause: "invalidated",
+    correlationId,
+  });
   if (failure !== undefined)
     deps.gatewayConfig?.recordVerifiedCapability(
       report.modelId,
@@ -4278,7 +4283,7 @@ export async function handleGatewayDeactivation(
   });
   if ("status" in request) return request;
   const { correlationId, modelId } = request;
-  const outcome = deactivateConversationModel(deps, modelId);
+  const outcome = deactivateConversationModel(deps, modelId, correlationId);
   logDeactivationOutcome(deps, correlationId, outcome);
   if (outcome === "unknown-model")
     return error("NOT_FOUND", "The model is not a configured chat model.", 404);
@@ -4287,7 +4292,11 @@ export async function handleGatewayDeactivation(
   return { status: 200, body: { modelId, outcome } };
 }
 
-function deactivateConversationModel(deps: UiHandlerDeps, modelId: string): DeactivationOutcome {
+function deactivateConversationModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): DeactivationOutcome {
   const holder = deps.gatewayConfig;
   const config = currentGatewayConfig(deps);
   if (holder === undefined || config === undefined) return "unknown-model";
@@ -4295,7 +4304,11 @@ function deactivateConversationModel(deps: UiHandlerDeps, modelId: string): Deac
   if (isConversationReadinessCheckRunning(deps, modelId) || isExplicitCheckRunning(deps, modelId))
     return "check-running";
   if (!currentConversationReady(deps, modelId)) return "not-activated";
-  holder.clearVerifiedCapability(modelId, holder.generation());
+  // The durable record of the activation goes with it (owner decision 2026-11-28).
+  holder.clearVerifiedCapability(modelId, holder.generation(), {
+    cause: "deactivated",
+    correlationId,
+  });
   return "deactivated";
 }
 

@@ -223,6 +223,13 @@ import {
 } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  activatedModelsOf,
+  createModelActivationMemory,
+  MODEL_ACTIVATION_FILE,
+  type ActivationRemovalReason,
+  type ModelActivationMemory,
+} from "./model-activation-memory.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import type { WorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
@@ -716,7 +723,26 @@ export interface RuntimeGatewayConfig {
     citationObservation?: CitationCapabilityObservation,
     conversationReadinessFailure?: "transient",
   ): void;
-  readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
+  /**
+   * Drops a model's observation. `evidence.cause` says why for the activation record: a person's
+   * deactivation, or (the default) a failed check that invalidated the observation.
+   */
+  readonly clearVerifiedCapability: (
+    modelId: string,
+    observedGeneration?: number,
+    evidence?: ClearObservationEvidence,
+  ) => boolean;
+  /**
+   * Restores the activations remembered from an earlier start whose binding still holds, without a
+   * request to any model, and keeps the record in line from then on (owner decision 2026-11-28).
+   */
+  readonly rememberActivations?:
+    ((memory: ModelActivationMemory, correlationId: string) => void) | undefined;
+}
+
+export interface ClearObservationEvidence {
+  readonly cause?: "deactivated" | "invalidated";
+  readonly correlationId?: string;
 }
 
 type CitationCapabilityObservation = Pick<
@@ -1793,6 +1819,42 @@ interface RuntimeGatewayState {
   generation: number;
   readonly observations: Map<string, VerifiedModelCapabilityObservation>;
   readonly listeners: ReturnType<typeof gatewayConfigListeners>;
+  /** Present once the installation identity is known; keeps activations across restarts. */
+  activation?: ModelActivationMemory | undefined;
+}
+
+/** Keeps the durable activation record equal to the activated set after every change to it. */
+function syncActivation(
+  state: RuntimeGatewayState,
+  reason: ActivationRemovalReason,
+  correlationId: string = UNKNOWN_CORRELATION_ID,
+): void {
+  state.activation?.sync(
+    activatedModelsOf(state.observations, state.generation, state.config?.providers ?? []),
+    reason,
+    correlationId,
+  );
+}
+
+function rememberRuntimeActivations(
+  state: RuntimeGatewayState,
+  memory: ModelActivationMemory,
+  correlationId: string,
+): void {
+  state.activation = memory;
+  const restored = memory.restore(state.config?.providers ?? [], correlationId);
+  const now = Date.now();
+  for (const { modelId, activatedAt } of restored) {
+    // A stored time in the future would present as unavailable; the restore moment is the bound.
+    const stamp = Date.parse(activatedAt) > now ? new Date(now).toISOString() : activatedAt;
+    state.observations.set(modelId, {
+      modelId,
+      generation: state.generation,
+      checkedAt: stamp,
+      conversationCheckedAt: stamp,
+      fields: { conversationReady: true },
+    });
+  }
 }
 
 function mergeConfiguredGateway(state: RuntimeGatewayState, active: GatewayConfig): GatewayConfig {
@@ -1822,6 +1884,7 @@ function setRuntimeGateway(
   state.verification = UNVERIFIED_GATEWAY;
   state.observations.clear();
   state.generation++;
+  syncActivation(state, "configuration-changed", correlationId);
   state.listeners.notify(correlationId);
 }
 
@@ -1869,6 +1932,7 @@ function replaceRuntimeCatalog(
       state.observations.set(id, { ...observation, generation: state.generation });
     } else state.observations.delete(id);
   }
+  syncActivation(state, "configuration-changed", correlationId);
   state.listeners.notify(correlationId);
   return true;
 }
@@ -1962,10 +2026,19 @@ function createRuntimeGatewayConfig(
       state.observations,
       () => state.generation,
       (id) => state.config?.providers.some((provider) => provider.modelId === id) === true,
+      () => {
+        syncActivation(state, "invalidated");
+      },
     ),
-    clearVerifiedCapability: (id, generation): boolean =>
-      (generation === undefined || generation === state.generation) &&
-      state.observations.delete(id),
+    clearVerifiedCapability(id, generation, evidence): boolean {
+      if (generation !== undefined && generation !== state.generation) return false;
+      const cleared = state.observations.delete(id);
+      if (cleared) syncActivation(state, evidence?.cause ?? "invalidated", evidence?.correlationId);
+      return cleared;
+    },
+    rememberActivations(memory, correlationId): void {
+      rememberRuntimeActivations(state, memory, correlationId);
+    },
   };
 }
 
@@ -1973,6 +2046,7 @@ function gatewayCapabilityRecorder(
   observations: Map<string, VerifiedModelCapabilityObservation>,
   generation: () => number,
   admitted: (modelId: string) => boolean,
+  changed: () => void,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
   return (
     modelId,
@@ -2002,6 +2076,7 @@ function gatewayCapabilityRecorder(
         currentGeneration,
       ),
     });
+    changed();
   };
 }
 
@@ -7117,6 +7192,47 @@ function buildInitialGatewayState(
   };
 }
 
+/**
+ * Gives back the model activations of an earlier start whose binding still holds (owner decision
+ * 2026-11-28), with no request to any model. Without an installation identity nothing is
+ * remembered, so a missing identity can only cost a re-activation, never claim one.
+ */
+function restoreRememberedActivations(
+  options: BuildHandlerDepsOptions,
+  runtimeConfig: RuntimeGatewayConfig,
+  bundle: PersistenceBundle,
+  resolvedUiDbPath: string,
+  correlationId: string,
+): void {
+  if (runtimeConfig.rememberActivations === undefined) return;
+  let installationId: string | undefined;
+  try {
+    installationId = bundle.uiStore.browserApprovals?.installationId();
+  } catch (error) {
+    emitServerDiagnostic(
+      options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.activation.restore",
+        source: "server.deps.restoreRememberedActivations",
+        error,
+        redact: () => "Keiko could not read its installation identity; no activation is restored.",
+      }),
+    );
+  }
+  if (installationId === undefined) return;
+  runtimeConfig.rememberActivations(
+    createModelActivationMemory({
+      path: join(dirname(resolvedUiDbPath), MODEL_ACTIVATION_FILE),
+      installationId,
+      productVersion: KEIKO_PRODUCT_VERSION,
+      log: options.activityLog ?? processServerLogSink(),
+      diagnostics: options.diagnostics,
+    }),
+    correlationId,
+  );
+}
+
 /** The one native session continuity service of this server, over the state directory (S02/S03). */
 function buildCodingSessionContinuity(
   options: BuildHandlerDepsOptions,
@@ -7208,6 +7324,13 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     projections.contentRedactString,
   );
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
+  restoreRememberedActivations(
+    options,
+    runtimeConfig,
+    bundle,
+    resolvedUiDbPath,
+    bootstrapCorrelationId,
+  );
   return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
