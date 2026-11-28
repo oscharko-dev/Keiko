@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { pathIsDenied } from "./files-deny.js";
 import {
   insideInstallationPayload,
+  installationDenialCause,
   insideProgramFolder,
   launchedFromProgramFolder,
   PROGRAM_FOLDER_LAUNCH_ENV,
@@ -211,5 +212,36 @@ describe("insideInstallationPayload on a POSIX host", () => {
     }
     // A path that simply does not exist is another folder, not a refusal.
     expect(insideInstallationPayload(join(root, "no-such-folder"))).toBe(false);
+  });
+});
+
+describe("installationDenialCause", () => {
+  it("names why a path is refused as a closed value that carries no path", () => {
+    const { program, sibling, root } = folders();
+    vi.stubEnv(PROGRAM_FOLDER_LAUNCH_ENV, "1");
+    expect(installationDenialCause(join(program, "node_modules"), process.env, program)).toBe(
+      "program-folder",
+    );
+    expect(installationDenialCause(sibling, process.env, program)).toBeUndefined();
+    expect(installationDenialCause("/Users/me/Keiko/system/Keiko/app", process.env, program)).toBe(
+      "installation-payload",
+    );
+    expect(installationDenialCause(join(root, "no-such-folder"), process.env, program)).toBe(
+      undefined,
+    );
+  });
+
+  it("names a name the operating system cannot give as unresolvable, still refused", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const { root } = folders();
+    const locked = join(root, "locked");
+    mkdirSync(join(locked, "inner"), { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      expect(installationDenialCause(join(locked, "inner"))).toBe("unresolvable-name");
+      expect(pathIsDenied(join(locked, "inner"))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
   });
 });

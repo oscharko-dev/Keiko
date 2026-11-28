@@ -253,8 +253,9 @@ import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/k
 import {
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
+  type WorkspaceRootDenialReason,
 } from "./workspace-root-denial-log.js";
-import { pathIsDenied } from "./files-deny.js";
+import { pathDenialCause } from "./files-deny.js";
 import { insideProgramFolder } from "./launch-directory.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -3636,6 +3637,13 @@ export function reconcileTaskWorkspacesAtStartup(
     });
 }
 
+function seedDenialReason(
+  cause: NonNullable<ReturnType<typeof pathDenialCause>>,
+): WorkspaceRootDenialReason {
+  if (cause === "installation-payload") return "installation-payload";
+  return cause === "unresolvable-name" ? "installation-name-unresolvable" : "denied-locus";
+}
+
 function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
@@ -3666,9 +3674,10 @@ function seedInitialProject(
   // Git and Files read of it is denied, so offering it only starts the person on a refused folder.
   // It is the very predicate the Files and Git routes apply to a requested root (#4371). The
   // decision is recorded body-free on the existing denial line: closed reason, no path.
-  if (pathIsDenied(normalizedPath)) {
+  const denial = pathDenialCause(normalizedPath);
+  if (denial !== undefined) {
     recordWorkspaceRootDenied(
-      { reason: "denied-locus", failureKind: "DENIED", errorKind: "authority-denied" },
+      { reason: seedDenialReason(denial), failureKind: "DENIED", errorKind: "authority-denied" },
       { correlationId },
     );
     return undefined;

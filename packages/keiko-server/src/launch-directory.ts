@@ -73,12 +73,35 @@ export function insideProgramFolder(
   env: Readonly<Record<string, string | undefined>> = process.env,
   launchDirectory: string = process.cwd(),
 ): boolean {
-  if (!launchedFromProgramFolder(env) || !isAbsolute(path)) return false;
+  return programFolderDenial(path, env, launchDirectory, lazySystemName(path)) !== undefined;
+}
+
+/** Why a path inside Keiko's own installation is refused: a closed value, never the path. */
+export type InstallationDenialCause =
+  "program-folder" | "installation-payload" | "unresolvable-name";
+
+// The operating system's name of a path, asked at most once per judgement and only when a check
+// reaches it: the layout checks answer first, and the program-folder and payload checks of one
+// request share the single resolution.
+function lazySystemName(path: string): () => SystemName {
+  let resolved: SystemName | undefined;
+  return (): SystemName => (resolved ??= resolveSystemName(path));
+}
+
+function programFolderDenial(
+  path: string,
+  env: Readonly<Record<string, string | undefined>>,
+  launchDirectory: string,
+  name: () => SystemName,
+): InstallationDenialCause | undefined {
+  if (!launchedFromProgramFolder(env) || !isAbsolute(path)) return undefined;
   const folder = launchDirectoryName(launchDirectory);
-  if (containsPath(launchDirectory, path) || containsPath(folder, path)) return true;
-  const resolved = resolveSystemName(path);
-  if (resolved.kind === "failed") return true;
-  return resolved.kind === "named" && containsPath(folder, resolved.name);
+  if (containsPath(launchDirectory, path) || containsPath(folder, path)) return "program-folder";
+  const resolved = name();
+  if (resolved.kind === "failed") return "unresolvable-name";
+  return resolved.kind === "named" && containsPath(folder, resolved.name)
+    ? "program-folder"
+    : undefined;
 }
 
 // The entries of an installation's payload folder `system/Keiko` (keiko-cli `portable-shared.ts`
@@ -129,9 +152,30 @@ function layoutNamesPayload(path: string): boolean {
  * refused. A relative path is not judged.
  */
 export function insideInstallationPayload(path: string): boolean {
-  if (layoutNamesPayload(path)) return true;
-  if (!isAbsolute(path)) return false;
-  const resolved = resolveSystemName(path);
-  if (resolved.kind === "failed") return true;
-  return resolved.kind === "named" && resolved.name !== path && layoutNamesPayload(resolved.name);
+  return payloadDenial(path, lazySystemName(path)) !== undefined;
+}
+
+function payloadDenial(path: string, name: () => SystemName): InstallationDenialCause | undefined {
+  if (layoutNamesPayload(path)) return "installation-payload";
+  if (!isAbsolute(path)) return undefined;
+  const resolved = name();
+  if (resolved.kind === "failed") return "unresolvable-name";
+  return resolved.kind === "named" && resolved.name !== path && layoutNamesPayload(resolved.name)
+    ? "installation-payload"
+    : undefined;
+}
+
+/**
+ * Which part of Keiko's own installation, if any, refuses an absolute path: its program folder, the
+ * payload of any installation, or a name the operating system could not give (refused, never read as
+ * outside). One resolution of the path serves every check, so a denial costs one `realpath`, and the
+ * closed cause is what a caller records on the body-free workspace-root denial line.
+ */
+export function installationDenialCause(
+  path: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  launchDirectory: string = process.cwd(),
+): InstallationDenialCause | undefined {
+  const name = lazySystemName(path);
+  return programFolderDenial(path, env, launchDirectory, name) ?? payloadDenial(path, name);
 }
