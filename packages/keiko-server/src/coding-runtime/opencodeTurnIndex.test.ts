@@ -5,7 +5,15 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AT_HEAD, type GovernedIndexRecord } from "./governedIndexPaths.js";
+import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
+
+import {
+  AT_HEAD,
+  type GovernedIndexRecord,
+  governedIndexRecord,
+  noteGovernedIndexTransitions,
+  resetGovernedIndexPaths,
+} from "./governedIndexPaths.js";
 import {
   awaitTurnIndexStart,
   beginTurnIndex,
@@ -13,6 +21,7 @@ import {
   type TurnIndexRecord,
   captureTurnIndex,
   countRestorableTurnIndexPaths,
+  readGovernedTransitions,
   reopenTurnIndex,
   restoreTurnIndex,
   settleTurnIndex,
@@ -32,7 +41,7 @@ async function governedNow(root: string, paths: readonly string[]): Promise<Gove
   const written = new Map<string, string>();
   if (typeof image === "object")
     for (const path of paths) written.set(path, image.staged.get(path) ?? AT_HEAD);
-  return { paths: [...written.keys()], written, truncated: false };
+  return { paths: [...written.keys()], written, previous: new Map(), truncated: false };
 }
 
 function governedOf(record: TurnIndexRecord | undefined): GovernedIndexRecord {
@@ -40,6 +49,7 @@ function governedOf(record: TurnIndexRecord | undefined): GovernedIndexRecord {
     (record === undefined ? undefined : governedByRecord.get(record)) ?? {
       paths: [],
       written: new Map(),
+      previous: new Map(),
       truncated: false,
     }
   );
@@ -438,6 +448,108 @@ describe("turn index restore", () => {
     await expect(restoreTurnIndex(root, record, governedOf(record))).rejects.toThrow();
 
     expect(readFileSync(join(root, ".git", "index")).equals(before)).toBe(true);
+  });
+});
+
+/** What governed staging does: one index transaction that stages `path` from the worktree. */
+async function keikoStages(root: string, path: string): Promise<boolean> {
+  return await withGitIndexTransaction(
+    root,
+    (transaction) => {
+      const run = spawnSync("git", ["add", "--", path], {
+        cwd: root,
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: root,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_INDEX_FILE: transaction.temporaryIndexPath,
+        },
+      });
+      return Promise.resolve(run.status === 0);
+    },
+    (staged) => staged,
+  );
+}
+
+describe("transitions read inside the governed index transaction", () => {
+  const RUN = "run-index-transitions";
+  afterEach(() => {
+    resetGovernedIndexPaths(RUN);
+  });
+
+  async function governedStage(
+    root: string,
+    afterTransaction: () => void = () => undefined,
+  ): Promise<void> {
+    const { transitions } = await readGovernedTransitions(
+      root,
+      ["a.txt"],
+      async () => {
+        const staged = await keikoStages(root, "a.txt");
+        // The lock is released here: whatever happens now is not what the mutation wrote.
+        afterTransaction();
+        return staged;
+      },
+      (staged) => staged,
+    );
+    if (transitions === undefined) throw new Error("transitions unproven");
+    noteGovernedIndexTransitions(RUN, transitions);
+  }
+
+  it("never records a person's staging that lands after the lock was released as Keiko's", async () => {
+    const root = repository();
+    const record = beginTurnIndex(root);
+    await record.start;
+    writeFileSync(join(root, "a.txt"), "staged by Keiko\n");
+    await governedStage(root, () => {
+      writeFileSync(join(root, "a.txt"), "staged by the person\n");
+      git(root, "add", "a.txt");
+    });
+    settleTurnIndex(root, record);
+    await record.settled;
+    const before = git(root, "ls-files", "-s", "a.txt");
+
+    await expect(restoreTurnIndex(root, record, governedIndexRecord(RUN))).resolves.toEqual({
+      outcome: "changed-after-turn",
+      restoredCount: 0,
+    });
+
+    expect(git(root, "ls-files", "-s", "a.txt")).toBe(before);
+  });
+
+  it("puts back the entry a person staged before Keiko's first mutation, not the turn start", async () => {
+    const root = repository();
+    const record = beginTurnIndex(root);
+    await record.start;
+    writeFileSync(join(root, "a.txt"), "staged by the person\n");
+    git(root, "add", "a.txt");
+    const personsEntry = git(root, "ls-files", "-s", "a.txt");
+    writeFileSync(join(root, "a.txt"), "staged by Keiko\n");
+    await governedStage(root);
+    settleTurnIndex(root, record);
+    await record.settled;
+    expect(git(root, "ls-files", "-s", "a.txt")).not.toBe(personsEntry);
+
+    await expect(restoreTurnIndex(root, record, governedIndexRecord(RUN))).resolves.toEqual({
+      outcome: "restored",
+      restoredCount: 1,
+    });
+
+    expect(git(root, "ls-files", "-s", "a.txt")).toBe(personsEntry);
+  });
+
+  it("proves nothing for a mutation that ran no index transaction", async () => {
+    const root = repository();
+
+    await expect(
+      readGovernedTransitions(
+        root,
+        ["a.txt"],
+        () => Promise.resolve(true),
+        (ok) => ok,
+      ),
+    ).resolves.toEqual({ value: true, transitions: undefined });
   });
 });
 

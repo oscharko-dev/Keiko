@@ -22,6 +22,7 @@ import {
   GIT_STAGE_FILE_MAX_BYTES,
   assertGitStageFileUnchanged,
   inspectGitStageFile,
+  observeGitIndexTransactions,
   isGitStageLargeFile,
   readGitStageFile,
   streamGitStageFile,
@@ -161,6 +162,66 @@ describe("existing workspace Git metadata index owner", () => {
     );
     expect(readFileSync(join(root, ".git/index"))).toEqual(index);
     expect(existsSync(join(root, ".git/index.lock"))).toBe(false);
+  });
+  it("shows an observer the private index before the mutation and right before the swap, under the lock", async () => {
+    const seen: string[] = [];
+    const lockHeld = (): boolean => existsSync(join(root, ".git/index.lock"));
+    const listing = (indexPath: string): string => {
+      expect(lockHeld()).toBe(true);
+      return execFileSync("git", ["ls-files", "--stage"], {
+        cwd: root,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, GIT_INDEX_FILE: indexPath },
+      });
+    };
+    writeFileSync(join(root, "added"), "added\n");
+    await observeGitIndexTransactions(
+      {
+        copied: (indexPath) => {
+          seen.push(listing(indexPath));
+          return Promise.resolve();
+        },
+        prepared: (indexPath) => {
+          seen.push(listing(indexPath));
+          return Promise.resolve();
+        },
+      },
+      () =>
+        withGitIndexTransaction(
+          root,
+          (transaction): Promise<boolean> => {
+            execFileSync("git", ["add", "added"], {
+              cwd: root,
+              env: { PATH: process.env.PATH, GIT_INDEX_FILE: transaction.temporaryIndexPath },
+            });
+            return Promise.resolve(true);
+          },
+          (value) => value,
+        ),
+    );
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toContain("added");
+    expect(seen[1]).toContain("added");
+    expect(git(["ls-files"])).toContain("added");
+  });
+  it("tells no observer about a transaction that was refused", async () => {
+    let prepared = 0;
+    await observeGitIndexTransactions(
+      {
+        copied: () => Promise.resolve(),
+        prepared: () => {
+          prepared += 1;
+          return Promise.resolve();
+        },
+      },
+      () =>
+        withGitIndexTransaction(
+          root,
+          (): Promise<boolean> => Promise.resolve(false),
+          (value) => value,
+        ),
+    );
+    expect(prepared).toBe(0);
   });
   it("rechecks authority after asynchronous metadata validation before replacement", async () => {
     const index = readFileSync(join(root, ".git/index"));

@@ -13,6 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
@@ -50,6 +51,32 @@ export interface GitIndexTransaction {
 }
 
 /**
+ * Sees the index of a transaction while Git's own `index.lock` is held: `copied` receives the
+ * private copy before anything changed it (the live index as it stood under the lock), `prepared`
+ * the same copy once every check passed and right before it replaces the live index. A person's
+ * staging can land in neither moment, so the difference is exactly what the transaction wrote.
+ * An observer must not throw; it never decides the transaction.
+ */
+export interface GitIndexTransactionObserver {
+  readonly copied: (indexPath: string) => Promise<void>;
+  readonly prepared: (indexPath: string) => Promise<void>;
+}
+
+const observers = new AsyncLocalStorage<GitIndexTransactionObserver>();
+
+/** Runs `run`; every index transaction it starts (in its async context) reports to `observer`. */
+export function observeGitIndexTransactions<T>(
+  observer: GitIndexTransactionObserver,
+  run: () => Promise<T>,
+): Promise<T> {
+  return observers.run(observer, run);
+}
+
+async function notifyObserver(phase: "copied" | "prepared", indexPath: string): Promise<void> {
+  await observers.getStore()?.[phase](indexPath);
+}
+
+/**
  * Holds Git's own index.lock across the exact-candidate check and the atomic replacement.
  *
  * `fs` is the port the metadata base resolves through: a managed task worktree below the always-denied
@@ -82,6 +109,7 @@ export async function withGitIndexTransaction<T>(
     const indexExisted = await copyIndex(fs, base.path, temporaryIndexPath, () => {
       temporary.owned = true;
     });
+    await notifyObserver("copied", temporaryIndexPath);
     const result = await mutate({
       temporaryIndexPath,
       check,
@@ -92,6 +120,7 @@ export async function withGitIndexTransaction<T>(
       if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base.path)
         throw new Error("git-index-metadata-drift");
       if (!accept(result)) throw new Error("git-index-authority-denied");
+      await notifyObserver("prepared", temporaryIndexPath);
       for (const quarantine of quarantines) quarantine.publish();
       promoteIndex(base.path, temporaryIndexPath, indexExisted);
     }

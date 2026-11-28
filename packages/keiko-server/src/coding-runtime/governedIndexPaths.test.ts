@@ -43,12 +43,17 @@ describe("governed index paths", () => {
         ["src/a.ts", STAGED],
         ["docs/b.ts", STAGED],
       ]),
+      previous: new Map([
+        ["src/a.ts", AT_HEAD],
+        ["docs/b.ts", AT_HEAD],
+      ]),
       truncated: false,
     });
     expect(governedIndexRecord(second).paths).toEqual(["other.ts"]);
     expect(governedIndexRecord(run("none"))).toEqual({
       paths: [],
       written: new Map(),
+      previous: new Map(),
       truncated: false,
     });
   });

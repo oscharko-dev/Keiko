@@ -8,7 +8,11 @@ import {
 } from "./governedIndexPaths.js";
 import { observedGitRunner } from "../gitProcessActivity.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import {
+  type GitIndexTransactionObserver,
+  observeGitIndexTransactions,
+  withGitIndexTransaction,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 /**
@@ -226,8 +230,11 @@ function captureInto(root: string, record: { failure?: unknown }): Promise<Index
 
 /**
  * What one governed mutation changed in the index: the state before and after of every path under
- * `pathspecs` whose entry differs. `undefined` when either read cannot be proven; `[]` when the
- * mutation did not run.
+ * `pathspecs` whose entry differs. Both states are read from the mutation's own index transaction,
+ * while Git's `index.lock` is held: the private copy as it stood before the mutation touched it and
+ * the same copy right before it replaces the live index. A person's staging can land in neither
+ * moment, so it is never recorded as what Keiko wrote. `undefined` when a state cannot be proven or
+ * the mutation ran no index transaction; `[]` when the mutation did not succeed.
  */
 export async function readGovernedTransitions<T>(
   root: string,
@@ -235,20 +242,55 @@ export async function readGovernedTransitions<T>(
   mutate: () => Promise<T>,
   succeeded: (value: T) => boolean,
 ): Promise<{ value: T; transitions: readonly GovernedIndexTransition[] | undefined }> {
-  const run = gitRunner(root);
-  const before = await readStagedStates(run);
-  const value = await mutate();
+  const seen: TransactionStates[] = [];
+  const value = await observeGitIndexTransactions(transactionObserver(root, seen), mutate);
   if (!succeeded(value)) return { value, transitions: [] };
-  const after = await readStagedStates(run);
-  if (typeof before !== "object" || typeof after !== "object")
-    return { value, transitions: undefined };
-  const paths = new Set([...before.staged.keys(), ...after.staged.keys()]);
-  const transitions = [...paths]
-    .filter((path) => isGovernedIndexPath(path, pathspecs))
-    .sort(compareCodeUnits)
-    .map((path) => ({ path, before: stateOf(before, path), after: stateOf(after, path) }))
-    .filter((transition) => transition.before !== transition.after);
-  return { value, transitions };
+  const proven = seen.every((states) => states.after !== undefined);
+  if (seen.length === 0 || !proven) return { value, transitions: undefined };
+  return { value, transitions: mergeTransitions(seen, pathspecs) };
+}
+
+interface TransactionStates {
+  before: IndexRead | "failed";
+  after?: IndexRead | "failed";
+}
+
+/** Reads each transaction's index under the lock; a read that throws is an unproven state. */
+function transactionObserver(root: string, seen: TransactionStates[]): GitIndexTransactionObserver {
+  const readAt = async (indexPath: string): Promise<IndexRead | "failed"> => {
+    try {
+      return await readStagedStates(gitRunner(root, indexPath));
+    } catch {
+      return "failed";
+    }
+  };
+  return {
+    copied: async (indexPath): Promise<void> => {
+      seen.push({ before: await readAt(indexPath) });
+    },
+    prepared: async (indexPath): Promise<void> => {
+      const current = seen[seen.length - 1];
+      if (current !== undefined) current.after = await readAt(indexPath);
+    },
+  };
+}
+
+function mergeTransitions(
+  seen: readonly TransactionStates[],
+  pathspecs: readonly string[],
+): readonly GovernedIndexTransition[] | undefined {
+  const merged = new Map<string, GovernedIndexTransition>();
+  for (const { before, after } of seen) {
+    if (typeof before !== "object" || typeof after !== "object") return undefined;
+    const paths = new Set([...before.staged.keys(), ...after.staged.keys()]);
+    for (const path of [...paths].filter((name) => isGovernedIndexPath(name, pathspecs))) {
+      const first = merged.get(path)?.before ?? stateOf(before, path);
+      merged.set(path, { path, before: first, after: stateOf(after, path) });
+    }
+  }
+  return [...merged.values()]
+    .filter((transition) => transition.before !== transition.after)
+    .sort((left, right) => compareCodeUnits(left.path, right.path));
 }
 
 // One process against the symbolic HEAD; a branch without a commit (or any read that failed) takes
@@ -458,6 +500,7 @@ async function restoreTouched(
     left: images.left,
     touched: verdict.touched,
     written: governed.written,
+    previous: governed.previous,
   });
   return result.outcome === "restored" && verdict.unrecorded !== undefined
     ? { outcome: verdict.unrecorded, restoredCount: result.restoredCount }
@@ -478,6 +521,8 @@ interface RestorePlan {
   readonly touched: readonly string[];
   /** The entry governed staging wrote for each path: the only state an undo may take back. */
   readonly written: ReadonlyMap<string, string>;
+  /** The entry each path held before governed staging first changed it: what an undo puts back. */
+  readonly previous: ReadonlyMap<string, string>;
 }
 
 type TransactionResult = "applied" | "changed" | "failed";
@@ -489,7 +534,7 @@ async function restoreInTransaction(
   // A path the person had staged is put back one process at a time; beyond the bound the rest stay.
   let explicitSeen = 0;
   const restorable = plan.touched.filter(
-    (path) => stateOf(plan.start, path) === AT_HEAD || ++explicitSeen <= EXPLICIT_RESTORE_MAX,
+    (path) => targetOf(plan, path) === AT_HEAD || ++explicitSeen <= EXPLICIT_RESTORE_MAX,
   );
   const bounded: RestorePlan = { ...plan, touched: restorable };
   // An index that cannot be locked or copied throws: the caller logs it and reports `unavailable`.
@@ -525,12 +570,17 @@ async function restoreCopy(
   const held =
     typeof after === "object" &&
     after.headSha === plan.start.headSha &&
-    plan.touched.every((path) => stateOf(after, path) === stateOf(plan.start, path));
+    plan.touched.every((path) => stateOf(after, path) === targetOf(plan, path));
   return held ? "applied" : "failed";
 }
 
+/** The state an undo puts a path back to: the entry before governed staging first changed it. */
+function targetOf(plan: RestorePlan, path: string): string {
+  return plan.previous.get(path) ?? stateOf(plan.start, path);
+}
+
 async function applyStartState(run: GitRun, plan: RestorePlan): Promise<boolean> {
-  const atHead = plan.touched.filter((path) => stateOf(plan.start, path) === AT_HEAD);
+  const atHead = plan.touched.filter((path) => targetOf(plan, path) === AT_HEAD);
   for (let offset = 0; offset < atHead.length; offset += RESTORE_BATCH) {
     const batch = atHead.slice(offset, offset + RESTORE_BATCH);
     const restored = await run([
@@ -543,7 +593,7 @@ async function applyStartState(run: GitRun, plan: RestorePlan): Promise<boolean>
     if (!succeeded(restored)) return false;
   }
   for (const path of plan.touched) {
-    const state = stateOf(plan.start, path);
+    const state = targetOf(plan, path);
     if (state === AT_HEAD) continue;
     if (!(await restoreExplicit(run, path, state))) return false;
   }

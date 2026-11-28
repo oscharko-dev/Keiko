@@ -29,6 +29,12 @@ export interface GovernedIndexRecord {
   readonly paths: readonly string[];
   /** The index state each path held right after the governed mutation (`mode oid`, or `=head`). */
   readonly written: ReadonlyMap<string, string>;
+  /**
+   * The index state each path held right BEFORE the first governed mutation changed it. It is what
+   * an undo puts back, so an entry a person staged earlier in the turn is restored, not replaced by
+   * the turn-start entry.
+   */
+  readonly previous: ReadonlyMap<string, string>;
   /** The per-run cap cut paths, or a mutation's entries could not be read: the record is incomplete. */
   readonly truncated: boolean;
 }
@@ -42,6 +48,7 @@ export interface GovernedIndexTransition {
 
 interface Held {
   readonly written: Map<string, string>;
+  readonly previous: Map<string, string>;
   /** Paths a person changed between two governed mutations: never recorded again this turn. */
   readonly foreign: Set<string>;
   truncated: boolean;
@@ -50,7 +57,12 @@ interface Held {
 const records = new Map<string, Held>();
 
 function takeHeld(runId: string): Held {
-  const held = records.get(runId) ?? { written: new Map(), foreign: new Set(), truncated: false };
+  const held = records.get(runId) ?? {
+    written: new Map(),
+    previous: new Map(),
+    foreign: new Set(),
+    truncated: false,
+  };
   records.delete(runId);
   return held;
 }
@@ -69,9 +81,11 @@ function noteTransition(held: Held, { path, before, after }: GovernedIndexTransi
     // Someone else changed the entry between two governed mutations: the state to put back cannot
     // be proven, so the path counts as the person's.
     held.written.delete(path);
+    held.previous.delete(path);
     held.foreign.add(path);
   } else if (previous !== undefined || held.written.size < GOVERNED_INDEX_PATHS_MAX_PER_RUN) {
     held.written.set(path, after);
+    if (previous === undefined) held.previous.set(path, before);
   } else {
     held.truncated = true;
   }
@@ -100,6 +114,7 @@ export function governedIndexRecord(runId: string): GovernedIndexRecord {
   return {
     paths: [...(held?.written.keys() ?? [])],
     written: new Map(held?.written ?? []),
+    previous: new Map(held?.previous ?? []),
     truncated: held?.truncated ?? false,
   };
 }
