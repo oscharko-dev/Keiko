@@ -821,6 +821,8 @@ interface RepositorySurroundings {
 
 interface PreparedAcceptanceCase {
   readonly root: string;
+  /** The repository the workspace was selected from: a start states it as the expected workspace. */
+  readonly repository: string;
   readonly surroundings?: RepositorySurroundings;
   readonly owners: FunctionalTaskWorkspaceOwners;
   /** The folder the run works in, which the tester checks afterwards. */
@@ -870,7 +872,7 @@ async function observeAcceptanceCase(
   // case holds the person's home around the run alone and puts the real one back afterwards.
   const run = await aroundRun(prepared, acceptanceCase, async () => {
     const served = await serveAcceptance(prepared, script);
-    const runId = await startAcceptanceRun(served, acceptanceCase);
+    const runId = await startAcceptanceRun(served, acceptanceCase, prepared.repository);
     const editDone = (): boolean => readFileSync(target, "utf8") !== prepared.original;
     const asks = await settleAnsweringEveryAsk(
       served.orchestrator,
@@ -1106,6 +1108,7 @@ async function prepareAcceptanceCase(
   const surroundings = await prepareRepositorySurroundings(root, acceptanceCase);
   return {
     root,
+    repository,
     ...(surroundings === undefined ? {} : { surroundings }),
     owners,
     runRoot,
@@ -1288,11 +1291,13 @@ async function serveAcceptance(
 async function startAcceptanceRun(
   served: FunctionalDiscoveryServer,
   acceptanceCase: AcceptanceCase,
+  repository: string,
 ): Promise<string> {
   const started = await functionalPost(served.baseUrl, "/api/coding-workbench/runtime/runs", {
     requestId: `acceptance-${acceptanceCase.project}-${acceptanceCase.mode}-${String(acceptanceCase.login)}`,
     taskIntent: taskOf(acceptanceCase.project),
     requestedMode: acceptanceCase.mode,
+    expectedWorkspace: { root: repository },
   });
   const text = await started.clone().text();
   expect(started.status, text).toBe(200);

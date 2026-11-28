@@ -773,6 +773,7 @@ async function runAuthorityScenarios(
       taskIntent: SECRET,
       requestedMode: "supervised-coding",
       workspaceRoot: join(fixture.root, "outside"),
+      expectedWorkspace: { root: startRepository },
     }),
   ).resolves.toMatchObject({ status: 400 });
   fixture.drifted = true;
@@ -2243,6 +2244,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           requestId: `sync-${mode}`,
           taskIntent: SECRET,
           requestedMode: mode,
+          expectedWorkspace: { root: startRepository },
         });
         // The operator approves whatever the run asks; the asks are recorded by what they are.
         const asked: string[] = [];
@@ -2306,6 +2308,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           requestId: `branch-${mode}`,
           taskIntent: SECRET,
           requestedMode: mode,
+          expectedWorkspace: { root: startRepository },
         });
         // The operator approves whatever the run asks; the asks are recorded by what they are.
         const asked: string[] = [];
@@ -2435,6 +2438,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         requestId: `websearch-${mode}`,
         taskIntent: SECRET,
         requestedMode: mode,
+        expectedWorkspace: { root: startRepository },
       });
       // The search's answer (or its refusal) is the second model request's last message.
       await vi.waitFor(
