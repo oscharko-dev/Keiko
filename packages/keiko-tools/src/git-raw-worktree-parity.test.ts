@@ -154,6 +154,43 @@ describe("a tracked submodule whose directory entry is gone or replaced", () => 
   });
 });
 
+describe("a tracked submodule whose entry cannot be inspected", () => {
+  function nestedSubmodule(): string {
+    const root = repository();
+    const upstream = repository();
+    mkdirSync(join(root, "deep"));
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "deep/sub"]);
+    git(root, ["commit", "-qm", "add submodule"]);
+    return root;
+  }
+  it("reads a submodule below a parent that became a file as deleted, as git status does", async () => {
+    const root = nestedSubmodule();
+    rmSync(join(root, "deep"), { recursive: true, force: true });
+    writeFileSync(join(root, "deep"), "now a file\n");
+    expect(gitStatusTracked(root)).toContain(" D deep/sub");
+    expect(await readerStatus(root)).toContain(" D deep/sub");
+  });
+  // An entry that cannot be looked at (a parent without search permission) is not a deletion: the read
+  // fails with its cause instead of claiming one.
+  it.skipIf(process.getuid?.() === 0)(
+    "never claims a deletion for an unreadable entry",
+    async () => {
+      const root = nestedSubmodule();
+      chmodSync(join(root, "deep"), 0o000);
+      try {
+        const outcome = await readerStatus(root).then(
+          (lines) => lines,
+          (error: unknown) => error,
+        );
+        expect(outcome).toBeInstanceOf(Error);
+        expect((outcome as Error).message).not.toContain(" D ");
+      } finally {
+        chmodSync(join(root, "deep"), 0o755);
+      }
+    },
+  );
+});
+
 describe("a tracked symlink the staging lane would refuse", () => {
   it.each([
     ["absolute", "/etc/hosts"],

@@ -2728,6 +2728,8 @@ describe("productive runtime status/diff/stage lane", () => {
     it("answers a gitlink under a directory with a result the model can act on", async () => {
       mkdirSync(join(root, "src"));
       writeFileSync(join(root, "src", "value.js"), "export const value = 1;\n");
+      // An uninitialized submodule is an empty directory; a missing one is a deletion Git reports.
+      mkdirSync(join(root, "src", "sub"));
       git(["update-index", "--add", "--cacheinfo", `160000,${git(["rev-parse", "HEAD"])},src/sub`]);
       const gitService = indexService();
       const staged = await index(gitService, "stage", ["src"]);

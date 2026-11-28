@@ -544,12 +544,19 @@ async function settleConvertedFiles(
     return change.staged ? [{ ...change, worktreeStatus: " " as const, unstaged: false }] : [];
   });
 }
+// Only a path that is really gone (ENOENT, or a parent that is no directory: ENOTDIR) is a deletion.
+// Any other failure (EACCES, ELOOP, ...) says nothing about the entry and is never read as one: the
+// read fails with its cause instead of claiming a deletion.
 function gitlinkWorkingStatus(scan: ScanInputs, path: string): WorkingInspection {
-  const fs = workspaceFsOf(scan.deps);
   const absolute = join(scan.deps.workspace.root, path);
-  if (!fs.exists(absolute)) return { status: "D", bytes: 0, untracked: false };
-  const present = fs.stat(absolute).isDirectory;
-  return { status: present ? " " : "M", bytes: 0, untracked: false };
+  try {
+    const present = workspaceFsOf(scan.deps).stat(absolute).isDirectory;
+    return { status: present ? " " : "M", bytes: 0, untracked: false };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "D", bytes: 0, untracked: false };
+    throw error;
+  }
 }
 async function workingStatus(
   scan: ScanInputs,
