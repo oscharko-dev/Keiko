@@ -129365,7 +129365,7 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:254",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:259",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129405,7 +129405,7 @@
     {
       "op": "mcp.settings",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:109",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:113",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129960,7 +129960,7 @@
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1134",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1133",
       "package": "keiko-server"
     },
     {
