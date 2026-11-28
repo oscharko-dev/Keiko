@@ -71,6 +71,7 @@ import {
   adoptionFailedResult,
   checkoutUncertainResult,
   runTaskBranch,
+  taskBranchAskRefusal,
   TaskBranchAdoptionFailure,
   type RuntimeGitTaskBranchPort,
 } from "./runtimeGitBranch.js";
@@ -197,6 +198,9 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
       values: ["truncated", "exit-nonzero", "spawn-failed"],
     },
     truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // U-32: a task-branch step Keiko refused while it was still only an ask, before any approval
+    // card was shown; absent on every step that ran after a decision or without an ask.
+    refusedBeforeAsk: { type: "boolean", dataClass: "closed-enum", required: false },
     // #3902 AC2: the closed outcome of a fetch or pull (`GIT_SYNC_OUTCOMES`); the Git process lines
     // of the same correlation carry a failure's own error evidence.
     syncOutcome: {
@@ -270,6 +274,7 @@ interface RuntimeGitActivityFields {
   readonly countsUnavailable?: boolean;
   readonly readFailure?: GitReadFailureReason;
   readonly truncated?: boolean;
+  readonly refusedBeforeAsk?: boolean;
   readonly syncOutcome?: GitSyncOutcome;
   readonly failureKind?: string;
   readonly errorClass?: string;
@@ -549,6 +554,23 @@ function isRedemption(request: RuntimeGitRequest): request is Extract<
   );
 }
 
+// A task-branch ask whose run state could not be read: the structured failure, body-free, written
+// under the run's correlation before the ask goes on to a person (U-32).
+function logBranchAskUnreadable(
+  write: (extra: RuntimeGitActivityFields) => void,
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  write({
+    state: "failed",
+    refusedBeforeAsk: false,
+    failureKind: gitDeliveryActivityFailureKind(errorKindOf(error)),
+    errorClass: detail.errorClass,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
+}
+
 export class RuntimeGitService {
   private generation = 0;
   private branchStep: Promise<void> = Promise.resolve();
@@ -813,6 +835,34 @@ export class RuntimeGitService {
       ...(result.behind === undefined ? {} : { behind: result.behind }),
       truncated: result.truncated,
     };
+  }
+  /**
+   * U-32: the closed reason Keiko is already certain to refuse a task branch with, asked before a
+   * person is shown an approval card for it. The step's own name and scope checks answer it (never
+   * a second copy); the live Git checks stay with the step, which also stays the authoritative
+   * backstop because the run can change between the ask and the approval. Undefined whenever the
+   * state cannot be read (no live run, lapsed authority, a throwing workspace port): the ask then
+   * proceeds and the step judges after the approval, so this can only ever withhold a card.
+   */
+  public branchAskRefusal(branchName: string): CodingRuntimeGitBranch["reason"] | undefined {
+    const context = this.options.context();
+    if (context?.stillAuthorized() !== true) return undefined;
+    try {
+      const reason = taskBranchAskRefusal({ context, port: this.options.taskBranch, branchName });
+      if (reason !== undefined)
+        this.log(
+          context,
+          "branch",
+          { state: "refused", reason, refusedBeforeAsk: true },
+          "refused",
+        );
+      return reason;
+    } catch (error) {
+      logBranchAskUnreadable((extra) => {
+        this.log(context, "branch", extra, "failed");
+      }, error);
+      return undefined;
+    }
   }
   // #3907: one governed task branch for a run standing on its base branch (runtimeGitBranch.ts).
   // Whatever the branch change made stale, commit and push proposals and the verification they

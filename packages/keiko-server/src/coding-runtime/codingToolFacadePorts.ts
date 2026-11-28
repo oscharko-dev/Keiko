@@ -582,6 +582,13 @@ export interface CodingToolFacade {
   readonly nativeEffect?: CodingToolNativeEffectFacet | undefined;
   /** Run evidence for native tool calls that executed outside `execute()`; absent counts nothing. */
   readonly nativeSettlement?: CodingToolNativeSettlementFacet | undefined;
+  /**
+   * A task-branch ask Keiko is already certain to refuse, answered with the refusal the step itself
+   * gives, so no approval card is raised for it (U-32). Undefined admits the ask; the step stays
+   * the authoritative check after a decision. Absent wirings admit every ask.
+   */
+  readonly branchAsk?:
+    { readonly refusal: (branchName: string) => CodingToolResult | undefined } | undefined;
   /** Inactive accepted initial acquisition; no model/HTTP dispatch surface. */
   readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */

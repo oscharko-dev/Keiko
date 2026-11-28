@@ -33029,6 +33029,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      refusedBeforeAsk: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       syncOutcome: {
         type: "string",
         dataClass: "closed-enum",

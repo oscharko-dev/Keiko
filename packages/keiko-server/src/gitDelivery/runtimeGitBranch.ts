@@ -93,13 +93,31 @@ function branchResult(
   };
 }
 
-function scopeRefusal(input: RuntimeGitBranchInput): Refusal | undefined {
+function scopeRefusal(
+  input: Pick<RuntimeGitBranchInput, "port"> & {
+    readonly context: Pick<VerifiedCommitRunContext, "headRef" | "baseRef">;
+  },
+): Refusal | undefined {
   // Only a run standing on its own base branch can have a task branch made for it; a run that
   // already works on a task branch keeps it.
   if (input.context.headRef !== input.context.baseRef) return "not-on-base";
   if (input.port === undefined) return "not-local-checkout";
   const admission = input.port.admit();
   return admission === "admitted" ? undefined : admission;
+}
+
+/**
+ * Every refusal of a task-branch step that needs no Git read: the name and the run's scope. The
+ * step itself checks exactly these first, and a task-branch ask asks them again BEFORE a person is
+ * shown a card (U-32), so a refusal Keiko is certain of is never put to a human to approve. The
+ * live Git checks (an existing branch, the kernel's preflight) stay with the step.
+ */
+export function taskBranchAskRefusal(
+  input: Pick<RuntimeGitBranchInput, "port" | "branchName"> & {
+    readonly context: Pick<VerifiedCommitRunContext, "headRef" | "baseRef">;
+  },
+): Refusal | undefined {
+  return taskBranchNameRefusal(input.branchName) ?? scopeRefusal(input);
 }
 
 function governedDeps(input: RuntimeGitBranchInput): Parameters<typeof readGitWorktreeSnapshot>[0] {
@@ -307,7 +325,7 @@ async function adoptOrRestore(input: RuntimeGitBranchInput): Promise<CodingRunti
  */
 export async function runTaskBranch(input: RuntimeGitBranchInput): Promise<CodingRuntimeGitBranch> {
   const name = input.branchName;
-  const refusal = taskBranchNameRefusal(name) ?? scopeRefusal(input);
+  const refusal = taskBranchAskRefusal(input);
   if (refusal !== undefined) return branchResult("blocked", refusal, name);
   const existing = await existingBranch(input);
   if (existing === "elsewhere") return branchResult("blocked", "branch-exists", name);

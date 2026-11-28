@@ -150,7 +150,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { dirname } from "node:path";
-import { createCodingToolFacade } from "./codingToolFacade.js";
+import { blockedBranchToolResult, createCodingToolFacade } from "./codingToolFacade.js";
 import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
@@ -1254,7 +1254,9 @@ function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   const acceptedInitialization = facade.acceptedInitialization;
   const nativeEffect = facade.nativeEffect;
   const nativeSettlement = facade.nativeSettlement;
+  const branchAsk = facade.branchAsk;
   return {
+    ...(branchAsk === undefined ? {} : { branchAsk }),
     ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
     ...(nativeEffect === undefined ? {} : { nativeEffect }),
@@ -12591,6 +12593,84 @@ describe("a governed task-branch ask naming an unsafe branch", () => {
       } finally {
         await fixture.stop();
       }
+    },
+  );
+});
+
+// U-32: a task branch the run's own state already refuses (it stands on a task branch) is answered
+// with the step's refusal on the ask lane, in every mode that asks, so no person approves it first.
+describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const askBody = JSON.stringify({
+    action: "permission-request",
+    runId: FIXTURE_RUN_ID,
+    actionId: "ses_tool:call_branch",
+    properties: { metadata: { actionKind: "git-branch", branchName: "feat/u27-branch-check" } },
+  });
+
+  async function askBranch(
+    mode: "governed-assist" | "supervised-coding",
+    refusal: CodingToolResult | undefined,
+  ): Promise<{
+    readonly status: number;
+    readonly body: string;
+    readonly asked: boolean;
+    readonly consulted: readonly string[];
+  }> {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const consulted: string[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] })),
+        branchAsk: {
+          refusal: (name) => {
+            consulted.push(name);
+            return refusal;
+          },
+        },
+      },
+      undefined,
+      { mode, runtimeEvents },
+    );
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: askBody,
+      });
+      return {
+        status: response.status,
+        body: response.body,
+        asked: runtimeEvents.some((event) => event.kind === "permission-requested"),
+        consulted,
+      };
+    } finally {
+      await fixture.stop();
+    }
+  }
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "answers the step's own blocked result without a card in %s",
+    async (mode) => {
+      const refusal = blockedBranchToolResult("not-on-base", "feat/u27-branch-check");
+      const answered = await askBranch(mode, refusal);
+      expect(answered.status).toBe(409);
+      expect(JSON.parse(answered.body)).toEqual(refusal);
+      expect(JSON.parse(answered.body)).toMatchObject({
+        git: { kind: "branch", status: "blocked", reason: "not-on-base" },
+        guidance: expect.stringContaining("already works on its own task branch") as string,
+      });
+      expect(answered.asked).toBe(false);
+      expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still takes an ask nothing refuses to the person in %s",
+    async (mode) => {
+      const answered = await askBranch(mode, undefined);
+      expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+      expect(answered.body).not.toContain('"kind":"branch"');
     },
   );
 });

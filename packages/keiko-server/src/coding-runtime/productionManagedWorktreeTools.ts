@@ -74,7 +74,10 @@ import {
   type CodingToolAuthorityContextProvider,
   type CommitExecutionApproval,
 } from "./codingToolAuthorityPort.js";
-import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
+import {
+  blockedBranchToolResult,
+  type GovernedVerificationReasonCode,
+} from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type {
   CodingToolEditOutcome,
@@ -815,7 +818,27 @@ export function createProductionManagedWorktreeToolFacade(
     },
   );
   const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
-  return acceptedInitialization === undefined ? facade : { ...facade, acceptedInitialization };
+  const withBranchAsk = { ...facade, ...branchAskFacet(input) };
+  return acceptedInitialization === undefined
+    ? withBranchAsk
+    : { ...withBranchAsk, acceptedInitialization };
+}
+
+// A task-branch ask the run's own branch step is certain to refuse (U-32). A plain folder has no
+// repository and no Git service: its asks stay with the step's own refusal.
+function branchAskFacet(
+  input: ProductionManagedWorktreeToolInput,
+): Pick<CodingToolFacade, "branchAsk"> {
+  const service = input.runtimeGitService;
+  if (service === undefined || input.workspaceKind === "folder") return {};
+  return {
+    branchAsk: {
+      refusal: (branchName): ReturnType<typeof blockedBranchToolResult> | undefined => {
+        const reason = service.branchAskRefusal(branchName);
+        return reason === undefined ? undefined : blockedBranchToolResult(reason, branchName);
+      },
+    },
+  };
 }
 
 function managedWorktreeAuthorityContext(

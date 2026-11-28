@@ -12,6 +12,8 @@ import { emitToolHandlerFailure } from "./codingToolFacadeFailure.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   isCodingRuntimeGitResult,
+  isSafeTaskBranchName,
+  type CodingRuntimeGitBranch,
   type CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
@@ -1543,7 +1545,25 @@ const HUMAN_DECISION_GUIDANCE = {
  * the model can tell a bad name from a human denial (U-27).
  */
 export function invalidBranchNameToolResult(): CodingToolResult {
-  const git = { kind: "branch", status: "blocked", reason: "invalid-name" } as const;
+  return blockedBranchToolResult("invalid-name");
+}
+
+/**
+ * The blocked result of a task branch Keiko refuses, shared by the step that runs after a decision
+ * and the ask that is refused before one (U-32): one result and one guidance for either, so the
+ * model cannot tell an early refusal from a late one. The name is echoed only when it is a safe,
+ * option-free ref name, exactly as the step does.
+ */
+export function blockedBranchToolResult(
+  reason: CodingRuntimeGitBranch["reason"],
+  branchName?: string,
+): CodingToolResult {
+  const git: CodingRuntimeGitBranch = {
+    kind: "branch",
+    status: "blocked",
+    reason,
+    ...(branchName !== undefined && isSafeTaskBranchName(branchName) ? { branch: branchName } : {}),
+  };
   return {
     status: "completed",
     evidence: [{ kind: "governed-delegate", code: "completed" }],

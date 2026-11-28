@@ -597,6 +597,75 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
 });
 
 // Every way the kernel can stop a branch step, in the tool's closed words (#3907).
+// U-32: a task branch Keiko is certain to refuse is refused while it is still an ask, with the
+// reason the step itself gives after a decision; the step stays the authoritative backstop.
+describe("a task-branch ask Keiko is certain to refuse (U-32)", () => {
+  it("is admitted for a run on its base branch in a Local checkout", () => {
+    expect(service().branchAskRefusal("feature/x")).toBeUndefined();
+    expect(branchLines()).toEqual([]);
+  });
+
+  it("refuses a run already on a task branch with the reason the step gives, and logs it", async () => {
+    runHead = "feature/already";
+    git(root, ["checkout", "-qb", "feature/already"]);
+    const asked = service().branchAskRefusal("feature/x");
+    expect(asked).toBe("not-on-base");
+    const [line] = branchLines();
+    expect(line).toMatchObject({
+      correlationId: "runtime-git-branch-test",
+      level: "warn",
+      extra: { phase: "branch", state: "refused", reason: "not-on-base", refusedBeforeAsk: true },
+    });
+    expect(JSON.stringify(line)).not.toContain("feature/x");
+    // The step after an approval says exactly the same, so the two never drift apart.
+    await expect(branch(service(), "feature/x")).resolves.toMatchObject({
+      status: "blocked",
+      reason: asked,
+    });
+  });
+
+  it.each(["not-local-checkout", "not-on-base", "executable-filters"] as const)(
+    "refuses when the workspace says %s",
+    (reason) => {
+      admission = reason;
+      expect(service().branchAskRefusal("feature/x")).toBe(reason);
+    },
+  );
+
+  it.each([
+    ["main", "protected-name"],
+    ["a b", "invalid-name"],
+  ] as const)("refuses the name %j as %s", (name, reason) => {
+    expect(service().branchAskRefusal(name)).toBe(reason);
+  });
+
+  it("refuses every ask when the run has no workspace port, as the step does", () => {
+    expect(service("none").branchAskRefusal("feature/x")).toBe("not-local-checkout");
+  });
+
+  it("never refuses, and says why, when the workspace cannot be read", () => {
+    const unreadable: RuntimeGitTaskBranchPort = {
+      admit: (): never => {
+        throw new TypeError("workspace record unreadable");
+      },
+      adopt: (): boolean => false,
+    };
+    expect(service(unreadable).branchAskRefusal("feature/x")).toBeUndefined();
+    const [line] = branchLines();
+    expect(line).toMatchObject({
+      level: "warn",
+      extra: { phase: "branch", state: "failed", errorClass: "TypeError", refusedBeforeAsk: false },
+    });
+    expect(JSON.stringify(line)).not.toContain("unreadable");
+  });
+
+  it("asks nothing of a run that is not live, leaving the decision to the step", () => {
+    live = false;
+    expect(service().branchAskRefusal("feature/x")).toBeUndefined();
+    expect(branchLines()).toEqual([]);
+  });
+});
+
 describe("the closed result of a stopped kernel outcome", () => {
   const executionResult = { schemaVersion: "1", outcome: "failed", durationMs: 0 } as never;
   it.each([

@@ -38945,6 +38945,12 @@
               "required": false
             },
             {
+              "name": "refusedBeforeAsk",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "requestedCount",
               "type": "integer",
               "dataClass": "count",

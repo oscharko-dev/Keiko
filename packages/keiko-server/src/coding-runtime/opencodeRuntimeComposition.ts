@@ -5197,28 +5197,31 @@ function parseV2PermissionRequest(
   return value?.action === "permission-request" ? value : undefined;
 }
 
-function branchAskNamesUnsafeBranch(value: Readonly<Record<string, unknown>>): boolean {
+// The task branch a governed branch ask names, when it names one at all.
+function branchAskName(value: Readonly<Record<string, unknown>>): string | undefined {
   const metadata = v2Record(v2Record(value.properties)?.metadata);
-  return (
-    metadata?.actionKind === "git-branch" &&
-    typeof metadata.branchName === "string" &&
-    !isSafeTaskBranchName(metadata.branchName)
-  );
+  return metadata?.actionKind === "git-branch" && typeof metadata.branchName === "string"
+    ? metadata.branchName
+    : undefined;
 }
 
-// A branch name Keiko would refuse at execution is answered as that refusal, never asked of a
-// person and never mistaken for a human denial (U-27).
-function unsafeBranchRefusal(
+// A task branch Keiko would refuse anyway is answered as that refusal, never asked of a person and
+// never mistaken for a human denial: an unsafe name (U-27), and any refusal the run's own state
+// already settles, such as a run that is not on its base branch (U-32). The step after an approval
+// stays the authoritative check; this only withholds a card that could not change the outcome.
+function branchAskRefusal(
   run: PreparedRun | undefined,
   value: Readonly<Record<string, unknown>>,
+  deps: ToolBridgeExecutionDeps,
 ): OpenCodeToolBridgeResponse | undefined {
-  return run !== undefined && branchAskNamesUnsafeBranch(value)
-    ? {
-        status: 409,
-        body: JSON.stringify(invalidBranchNameToolResult()),
-        rejection: "branch-name-refused",
-      }
-    : undefined;
+  const name = branchAskName(value);
+  if (run === undefined || name === undefined) return undefined;
+  const refusal = isSafeTaskBranchName(name)
+    ? deps.facade.branchAsk?.refusal(name)
+    : invalidBranchNameToolResult();
+  return refusal === undefined
+    ? undefined
+    : { status: 409, body: JSON.stringify(refusal), rejection: "branch-name-refused" };
 }
 
 async function handleV2PermissionRequest(
@@ -5230,8 +5233,8 @@ async function handleV2PermissionRequest(
 ): Promise<OpenCodeToolBridgeResponse> {
   const run = typeof value.runId === "string" ? runs.get(value.runId) : undefined;
   if (signal?.aborted === true) return refusedApproval("cancelled");
-  const unsafeBranch = unsafeBranchRefusal(run, value);
-  if (unsafeBranch !== undefined) return unsafeBranch;
+  const refusedBranch = branchAskRefusal(run, value, deps);
+  if (refusedBranch !== undefined) return refusedBranch;
   if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
     return refusedApproval("unavailable");
   const decision = await approvals.request({
