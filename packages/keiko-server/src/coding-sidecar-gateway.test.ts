@@ -12842,6 +12842,7 @@ describe("coding-sidecar gateway route prompt calibration", () => {
       messages: Message[],
       usage: Partial<NormalizedResponse["usage"]>,
       observed: number[] = [],
+      settled: { reserved: number; actual: number }[] = [],
     ): Promise<unknown> {
       resetGatewayInstanceCacheForTests();
       const reply = {
@@ -12860,7 +12861,11 @@ describe("coding-sidecar gateway route prompt calibration", () => {
             observeProviderPromptTokens: (_capability: string, tokens: number): void => {
               observed.push(tokens);
             },
-          } as NonNullable<UiHandlerDeps["runtimeCapabilityAuthenticator"]>,
+            settlePromptTokens: (_capability: string, reserved: number, actual: number) => {
+              settled.push({ reserved, actual });
+              return { ok: true };
+            },
+          } as unknown as NonNullable<UiHandlerDeps["runtimeCapabilityAuthenticator"]>,
         },
       );
     }
@@ -12868,9 +12873,12 @@ describe("coding-sidecar gateway route prompt calibration", () => {
     it("calibrates and observes the total prompt count, not the uncached part", async () => {
       const sink = captureServerLog("info");
       const observed: number[] = [];
+      const settled: { reserved: number; actual: number }[] = [];
       const first = firstTurn();
-      await turn(first, { promptTokens: 5_000, totalPromptTokens: 60_250 }, observed);
+      await turn(first, { promptTokens: 5_000, totalPromptTokens: 60_250 }, observed, settled);
       expect(observed).toEqual([60_250]);
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.actual).toBe(60_250);
       await turn(extend(first, 30_000), { promptTokens: 5_000, totalPromptTokens: 61_000 });
       const validated = sink.events.filter(
         (event) => event.op === "coding-sidecar.gateway.request-validated",
@@ -12881,7 +12889,20 @@ describe("coding-sidecar gateway route prompt calibration", () => {
     it("never calibrates from a report whose cache layout is ambiguous", async () => {
       const sink = captureServerLog("info");
       const first = firstTurn();
-      await turn(first, { promptTokens: 60_250, promptCacheLayoutAmbiguous: true });
+      const observed: number[] = [];
+      const settled: { reserved: number; actual: number }[] = [];
+      await turn(
+        first,
+        { promptTokens: 60_250, promptCacheLayoutAmbiguous: true },
+        observed,
+        settled,
+      );
+      // The figure is the prompt or only its uncached part: it is not the run's measured context
+      // size, and the call settles on the reserved estimate rather than as provider-reported.
+      expect(observed).toEqual([]);
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.actual).toBe(settled[0]?.reserved);
+      expect(settled[0]?.actual).not.toBe(60_250);
       const second = await turn(extend(first, 30_000), { promptTokens: 61_000 });
       expect(second).toMatchObject({ status: 400 });
       expect(

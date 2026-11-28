@@ -241,13 +241,10 @@ function observedPromptSettlement(
 function observeReportedPromptUsage(
   deps: UiHandlerDeps,
   reservation: PromptTokenReservation,
-  usage: NormalizedResponse["usage"] | undefined,
   promptTokens: number,
 ): void {
-  // An ambiguous cache layout cannot say whether the figure is the prompt's size or only its
-  // uncached part, so it is never offered to the ledger (the shared gateway's rule).
-  if (usage !== undefined && calibrationLayout(usage) === "known")
-    recordRoutePromptUsage(reservation.calibrationMark, promptTokens);
+  // Only a report whose cache layout is known reaches here (see `settlePromptTokenReservation`).
+  recordRoutePromptUsage(reservation.calibrationMark, promptTokens);
   runtimeCapabilityAuthenticator(deps)?.observeProviderPromptTokens?.(
     reservation.capability,
     promptTokens,
@@ -274,11 +271,19 @@ function settlePromptTokenReservation(
   // beside `prompt_tokens` included, so a cache-exclusive provider cannot under-calibrate.
   const actualPromptTokens =
     reportedUsage === undefined ? undefined : calibrationPromptTokens(reportedUsage);
-  const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  // An ambiguous cache layout cannot say whether the figure is the prompt's size or only its
+  // uncached part: it is neither calibrated from, nor shown as the run's measured context size, nor
+  // settled as provider-reported. The call settles on the reserved estimate, labelled as such, so a
+  // real figure is never presented as a measurement it is not (the shared gateway's rule).
+  const providerReported =
+    actualPromptTokens !== undefined &&
+    actualPromptTokens > 0 &&
+    reportedUsage !== undefined &&
+    calibrationLayout(reportedUsage) === "known";
   // The run's context usage reads the prompt size the provider reported for this call: the one
   // fact every native run sends through this gateway, whatever events its runtime emits (#4359).
   if (providerReported && !reservation.settled)
-    observeReportedPromptUsage(deps, reservation, reportedUsage, actualPromptTokens);
+    observeReportedPromptUsage(deps, reservation, actualPromptTokens);
   return applyPromptTokenSettlement(deps, reservation, {
     promptTokens:
       (providerReported ? actualPromptTokens : reservation.reservedPromptTokens) +
