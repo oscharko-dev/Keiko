@@ -1237,6 +1237,11 @@ describe("exact-file staging under text and eol attributes", () => {
     ["* text eol=lf", "false", "exact", "crlf"],
     ["* text", "false", "exact", "crlf"],
     ["* text=auto", "input", "autocrlf-input", "crlf"],
+    // Equal clean hashes are no proof of a byte-identical checkout: a line-feed file under a
+    // declared CRLF checkout is written back with CRLF.
+    ["* text eol=crlf", "false", "exact", "lf"],
+    ["* eol=crlf", "input", "autocrlf-input", "lf"],
+    ["* text=auto eol=crlf", "false", "exact", "lf"],
   ] as const)(
     "refuses under %j with core.autocrlf=%s (%s) a %s file Git would check out differently",
     async (attributes, autocrlf, lineEndings, content) => {
