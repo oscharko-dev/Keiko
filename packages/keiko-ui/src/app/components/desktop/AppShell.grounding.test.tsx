@@ -424,6 +424,7 @@ import {
   GatewaySetupLoading,
   mutationWithTimeout,
   openOrFocusSearchWindow,
+  openShellTool,
   resolveSearchRoot,
 } from "./AppShell";
 
@@ -3802,6 +3803,18 @@ describe("AppShell grounding connections", () => {
     expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalled();
     rafSpy.mockRestore();
+  });
+
+  // Review #4573 finding 37: a refused open at the window limit changed nothing, so it is blocked
+  // and writes no undo entry.
+  it("reports a Search or Git open the window limit refused as blocked, and an accepted one as open", (): void => {
+    const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValue(null);
+    expect(openShellTool(api, "search", true, false, "/repo", undefined)).toBe("blocked");
+    expect(openShellTool(api, "governedGit", false, true, undefined, "/repo")).toBe("blocked");
+    vi.mocked(api.add).mockReturnValue("window-1");
+    expect(openShellTool(api, "search", true, false, "/repo", undefined)).toBe("open");
+    expect(openShellTool(api, "governedGit", false, true, undefined, "/repo")).toBe("open");
   });
 
   it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", (): void => {

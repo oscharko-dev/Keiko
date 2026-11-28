@@ -450,11 +450,16 @@ function panelBindingRoot(
   return panel === "search" ? resolveSearchRoot(null, win) : gitWindowRoot(win);
 }
 
-export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefined): void {
+export function openOrFocusSearchWindow(
+  api: WorkspaceApi,
+  root: string | undefined,
+): string | null {
   // WorkspaceApi.add is the singleton-aware open/focus operation. Passing an explicit undefined
   // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
-  api.add("search", { root });
-  dispatchWorkspaceSearchFocus();
+  // It answers null when the window limit refused the window: nothing opened, nothing to focus.
+  const id = api.add("search", { root });
+  if (id !== null) dispatchWorkspaceSearchFocus();
+  return id;
 }
 
 // Body-free: only the closed reason is reported, never the repository path, and once per
@@ -488,7 +493,7 @@ function pushPanelToggleUnlessNoop(
   if (outcome !== "raise" && outcome !== "blocked") undoStack.push(action);
 }
 
-function openShellTool(
+export function openShellTool(
   api: WorkspaceApi,
   panel: WindowType,
   opensSearch: boolean,
@@ -497,15 +502,14 @@ function openShellTool(
   projectRoot: string | undefined,
 ): ToolToggleOutcome {
   if (opensSearch) {
-    openOrFocusSearchWindow(api, searchRoot);
-    return "open";
+    return openOrFocusSearchWindow(api, searchRoot) === null ? "blocked" : "open";
   }
   if (opensProjectGit) {
-    api.add("governedGit", {
+    const id = api.add("governedGit", {
       projectPath: projectRoot,
       rootBinding: projectRoot === undefined ? undefined : "coding-repository",
     });
-    return "open";
+    return id === null ? "blocked" : "open";
   }
   return api.toggleTool(panel);
 }
