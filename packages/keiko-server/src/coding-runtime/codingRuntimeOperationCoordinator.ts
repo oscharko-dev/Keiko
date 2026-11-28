@@ -327,6 +327,8 @@ function reservedGeneration(
   return reservation === undefined ? undefined : reservation.generation;
 }
 
+// Follow-ups, inbox and questions need a live turn: a separate rule from the revert states, which
+// the shared contract owns and which also include the held ones.
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
@@ -528,8 +530,8 @@ export class CodingRuntimeOperationCoordinator {
   }
 
   /**
-   * Undo or restore of the run's newest turn (B3, S04), admitted while the run is running or paused
-   * like a follow-up. An undo stops the turn in flight, so it reserves the next task generation
+   * Undo or restore of the run's newest turn (B3, S04), admitted while the run is running or paused, or
+   * settled and held for its undo window (succeeded or failed). An undo stops the turn in flight, so it reserves the next task generation
    * first: the cancelled outcome of the interrupted turn is then dropped instead of settling the
    * run the human keeps. The run stays live and idle; the human restores the undo, or stops it.
    */
