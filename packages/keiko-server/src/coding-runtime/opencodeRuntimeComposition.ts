@@ -5251,9 +5251,17 @@ function branchAskRefusal(
     recordBranchAskPrecheckFailure(deps.diagnostics, run.runId, error);
     return undefined;
   }
-  return refusal === undefined
-    ? undefined
-    : { status: 409, body: JSON.stringify(refusal), rejection: "branch-name-refused" };
+  if (refusal === undefined) return undefined;
+  // The refusal reaches the model as the call's own result, so the native tool ends as completed;
+  // without Keiko's verdict the row read "Succeeded" for a branch that was never created (U-43).
+  // The closed Git outcome names why, exactly as for a step refused after an approval.
+  settleSafeTool(
+    deps.settleTool,
+    typeof value.actionId === "string" ? value.actionId : undefined,
+    "succeeded",
+    codingToolGitPresentation(refusal),
+  );
+  return { status: 409, body: JSON.stringify(refusal), rejection: "branch-name-refused" };
 }
 
 async function handleV2PermissionRequest(

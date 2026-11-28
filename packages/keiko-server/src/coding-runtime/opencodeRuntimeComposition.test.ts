@@ -12666,6 +12666,65 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
     },
   );
 
+  // U-43: the refused call's row must carry Keiko's verdict (the closed Git outcome), never the
+  // native tool's own "completed" alone, which read as a green check for a branch never created.
+  async function settledBranchAsk(
+    refusal: CodingToolResult | undefined,
+  ): Promise<{ readonly status: number; readonly settlements: readonly unknown[] }> {
+    const settlements: unknown[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] })),
+        branchAsk: { refusal: () => refusal },
+      },
+      undefined,
+      {
+        mode: "governed-assist",
+        safeActivity: {
+          arm: vi.fn(),
+          clear: vi.fn(),
+          ingest: () => true,
+          recordDrops: vi.fn(),
+          settleTool: (settlement): void => {
+            settlements.push(settlement);
+          },
+        },
+      },
+    );
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: askBody,
+      });
+      return { status: response.status, settlements };
+    } finally {
+      await fixture.stop();
+    }
+  }
+
+  it.each([
+    ["protected-name", "branch-protected-name"],
+    ["not-on-base", "branch-not-on-base"],
+  ] as const)(
+    "settles a branch refused for %s with the closed %s outcome on the tool row",
+    async (reason, gitOutcome) => {
+      const answered = await settledBranchAsk(
+        blockedBranchToolResult(reason, "feat/u27-branch-check"),
+      );
+      expect(answered.status).toBe(409);
+      expect(answered.settlements).toHaveLength(1);
+      expect(answered.settlements[0]).toMatchObject({
+        actionId: "ses_tool:call_branch",
+        presentation: { gitOutcome },
+      });
+    },
+  );
+
+  it("settles nothing for a branch ask no refusal covers", async () => {
+    expect((await settledBranchAsk(undefined)).settlements).toEqual([]);
+  });
+
   it.each(["governed-assist", "supervised-coding"] as const)(
     "falls back to asking, without a 409 or a rejection, when the precheck throws in %s",
     async (mode) => {

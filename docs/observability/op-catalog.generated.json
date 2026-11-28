@@ -129219,21 +129219,21 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5615",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5623",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5684",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5692",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5739",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5747",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
