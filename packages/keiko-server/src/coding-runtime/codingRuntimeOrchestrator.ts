@@ -1389,7 +1389,10 @@ type StartScopeGap =
   | "no-principal"
   | "conversation-not-admitted"
   | "prior-run-missing"
-  | "workspace-selection-mismatch";
+  | "workspace-selection-mismatch"
+  // The request states no repository (a stale window): the selection guard cannot run, so the start
+  // stays refused.
+  | "expected-workspace-missing";
 
 // A wake continues on the model its task last used, except the generic `coding` alias.
 function wakeModelSelection(modelId: string | undefined): { readonly modelId?: string } {
@@ -2411,6 +2414,9 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeStartResult> {
     // A start still queued in the serial lane when the server began shutting down launches nothing.
     if (this.shutdownBegan()) return this.fail("runtime-unavailable");
+    if (statesNoExpectedWorkspace(input)) {
+      return this.refuseStartScope({ gap: "expected-workspace-missing" }, correlationId);
+    }
     if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
     this.activeRunId = undefined;
     this.activeEffectiveMode = undefined;
@@ -4665,9 +4671,11 @@ export class CodingRuntimeOrchestrator {
     return {
       ok: false,
       failureCode:
-        scope.gap === "workspace-selection-mismatch" || scope.gap === "no-active-workspace"
-          ? "workspace-selection-mismatch"
-          : "authority-resolution-failed",
+        scope.gap === "expected-workspace-missing"
+          ? "expected-workspace-missing"
+          : scope.gap === "workspace-selection-mismatch" || scope.gap === "no-active-workspace"
+            ? "workspace-selection-mismatch"
+            : "authority-resolution-failed",
     };
   }
 
@@ -6121,4 +6129,15 @@ function scheduledWakeRefusal(code: CodingWorkbenchRuntimeStartFailureCode): Sch
   if (code === "active-run-conflict") return "active-run-conflict";
   if (code === "authority-resolution-failed") return "authority-resolution-failed";
   return code === "invalid-intent" ? "invalid-intent" : "start-failed";
+}
+
+// A well-formed request object that omits `expectedWorkspace` entirely: the one shape a UI bundle
+// opened before the field existed sends. Any other malformed input stays an invalid intent.
+function statesNoExpectedWorkspace(input: unknown): boolean {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    !("expectedWorkspace" in input)
+  );
 }

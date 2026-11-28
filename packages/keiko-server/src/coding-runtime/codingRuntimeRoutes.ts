@@ -124,6 +124,7 @@ const RUNTIME_REFUSAL_REASONS = [
   "model-unavailable",
   "workspace-unqualified",
   "workspace-selection-mismatch",
+  "expected-workspace-missing",
   "workspace-location-unsupported",
   "workspace-volume-unsupported",
   "start-abandoned",
@@ -193,6 +194,7 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
   "workspace-selection-mismatch": "conflict",
+  "expected-workspace-missing": "conflict",
   "workspace-location-unsupported": "conflict",
   "workspace-volume-unsupported": "conflict",
   "active-run-conflict": "conflict",
@@ -288,6 +290,7 @@ function failureStatus(failureCode: CodingWorkbenchRuntimeStartFailureCode): num
     failureCode === "model-unavailable" ||
     failureCode === "workspace-unqualified" ||
     failureCode === "workspace-selection-mismatch" ||
+    failureCode === "expected-workspace-missing" ||
     failureCode === "workspace-location-unsupported" ||
     failureCode === "workspace-volume-unsupported"
   )
@@ -307,7 +310,10 @@ function failureResult(
     body: {
       ...errorBody(
         `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
-        "Runtime request was rejected.",
+        // A window opened before an upgrade shows only this sentence: it must name the next step.
+        failureCode === "expected-workspace-missing"
+          ? "This window is out of date. Reload this window, then start again."
+          : "Runtime request was rejected.",
         correlationId,
       ),
       ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),

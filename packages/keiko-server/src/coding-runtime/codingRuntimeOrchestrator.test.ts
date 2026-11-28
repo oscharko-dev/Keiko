@@ -3530,6 +3530,28 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(serialized).not.toContain(ACTIVE_REPOSITORY_ROOT);
   });
 
+  // A window opened before the upgrade sends no `expectedWorkspace`. The start stays refused (the
+  // selection guard cannot run), with a named, recoverable reason instead of a contract error.
+  it("refuses a start that states no repository with a named, recoverable reason", async () => {
+    const captured = captureDiagnostics();
+    const f = fixtureFrom({ diagnostics: captured.diagnostics });
+    const { expectedWorkspace: _stated, ...unstated } = start;
+
+    expect(await f.orchestrator.start(unstated, "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b14")).toEqual({
+      ok: false,
+      failureCode: "expected-workspace-missing",
+    });
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    expect(f.rows.size).toBe(0);
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b14",
+        operation: "coding-runtime.start",
+        code: "stage=start-scope:reason=expected-workspace-missing",
+      }),
+    );
+  });
+
   // A repository deleted and cloned again at the same path invalidates the server's active
   // pointer while the window still shows it. The start is refused with the named, recoverable
   // selection refusal (the window re-reads and re-binds), never the generic authority failure.

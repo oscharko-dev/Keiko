@@ -13962,6 +13962,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-unavailable",
           "workspace-unqualified",
           "workspace-selection-mismatch",
+          "expected-workspace-missing",
           "workspace-location-unsupported",
           "workspace-volume-unsupported",
           "start-abandoned",

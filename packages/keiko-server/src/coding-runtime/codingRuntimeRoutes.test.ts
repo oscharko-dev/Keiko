@@ -666,6 +666,40 @@ describe("coding runtime routes", () => {
     expect(line).toMatchObject({ correlationId: "start-corr-mm", errorKind: "conflict" });
   });
 
+  // A window opened before an upgrade sends no repository. The refusal is a 409 with its own closed
+  // code and a sentence that names the next step, which is all such a window can show.
+  it("answers a start without a stated repository as a conflict that says to reload", async () => {
+    const session = pairedAppSession();
+    const records: Record<string, unknown>[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event as never) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        start: (body: unknown) => Promise<Readonly<Record<string, unknown>>>;
+      }
+    ).start = () =>
+      Promise.resolve({ ok: false as const, failureCode: "expected-workspace-missing" });
+    const refused = await handleCreateCodingRuntimeRun(
+      context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie, "start-corr-ew"),
+      deps,
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body).toEqual({
+      error: {
+        code: "CODING_RUNTIME_EXPECTED_WORKSPACE_MISSING",
+        message: "This window is out of date. Reload this window, then start again.",
+        correlationId: "start-corr-ew",
+      },
+    });
+    const line = records.find(
+      (record) =>
+        (record.extra as { reason?: string } | undefined)?.reason === "expected-workspace-missing",
+    );
+    expect(line).toMatchObject({ correlationId: "start-corr-ew", errorKind: "conflict" });
+  });
+
   // A retry mints a NEW run against the predecessor named in the URL; when the runtime refuses it
   // after minting, every cause line is keyed to the new run. Keyed on the URL's predecessor, the
   // refusal line and the cause again shared no key (review of PR #3452).

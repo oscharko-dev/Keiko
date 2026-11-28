@@ -917,7 +917,8 @@ type StartRefusedAlert =
   | "ApprovalActivation"
   | "ReplayCap"
   | "EditsBlocked"
-  | "SelectionMismatch";
+  | "SelectionMismatch"
+  | "ExpectedWorkspaceMissing";
 
 const START_REFUSED_ALERT_OF_CODE: Readonly<Record<string, StartRefusedAlert>> = {
   ACTIVE_RUN_CONFLICT: "ActiveRun",
@@ -930,6 +931,7 @@ const START_REFUSED_ALERT_OF_CODE: Readonly<Record<string, StartRefusedAlert>> =
   REPLAY_CAP_EXHAUSTED: "ReplayCap",
   EDITS_BLOCKED: "EditsBlocked",
   WORKSPACE_SELECTION_MISMATCH: "SelectionMismatch",
+  EXPECTED_WORKSPACE_MISSING: "ExpectedWorkspaceMissing",
 };
 
 // The runtime supervisor's refusals and a refused intent already have a sentence of their own, keyed

@@ -1678,6 +1678,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.startRefusedSelectionMismatch":
     "The repository you see is not the one Keiko had open for this start, so nothing was started and nothing was changed ({code}). Keiko will try to open the repository shown now. Check its name, and press Start again once it is open.",
+  "codingWorkbench.alert.startRefusedExpectedWorkspaceMissing":
+    "This window is out of date and did not say which repository it shows, so nothing was started and nothing was changed ({code}). Reload this window, then press Start again.",
   "codingWorkbench.alert.startRefusedBranchChanged":
     "The branch of this repository changed to {branch} outside Keiko after the window last read it, so nothing was started and nothing was changed ({code}). Keiko has read the checkout again and shows {branch} now. Check the branch, and press Start again.",
   "codingWorkbench.alert.startRefusedActiveRun":

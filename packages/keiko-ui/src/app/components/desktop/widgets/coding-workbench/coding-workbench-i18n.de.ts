@@ -1740,6 +1740,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
   "codingWorkbench.alert.startRefusedSelectionMismatch":
     "Das Repository, das du siehst, ist nicht das, das Keiko für diesen Start geöffnet hatte, deshalb wurde nichts gestartet und nichts geändert ({code}). Keiko versucht jetzt, das angezeigte Repository zu öffnen. Prüfe seinen Namen und drücke erneut auf Start, sobald es geöffnet ist.",
+  "codingWorkbench.alert.startRefusedExpectedWorkspaceMissing":
+    "Dieses Fenster ist veraltet und hat nicht mitgeteilt, welches Repository es zeigt, deshalb wurde nichts gestartet und nichts geändert ({code}). Lade dieses Fenster neu und drücke dann erneut auf Start.",
   "codingWorkbench.alert.startRefusedBranchChanged":
     "Der Branch dieses Repositorys wurde außerhalb von Keiko auf {branch} gewechselt, nachdem das Fenster ihn zuletzt gelesen hatte, deshalb wurde nichts gestartet und nichts geändert ({code}). Keiko hat den Checkout erneut gelesen und zeigt jetzt {branch}. Prüfe den Branch und drücke erneut auf Start.",
   "codingWorkbench.alert.startRefusedActiveRun":

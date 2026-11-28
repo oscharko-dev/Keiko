@@ -1030,6 +1030,10 @@ describe("visibleAlert mutation failures (F-09a)", () => {
       "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH",
       "codingWorkbench.alert.startRefusedSelectionMismatch",
     ],
+    [
+      "CODING_RUNTIME_EXPECTED_WORKSPACE_MISSING",
+      "codingWorkbench.alert.startRefusedExpectedWorkspaceMissing",
+    ],
     ["CODING_RUNTIME_INVALID_INTENT", "codingWorkbench.event.failure.invalid-intent"],
     [
       "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_ACL",

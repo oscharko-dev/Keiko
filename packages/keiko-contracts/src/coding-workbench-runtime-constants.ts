@@ -163,11 +163,15 @@ export type CodingWorkbenchRuntimeFailureCode =
  * `workspace-selection-mismatch` is the same kind: the start stated a repository other than the
  * server's active workspace (the Workbench showed one folder while the global pointer was on
  * another) and is refused before any authority, snapshot or history exists.
+ * `expected-workspace-missing` is the same kind: the start stated no repository at all (a window
+ * whose bundle predates the field), so the guard above cannot run. The start stays refused, and the
+ * window is told to reload rather than shown a contract error.
  */
 export type CodingWorkbenchRuntimeStartRefusalCode =
   | "workspace-location-unsupported"
   | "workspace-volume-unsupported"
-  | "workspace-selection-mismatch";
+  | "workspace-selection-mismatch"
+  | "expected-workspace-missing";
 
 /** What a refused start answers with: a run failure code, or a start-only refusal (#4068). */
 export type CodingWorkbenchRuntimeStartFailureCode =
