@@ -241,6 +241,12 @@ than a process crash.
 - Stop and remove the stale pid file: `npm run keiko:stop`, then delete
   `.keiko/ui.pid` only if it is present and the process is no longer
   alive.
+- `keiko stop` reports success and the Activity Log carries
+  `cli.lifecycle.stop-exited-unverified` with outcome `exited-during-verification` when the
+  recorded process exited while Keiko was still checking that it was its own UI. Nothing was
+  killed; the stop finished by itself, so no further action is needed. A process that cannot be
+  signalled (permission denied) counts as still alive, and the stop is then reported as
+  `unverified-pid` instead.
 - If the Activity Log contains `process.fatal`, address the underlying
   error it classifies (typically a port conflict or a Node.js version
   outside the [supported runtime range](../../package.json)).

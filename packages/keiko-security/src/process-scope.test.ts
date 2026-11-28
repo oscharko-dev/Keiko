@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProcessScope } from "./process-scope.js";
+import { createProcessScope, isProcessAlive } from "./process-scope.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -74,5 +74,17 @@ describe("persistent process coordinates", () => {
       throw Object.assign(new Error(), { code: "ESRCH" });
     });
     expect(scope.liveness(12345)).toBe("dead");
+  });
+
+  it("treats a process it may not signal as alive, so a stop never calls it exited", () => {
+    const kill = vi.spyOn(process, "kill");
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error(), { code: "EPERM" });
+    });
+    expect(isProcessAlive(12345)).toBe(true);
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error(), { code: "ESRCH" });
+    });
+    expect(isProcessAlive(12345)).toBe(false);
   });
 });
