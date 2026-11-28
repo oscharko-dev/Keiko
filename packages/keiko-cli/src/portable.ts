@@ -60,7 +60,7 @@ import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot } from "./state-paths.js";
 import {
-  readSmartAppControlState,
+  probeSmartAppControlState,
   SMART_APP_CONTROL_BLOCK_MESSAGE,
   type SmartAppControlState,
 } from "./windows-smart-app-control.js";
@@ -464,7 +464,7 @@ async function upgradeManagedFromClickedPackage(
 }
 
 function emitUpgradeFailed(sink: SecurityLogSink | undefined, env: EnvSource): void {
-  const smartAppControl = readSmartAppControlState(process.platform, env);
+  const smartAppControl = probeSmartAppControlState(process.platform, env, sink);
   emitPortableLaunchFailed(sink, "upgrade-failed", "not-requested", smartAppControl);
 }
 
@@ -893,15 +893,11 @@ function smartAppControlForFailure(
   env: EnvSource,
   io: CliIo,
   deps: PortableSetupDeps,
+  sink: SecurityLogSink | undefined,
 ): SmartAppControlState {
-  const read =
-    deps.smartAppControlStateFn ??
-    ((readEnv: EnvSource): SmartAppControlState =>
-      readSmartAppControlState(
-        (deps.platform ?? ((): NodeJS.Platform => process.platform))(),
-        readEnv,
-      ));
-  const state = read(env);
+  const platform = (deps.platform ?? ((): NodeJS.Platform => process.platform))();
+  const state =
+    deps.smartAppControlStateFn?.(env) ?? probeSmartAppControlState(platform, env, sink);
   if (state === "on") io.err(SMART_APP_CONTROL_BLOCK_MESSAGE);
   return state;
 }
@@ -922,7 +918,7 @@ function notifyPortableFailureIfNeeded(
     options.launchFailure?.reason ??
     (options.command === "setup" ? "setup-failed" : "launch-error");
   const note = leaveLaunchFailureNote(env, reason, io);
-  const smartAppControl = smartAppControlForFailure(env, io, deps);
+  const smartAppControl = smartAppControlForFailure(env, io, deps, options.securityLogSink);
   emitPortableLaunchFailed(options.securityLogSink, reason, note, smartAppControl);
   const notify =
     deps.notifyFailureFn ??

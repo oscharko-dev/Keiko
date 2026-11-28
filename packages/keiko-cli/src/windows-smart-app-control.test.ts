@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+  type SecurityLogEvent,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
+import {
+  probeSmartAppControlState,
   readSmartAppControlState,
   smartAppControlStateFromRegQuery,
 } from "./windows-smart-app-control.js";
@@ -41,31 +48,51 @@ describe("smartAppControlStateFromRegQuery", () => {
 });
 
 describe("readSmartAppControlState", () => {
-  const env = { SystemRoot: "C:\\Windows" };
+  const env = { SystemRoot: String.raw`C:\Windows` };
+  const trustedReg = (): string => String.raw`C:\Windows\System32\reg.exe`;
+  const hostileRoot = String.raw`\\attacker\share`;
 
-  it("never queries outside Windows", () => {
+  it("never resolves or queries outside Windows", () => {
     let calls = 0;
-    const state = readSmartAppControlState("linux", env, () => {
-      calls += 1;
-      return regOutput("0x1");
-    });
+    const state = readSmartAppControlState(
+      "linux",
+      env,
+      () => {
+        calls += 1;
+        return regOutput("0x1");
+      },
+      () => {
+        calls += 1;
+        return "reg.exe";
+      },
+    );
     expect(state).toBe("not-windows");
     expect(calls).toBe(0);
   });
 
-  it("queries the system reg.exe by absolute path for the policy value", () => {
+  it("queries the trusted reg.exe for the policy value", () => {
     const seen: { executable: string; args: readonly string[] }[] = [];
-    const state = readSmartAppControlState("win32", env, (executable, args) => {
-      seen.push({ executable, args });
-      return regOutput("0x1");
-    });
+    const resolvedFor: unknown[] = [];
+    const state = readSmartAppControlState(
+      "win32",
+      env,
+      (executable, args) => {
+        seen.push({ executable, args });
+        return regOutput("0x1");
+      },
+      (readEnv) => {
+        resolvedFor.push(readEnv);
+        return trustedReg();
+      },
+    );
     expect(state).toBe("on");
+    expect(resolvedFor).toEqual([env]);
     expect(seen).toEqual([
       {
-        executable: "C:\\Windows\\System32\\reg.exe",
+        executable: String.raw`C:\Windows\System32\reg.exe`,
         args: [
           "query",
-          "HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+          String.raw`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy`,
           "/v",
           "VerifiedAndReputablePolicyState",
         ],
@@ -73,18 +100,90 @@ describe("readSmartAppControlState", () => {
     ]);
   });
 
-  it("is unknown without an absolute system root, so no reg.exe from PATH is run", () => {
+  it("runs no query when the trusted resolver refuses the system root", () => {
     let calls = 0;
-    const query = (): string => {
-      calls += 1;
-      return regOutput("0x1");
-    };
-    expect(readSmartAppControlState("win32", {}, query)).toBe("unknown");
-    expect(readSmartAppControlState("win32", { SystemRoot: "Windows" }, query)).toBe("unknown");
+    const refused = new WindowsSystemDirectoryError("refused");
+    expect(() =>
+      readSmartAppControlState(
+        "win32",
+        { SystemRoot: hostileRoot },
+        () => {
+          calls += 1;
+          return regOutput("0x1");
+        },
+        () => {
+          throw refused;
+        },
+      ),
+    ).toThrow(refused);
     expect(calls).toBe(0);
   });
 
+  it("refuses a hostile system root through the default trusted resolver", () => {
+    expect(() =>
+      readSmartAppControlState("win32", { SystemRoot: hostileRoot }, () => regOutput("0x1")),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+
   it("is unknown when the query fails", () => {
-    expect(readSmartAppControlState("win32", env, () => undefined)).toBe("unknown");
+    expect(readSmartAppControlState("win32", env, () => undefined, trustedReg)).toBe("unknown");
+  });
+});
+
+describe("probeSmartAppControlState", () => {
+  const env = { SystemRoot: String.raw`C:\Windows` };
+
+  function probeWith(error: Error): { state: string; logged: SecurityLogEvent[] } {
+    const logged: SecurityLogEvent[] = [];
+    const sink: SecurityLogSink = { write: (event): void => void logged.push(event) };
+    const state = probeSmartAppControlState(
+      "win32",
+      env,
+      sink,
+      () => regOutput("0x1"),
+      () => {
+        throw error;
+      },
+    );
+    return { state, logged };
+  }
+
+  it("records a refused system root on the portable failure surface and reads unknown", () => {
+    const { state, logged } = probeWith(new WindowsSystemDirectoryError("refused"));
+    expect(state).toBe("unknown");
+    expect(logged.map((event) => [event.op, event.errorKind, event.extra?.surface])).toEqual([
+      [
+        "security.windows-portable-alert.system-root-refused",
+        "unsafe-target",
+        "portable-failure-alert",
+      ],
+    ]);
+  });
+
+  it("records a missing reg.exe on the portable failure surface and reads unknown", () => {
+    const { state, logged } = probeWith(new WindowsSystemBinaryMissingError());
+    expect(state).toBe("unknown");
+    expect(logged.map((event) => [event.op, event.errorKind])).toEqual([
+      ["security.windows-portable-alert.system-binary-missing", "unavailable"],
+    ]);
+  });
+
+  it("propagates an error that is not the resolver's own", () => {
+    const foreign = new Error("foreign");
+    expect(() => probeWith(foreign)).toThrow(foreign);
+  });
+
+  it("returns the read state and logs nothing when the read succeeds", () => {
+    const logged: SecurityLogEvent[] = [];
+    const sink: SecurityLogSink = { write: (event): void => void logged.push(event) };
+    const state = probeSmartAppControlState(
+      "win32",
+      env,
+      sink,
+      () => regOutput("0x2"),
+      () => String.raw`C:\Windows\System32\reg.exe`,
+    );
+    expect(state).toBe("evaluation");
+    expect(logged).toEqual([]);
   });
 });

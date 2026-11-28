@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { win32 } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { resolveWindowsSystemBinary, type SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { emitCliWindowsSystemFailure } from "./security-log.js";
 
 /**
  * The state of Windows 11 Smart App Control, read when a portable start fails (#4569). Smart App
@@ -67,26 +68,48 @@ function defaultRegQuery(executable: string, args: readonly string[]): string | 
   return result.status === 0 && typeof result.stdout === "string" ? result.stdout : undefined;
 }
 
-// The system's own reg.exe by absolute path, never a `reg` found on PATH or in the start folder.
-function regExecutable(env: EnvSource): string | undefined {
-  const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? env.WINDIR;
-  if (systemRoot === undefined || !win32.isAbsolute(systemRoot)) return undefined;
-  return win32.join(systemRoot, "System32", "reg.exe");
+export type RegExecutableFn = (env: EnvSource) => string;
+
+// The system's own reg.exe through the one trusted System32 decision (#4408), never a `reg` found on
+// PATH or in the start folder. A refused system root or a missing reg.exe throws the resolver's own
+// typed error, which the caller records on its log port.
+function trustedRegExecutable(env: EnvSource): string {
+  return resolveWindowsSystemBinary("reg.exe", env);
 }
 
-/** Reads the Smart App Control state; a failed read is `unknown`. */
+/** Reads the Smart App Control state; a failed query is `unknown`. */
 export function readSmartAppControlState(
   platform: NodeJS.Platform,
   env: EnvSource,
   regQuery: RegQueryFn = defaultRegQuery,
+  regExecutable: RegExecutableFn = trustedRegExecutable,
 ): SmartAppControlState {
   if (platform !== "win32") return "not-windows";
   const executable = regExecutable(env);
-  if (executable === undefined) return "unknown";
   // spawnSync reports a refused, crashed or timed-out reg.exe in its result, never by throwing:
   // that read is the closed `unknown`, and the failure line records it.
   const output = regQuery(executable, ["query", POLICY_KEY, "/v", POLICY_VALUE]);
   return output === undefined ? "unknown" : smartAppControlStateFromRegQuery(output);
+}
+
+/**
+ * The state for a failed start's line. A refused system root or a missing reg.exe leaves its own
+ * closed line on the portable failure surface and reads as `unknown`, so the failed start is still
+ * reported with its own reason; any other error is not this contract's and propagates.
+ */
+export function probeSmartAppControlState(
+  platform: NodeJS.Platform,
+  env: EnvSource,
+  sink: SecurityLogSink | undefined,
+  regQuery: RegQueryFn = defaultRegQuery,
+  regExecutable: RegExecutableFn = trustedRegExecutable,
+): SmartAppControlState {
+  try {
+    return readSmartAppControlState(platform, env, regQuery, regExecutable);
+  } catch (error) {
+    if (!emitCliWindowsSystemFailure(error, sink, "portable-failure-alert")) throw error;
+    return "unknown";
+  }
 }
 
 /** The text a failed start adds when Smart App Control is enforcing. */
