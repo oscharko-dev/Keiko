@@ -407,6 +407,15 @@ describe("CodingWorkbenchRepositorySelector after a folder's workspace came back
 // U-16: a folder deleted and cloned again at the same path is refused by the server on purpose. It
 // stays an enabled option with its reason, and choosing it is the explicit act that reconnects it.
 describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)", () => {
+  function interactions(): unknown[] {
+    return reportClientDiagnostic.mock.calls
+      .map(
+        ([, evidence]) =>
+          (evidence as { codingWorkbenchInteraction?: unknown }).codingWorkbenchInteraction,
+      )
+      .filter((entry) => entry !== undefined);
+  }
+
   const drifted = { ...project("/work/cloned"), workspaceAvailable: false };
 
   async function openPicker(
@@ -456,6 +465,40 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     expect(reconnectRepository).toHaveBeenCalledWith("/work/cloned");
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(order.slice(order.indexOf("reconnect"))).toEqual(["reconnect", "catalog", "select"]);
+  });
+
+  // U-44: typing the name and pressing Enter reconnected the folder but left the previous
+  // repository selected; the person had to choose it a second time.
+  it("selects the changed folder chosen with Enter in the search, with one reconnect", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    reconnectRepository.mockResolvedValue({ project: project("/work/cloned") });
+    const onSelect = vi.fn();
+    const user = await openPicker({ onSelect });
+    await user.type(screen.getByPlaceholderText(/search/iu), "cloned{Enter}");
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("/work/cloned"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(reconnectRepository).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalledWith("/work/app");
+    expect(interactions()).toEqual([
+      { interaction: "repository-reconnected", outcome: "selected" },
+    ]);
+  });
+
+  it("records that a reconnect finished after the selector was gone, without selecting", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    let finish: (value: unknown) => void = () => undefined;
+    reconnectRepository.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const onSelect = vi.fn();
+    const user = await openPicker({ onSelect });
+    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    cleanup();
+    finish({ project: project("/work/cloned") });
+    await waitFor(() =>
+      expect(interactions()).toEqual([
+        { interaction: "repository-reconnected", outcome: "selector-gone" },
+      ]),
+    );
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("treats a reconnect that leaves the workspace unavailable as a failure", async () => {

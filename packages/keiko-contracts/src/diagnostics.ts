@@ -2409,6 +2409,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The Git window handed a repository the person just added or cloned back to the window that
   // asked for the folder (its return window); no other window changes (#4371). Once per return.
   "repository-returned",
+  // A repository whose folder changed since it was added was reconnected by choosing it in the
+  // repository chooser (U-44); the closed outcome says whether that choice then selected it. Once
+  // per successful reconnect; no path.
+  "repository-reconnected",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2475,6 +2479,16 @@ export type ClientCodingWorkbenchToolProfile =
   (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
 
 /** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
+// What became of the choice once a reconnect of a changed folder succeeded (U-44): the folder was
+// selected, a later choice superseded it, or the selector was gone (the window closed or rebuilt it).
+export const CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES = [
+  "selected",
+  "superseded",
+  "selector-gone",
+] as const;
+export type ClientCodingWorkbenchReconnectOutcome =
+  (typeof CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES)[number];
+
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
 export type ClientCodingWorkbenchBridgeRefusal =
   (typeof CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS)[number];
@@ -2668,6 +2682,10 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | { readonly interaction: "repository-seed-skipped" }
   | { readonly interaction: "repository-returned" }
   | {
+      readonly interaction: "repository-reconnected";
+      readonly outcome: ClientCodingWorkbenchReconnectOutcome;
+    }
+  | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
     }
@@ -2718,6 +2736,9 @@ const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_TOOL_PROFILE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
+);
+const CODING_WORKBENCH_RECONNECT_OUTCOME_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_RECONNECT_OUTCOMES,
 );
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
@@ -2770,6 +2791,9 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "repository-seeded": {},
   "repository-seed-skipped": {},
   "repository-returned": {},
+  "repository-reconnected": {
+    outcome: (value) => isSetMember(value, CODING_WORKBENCH_RECONNECT_OUTCOME_SET),
+  },
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },

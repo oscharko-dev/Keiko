@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ClientCodingWorkbenchReconnectOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
@@ -32,6 +34,25 @@ function reportReconnectFailure(failure: { readonly error: unknown }): void {
   });
 }
 
+// Body-free: the closed outcome and a fresh correlation id, never the folder path.
+function reportReconnected(outcome: ClientCodingWorkbenchReconnectOutcome): void {
+  reportCodingWorkbenchInteraction(
+    { interaction: "repository-reconnected", outcome },
+    newClientCorrelationId(),
+  );
+}
+
+// Where a settled request lands. A selector that is gone applies nothing — the window closed or
+// rebuilt it (U-44) — and a choice a later one replaced is not applied either; `selected` is the
+// live choice, which a failure also shows.
+function reconnectOutcome(
+  mounted: boolean,
+  latest: boolean,
+): ClientCodingWorkbenchReconnectOutcome {
+  if (!mounted) return "selector-gone";
+  return latest ? "selected" : "superseded";
+}
+
 function useMounted(): { readonly current: boolean } {
   const mounted = useRef(true);
   useEffect(() => {
@@ -61,15 +82,17 @@ export function useRepositoryReconnect(
   const settle = useCallback(
     (path: string, failure: ReconnectFailure): void => {
       inFlight.current.delete(path);
-      if (!mounted.current) return;
-      if (failure !== null) reportReconnectFailure(failure);
-      if (latest.current !== path) return;
+      const outcome = reconnectOutcome(mounted.current, latest.current === path);
       if (failure !== null) {
-        setFailed(true);
+        if (outcome !== "selector-gone") reportReconnectFailure(failure);
+        if (outcome === "selected") setFailed(true);
         return;
       }
-      reload();
-      onSelect(path);
+      if (outcome === "selected") {
+        reload();
+        onSelect(path);
+      }
+      reportReconnected(outcome);
     },
     [mounted, onSelect, reload],
   );
