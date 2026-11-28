@@ -10,6 +10,7 @@ import {
   type CodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
+  CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
   type CodingSafeActivityFeed,
@@ -28,7 +29,48 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-const FEED = { kind: "feed-probe" } as unknown as CodingSafeActivityFeed;
+const OWNED_MESSAGE_IDS = [
+  "m1",
+  ...Array.from({ length: 3 }, (_, index) =>
+    Array.from(
+      { length: CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS },
+      (_unused, i) => `m${String(index)}-${String(i)}`,
+    ),
+  ).flat(),
+];
+
+// An available feed of one run that holds each message with its answer and its reasoning.
+function feedOf(
+  runId: string,
+  messageIds: readonly string[] = OWNED_MESSAGE_IDS,
+  updatedAt = "2026-01-01T00:00:00.000Z",
+): CodingSafeActivityFeed {
+  return {
+    schemaVersion: CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+    availability: "available",
+    runId,
+    updatedAt,
+    turns: [
+      {
+        turnId: "turn-1",
+        messages: messageIds.map((messageId) => ({
+          messageId,
+          role: "assistant" as const,
+          occurredAt: "2026-01-01T00:00:00.000Z",
+          segments: [],
+          truncated: false,
+          reasoning: { text: "", truncated: false },
+        })),
+        tools: [],
+        truncated: false,
+      },
+    ],
+    truncated: false,
+    droppedEventCount: 0,
+  };
+}
+
+const FEED = feedOf("run-1", ["m1"]);
 
 function snapshot(
   textDeltas?: readonly CodingSafeActivityTextDelta[],
@@ -101,6 +143,59 @@ function readerText(snapshots: readonly CodingAppSessionChannelSnapshot[]): Reco
   return held;
 }
 
+describe("coalesced text deltas of a run that moved on (#4491 review)", () => {
+  const unavailable = (runId: string): CodingSafeActivityFeed => ({
+    schemaVersion: CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+    availability: "unavailable",
+    runId,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    droppedEventCount: 0,
+  });
+
+  function newestDeltas(replacedFeed: CodingSafeActivityFeed, newestFeed: CodingSafeActivityFeed) {
+    const { res, publish, drain } = harness();
+    publish(snapshot([delta("answer", 2, "stale")], replacedFeed));
+    publish(snapshot([delta("answer", 0, "own")], newestFeed));
+    drain();
+    const content = sentSnapshots(res)[1]?.content;
+    return content !== null && content !== undefined && "feed" in content
+      ? (content.textDeltas ?? [])
+      : [];
+  }
+
+  it("carries nothing from an unavailable feed into a newer available one", () => {
+    expect(newestDeltas(unavailable("run-1"), FEED)).toEqual([delta("answer", 0, "own")]);
+  });
+
+  it("carries nothing from another run into a newer feed", () => {
+    expect(newestDeltas(feedOf("run-2"), FEED)).toEqual([delta("answer", 0, "own")]);
+  });
+
+  it("carries nothing for a message the newest feed no longer holds", () => {
+    expect(newestDeltas(FEED, feedOf("run-1", ["m-other"]))).toEqual([delta("answer", 0, "own")]);
+  });
+
+  it("carries nothing for a reasoning part the newest feed does not hold", () => {
+    const { res, publish, drain } = harness();
+    const withoutReasoning = feedOf("run-1");
+    const [turn] = withoutReasoning.availability === "available" ? withoutReasoning.turns : [];
+    const [message] = turn?.messages ?? [];
+    if (message === undefined) throw new Error("fixture message missing");
+    const { reasoning: _dropped, ...answerOnly } = message;
+    const newest = {
+      ...withoutReasoning,
+      turns: [{ ...turn, messages: [answerOnly] }],
+    } as CodingSafeActivityFeed;
+    publish(snapshot([delta("reasoning", 2, "stale")]));
+    publish(snapshot([delta("answer", 0, "own")], newest));
+    drain();
+    const content = sentSnapshots(res)[1]?.content;
+    const deltas =
+      content !== null && content !== undefined && "feed" in content ? content.textDeltas : [];
+    expect(deltas).toEqual([delta("answer", 0, "own")]);
+  });
+});
+
 describe("coalesced text deltas", () => {
   it("keeps every text delta of snapshots replaced while a frame drains", () => {
     const { res, publish, drain, counts } = harness();
@@ -117,7 +212,7 @@ describe("coalesced text deltas", () => {
   it("keeps the newest feed when only the older snapshot has deltas", () => {
     const { res, publish, drain } = harness();
     publish(snapshot([delta("answer", 2, "cd")]));
-    const newestFeed = { kind: "newest" } as unknown as CodingSafeActivityFeed;
+    const newestFeed = feedOf("run-1", ["m1"], "2026-01-02T00:00:00.000Z");
     publish(snapshot(undefined, newestFeed));
     drain();
     expect(sentSnapshots(res)[1]?.content).toMatchObject({ feed: newestFeed });
@@ -151,6 +246,7 @@ describe("coalesced text deltas", () => {
             offset: 0,
             text: "t",
           })),
+          feedOf("run-1", OWNED_MESSAGE_IDS),
         ),
       );
     }

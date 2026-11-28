@@ -116,6 +116,30 @@ function textDeltasOf(
   return content !== null && "feed" in content ? (content.textDeltas ?? []) : [];
 }
 
+// The replaced snapshot's deltas the newest snapshot still owns: both feeds available for the same
+// run, and the delta's message and text part present in the newest feed. A delta of another run, of
+// an unavailable feed or of a message the newest feed no longer holds is dropped, never forwarded.
+function ownedDeltas(
+  replaced: CodingAppSessionChannelSnapshot,
+  newest: CodingAppSessionChannelSnapshot,
+): readonly CodingSafeActivityTextDelta[] {
+  const before = replaced.content;
+  const after = newest.content;
+  if (before === null || after === null || !("feed" in before) || !("feed" in after)) return [];
+  if (before.feed.availability !== "available" || after.feed.availability !== "available")
+    return [];
+  if (before.feed.runId !== after.feed.runId) return [];
+  const messages = new Map(
+    after.feed.turns
+      .flatMap((turn) => turn.messages)
+      .map((message) => [message.messageId, message]),
+  );
+  return textDeltasOf(replaced).filter((delta) => {
+    const message = messages.get(delta.messageId);
+    return delta.part === "answer" ? message !== undefined : message?.reasoning !== undefined;
+  });
+}
+
 function sameText(
   a: CodingSafeActivityTextDelta | undefined,
   b: CodingSafeActivityTextDelta,
@@ -161,7 +185,7 @@ export function carryReplacedTextDeltas(
   replaced: CodingAppSessionChannelSnapshot,
   newest: CodingAppSessionChannelSnapshot,
 ): CarriedSnapshot {
-  const dropped = textDeltasOf(replaced);
+  const dropped = ownedDeltas(replaced, newest);
   const { content } = newest;
   if (dropped.length === 0 || content === null || !("feed" in content)) {
     return { snapshot: newest, carried: 0, fellBack: false };
