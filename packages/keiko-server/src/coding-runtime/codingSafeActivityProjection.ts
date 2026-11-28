@@ -2265,6 +2265,40 @@ function allToolSteps(turn: MutableTurn): EvictionStep[] {
   return turn.tools.map((tool) => ({ messages: [], tools: [tool] }));
 }
 
+interface EvictionVictims {
+  readonly messages: Set<MutableMessage>;
+  readonly tools: Set<CodingSafeActivityTool>;
+}
+
+// Picks steps in order until the estimated size fits.
+function chooseVictims(
+  stage: () => Iterable<EvictionStep>,
+  startEstimate: number,
+  maxBytes: number,
+): EvictionVictims {
+  let estimate = startEstimate;
+  const victims: EvictionVictims = { messages: new Set(), tools: new Set() };
+  for (const step of stage()) {
+    if (estimate <= maxBytes) break;
+    for (const message of step.messages) {
+      victims.messages.add(message);
+      estimate -= bytes(message) + 1;
+    }
+    for (const tool of step.tools) {
+      victims.tools.add(tool);
+      estimate -= bytes(tool) + 1;
+    }
+  }
+  return victims;
+}
+
+function removeVictims(entry: ProjectionEntry, turn: MutableTurn, victims: EvictionVictims): void {
+  turn.messages = turn.messages.filter((message) => !victims.messages.has(message));
+  turn.tools = turn.tools.filter((tool) => !victims.tools.has(tool));
+  for (const message of victims.messages) entry.messageTurns.delete(message.messageId);
+  for (const tool of victims.tools) entry.toolOwners.delete(tool.callId);
+}
+
 // Removes steps in order until the turn fits, tracking the size incrementally (an element and its
 // separator); the turn is then re-measured, and the stage repeats while the estimate fell short.
 function evictWhileOver(
@@ -2275,27 +2309,13 @@ function evictWhileOver(
 ): number {
   let lost = 0;
   for (;;) {
-    let estimate = bytes(turn);
+    const estimate = bytes(turn);
     if (estimate <= maxBytes) return lost;
-    const messages = new Set<MutableMessage>();
-    const tools = new Set<CodingSafeActivityTool>();
-    for (const step of stage()) {
-      if (estimate <= maxBytes) break;
-      for (const message of step.messages) {
-        messages.add(message);
-        estimate -= bytes(message) + 1;
-      }
-      for (const tool of step.tools) {
-        tools.add(tool);
-        estimate -= bytes(tool) + 1;
-      }
-    }
-    if (messages.size + tools.size === 0) return lost;
-    turn.messages = turn.messages.filter((message) => !messages.has(message));
-    turn.tools = turn.tools.filter((tool) => !tools.has(tool));
-    for (const message of messages) entry.messageTurns.delete(message.messageId);
-    for (const tool of tools) entry.toolOwners.delete(tool.callId);
-    lost += messages.size + tools.size;
+    const victims = chooseVictims(stage, estimate, maxBytes);
+    const count = victims.messages.size + victims.tools.size;
+    if (count === 0) return lost;
+    removeVictims(entry, turn, victims);
+    lost += count;
   }
 }
 
