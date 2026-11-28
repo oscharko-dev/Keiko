@@ -1538,13 +1538,12 @@ describe("verified Code-task commit service", () => {
   describe.skipIf(process.platform === "win32")("Git processes of one governed action", () => {
     // The most processes each action may start, measured on the code that makes one read of the
     // repository per proposal, one scope (and one promisor probe) per operation, one `git remote`
-    // for the signing decision and one `rev-parse` for the branch lookup. An operation with more
-    // than one Git effect also pays one memoized `git version`: the held negative promisor verdict
-    // is reused only while that Git enforces the lazy-fetch guard itself (git-worktree-snapshot-node),
-    // so a status, which reads twice, starts that one process more. Before that code the same
-    // actions started 12, 43, 58, 42, 26, 70, 83 and 34.
+    // for the signing decision and one `rev-parse` for the branch lookup. The memoized `git version`
+    // the lazy-fetch guard needs (git-worktree-snapshot-node) is paid once per process, so it is
+    // probed before counting and belongs to no action's budget. Before that code the same actions
+    // started 12, 43, 58, 42, 26, 70, 83 and 34.
     const spawnBudget = {
-      status: 13,
+      status: 12,
       stagePropose: 17,
       // 41 plus the two reads that record which index entries the staging wrote (one before, one
       // after), which the undo of the turn needs to leave a person's own staging alone (U-34b).
@@ -1562,7 +1561,7 @@ describe("verified Code-task commit service", () => {
     let spawnLog: string;
     let previousPath: string | undefined;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
       shimDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-shim-")));
       spawnLog = join(shimDir, "spawns.log");
@@ -1581,6 +1580,7 @@ describe("verified Code-task commit service", () => {
       fixtureGitEnvironment.value = execution.processEnv;
       options = { ...options, execution };
       service = createVerifiedCommitService(options);
+      await warmGitVersionMemo();
     });
     afterEach(() => {
       process.env.PATH = previousPath;
@@ -1591,8 +1591,12 @@ describe("verified Code-task commit service", () => {
     // so the read checks its content and pays the lazy `core.fileMode` read. A fast runner writes
     // the fixture and the index in the same tick, so settle that first: every host then counts the
     // processes of the same, clean state.
+    // Each settle takes its own whole second in the past: Git may compare stat times in whole
+    // seconds, so two settles within one second would leave the index holding the earlier one.
+    let settledSecond = 0;
     function settleIndexStat(): void {
-      const past = new Date(Date.now() - 60_000);
+      settledSecond += 1;
+      const past = new Date(Date.UTC(2020, 0, 1) + settledSecond * 1000);
       for (const path of git(["ls-files", "-z"]).split("\0").filter(Boolean)) {
         const file = join(root, path);
         if (existsSync(file)) lutimesSync(file, past, past);
@@ -1601,20 +1605,23 @@ describe("verified Code-task commit service", () => {
     }
 
     // The installed Git's version is probed once per process and memoized (the lazy-fetch guard), so
-    // the action that happens to run first would pay it. Probe it before counting: each pin then
-    // counts its own action's processes, whichever test runs first or alone.
+    // the action that happens to run first would pay it. Each test probes it first, on the fixture's
+    // own checkout: each pin then counts its own action's processes, whichever test runs first or
+    // alone.
     async function warmGitVersionMemo(): Promise<void> {
-      await runtimeService("supervised-coding").execute(
-        { action: "git", actionId: "warm", idempotencyKey: "warm", operation: "status" },
-        guard,
-      );
+      // A refused or failed warm-up is named here, not as a budget miss of the counted action.
+      await expect(
+        runtimeService("supervised-coding").execute(
+          { action: "git", actionId: "warm", idempotencyKey: "warm", operation: "status" },
+          guard,
+        ),
+      ).resolves.toMatchObject({ kind: "status" });
     }
 
     // The arguments of every process the action started, so a failing budget names what ran.
     async function counted<T>(
       run: () => Promise<T>,
     ): Promise<{ value: T; spawned: number; started: string }> {
-      await warmGitVersionMemo();
       settleIndexStat();
       writeFileSync(spawnLog, "");
       const value = await run();
