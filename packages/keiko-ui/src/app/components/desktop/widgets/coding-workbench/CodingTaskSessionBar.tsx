@@ -70,6 +70,15 @@ function finishActions(
 // dropped the keyboard focus to the page. The composer is where the person types next.
 const COMPOSER_ID = "coding-workbench-task-intent";
 
+// The person (or another control) already placed the focus on a live, enabled element outside the
+// session bar: it stays. The bar's own buttons are the ones the action just used.
+function focusSettledElsewhere(bar: HTMLElement | null): boolean {
+  const current = document.activeElement;
+  if (!(current instanceof HTMLElement) || current === document.body) return false;
+  if (bar?.contains(current) === true) return false;
+  return current.isConnected && !current.matches(":disabled");
+}
+
 // Focus moves once the action has settled and the page shows its outcome: to the composer after a
 // success, to the Try again control after a failure, where Finish and Try again are still offered.
 // A click arms the wait and the action raises `pending` in the same event: a commit that sees it
@@ -78,6 +87,7 @@ const COMPOSER_ID = "coding-workbench-task-intent";
 function useFocusAfterAction(
   session: CodingTaskSession,
   retryRef: RefObject<HTMLButtonElement | null>,
+  barRef: RefObject<HTMLElement | null>,
 ): (action: () => Promise<void>) => Promise<void> {
   const phase = useRef<"idle" | "armed" | "waiting">("idle");
   const { pending, error } = session;
@@ -92,6 +102,7 @@ function useFocusAfterAction(
       retryRef.current?.focus();
       return;
     }
+    if (focusSettledElsewhere(barRef.current)) return;
     const composer = document.getElementById(COMPOSER_ID);
     if (composer instanceof HTMLElement && !composer.hasAttribute("disabled")) composer.focus();
   });
@@ -183,18 +194,31 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const { session } = props;
   const t = useCodingWorkbenchTranslate();
   const retryRef = useRef<HTMLButtonElement | null>(null);
-  const awaitFocus = useFocusAfterAction(session, retryRef);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const awaitFocus = useFocusAfterAction(session, retryRef, barRef);
   // #3880: an unpaired window cannot read its task; the run status sentence says why.
   const errorHeld = useHeldNotice("task-session", session.error);
   const error = session.error && !errorHeld;
   if (session.detail === null && !session.pending && !error) return null;
+  const repeat = session.retry;
   const marked: CodingTaskSession = {
     ...session,
     finish: () => awaitFocus(session.finish),
     newTask: () => awaitFocus(session.newTask),
+    // A successful Try again removes the button that held the focus: it hands the focus over like
+    // the first Complete task did.
+    retry:
+      repeat === undefined
+        ? undefined
+        : () => {
+            void awaitFocus(() => {
+              repeat();
+              return Promise.resolve();
+            });
+          },
   };
   return (
-    <div className={styles.cmpSessionBar}>
+    <div ref={barRef} className={styles.cmpSessionBar}>
       {session.detail !== null ? (
         <span className={styles.cmpSessionIdentity} title={session.detail.task.title}>
           {session.detail.task.title}
@@ -204,7 +228,7 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
       {error ? (
         <>
           <p role="alert">{t("codingWorkbench.history.error")}</p>
-          <RetryButton retry={session.retry} buttonRef={retryRef} />
+          <RetryButton retry={marked.retry} buttonRef={retryRef} />
         </>
       ) : null}
       {session.pending ? <output>{t("codingWorkbench.history.loading")}</output> : null}

@@ -844,6 +844,46 @@ describe("keyboard focus after Complete task and New task", () => {
   });
 });
 
+describe("a successful Try again", () => {
+  it("hands the keyboard focus to the composer instead of dropping it to the page", async () => {
+    function Retrying(): ReactNode {
+      const [state, setState] = useState({ pending: false, error: false });
+      const current = {
+        ...sessionWith([]),
+        pending: state.pending,
+        error: state.error,
+        finish: async (): Promise<void> => {
+          setState({ pending: true, error: false });
+          await Promise.resolve();
+          setState({ pending: false, error: true });
+        },
+        retry: (): void => {
+          setState({ pending: true, error: false });
+          void Promise.resolve().then(() => {
+            setState({ pending: false, error: false });
+          });
+        },
+      };
+      return (
+        <>
+          <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
+          <textarea id="coding-workbench-task-intent" aria-label="Task" />
+        </>
+      );
+    }
+    render(<Retrying />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete task" }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(retry);
+    });
+    fireEvent.click(retry);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText("Task"));
+    });
+  });
+});
+
 describe("a failed task read", () => {
   it("still offers History and New task and retries the read", () => {
     const onHistory = vi.fn();
