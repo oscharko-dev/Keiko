@@ -39089,6 +39089,12 @@
               "required": false
             },
             {
+              "name": "indexUnproven",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "pathCount",
               "type": "integer",
               "dataClass": "count",

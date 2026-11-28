@@ -82,10 +82,14 @@ import {
 } from "./runtimeGitBranch.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import {
+  type GovernedIndexTransition,
   noteGovernedIndexTransitions,
   noteGovernedIndexUnproven,
 } from "../coding-runtime/governedIndexPaths.js";
-import { readGovernedTransitions } from "../coding-runtime/opencodeTurnIndex.js";
+import {
+  type GovernedTransitionsUnproven,
+  readGovernedTransitions,
+} from "../coding-runtime/opencodeTurnIndex.js";
 import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -230,6 +234,14 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
       values: ["truncated", "exit-nonzero", "spawn-failed"],
     },
     truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // A governed stage or unstage succeeded but the index entries it wrote could not be proven, so
+    // the turn's Undo owns none of the paths it covered (closed `GovernedTransitionsUnproven`).
+    indexUnproven: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-transaction", "state-missing", "index-read-failed", "index-unreadable"],
+    },
     // U-32: a task-branch step Keiko refused while it was still only an ask, before any approval
     // card was shown; absent on every step that ran after a decision or without an ask.
     refusedBeforeAsk: { type: "boolean", dataClass: "closed-enum", required: false },
@@ -309,6 +321,7 @@ interface RuntimeGitActivityFields {
   readonly countsUnavailable?: boolean;
   readonly readFailure?: GitReadFailureReason;
   readonly truncated?: boolean;
+  readonly indexUnproven?: GovernedTransitionsUnproven;
   readonly refusedBeforeAsk?: boolean;
   readonly syncOutcome?: GitSyncOutcome;
   readonly failureKind?: string;
@@ -1233,7 +1246,11 @@ export class RuntimeGitService {
       proposal.command.kind === "unstage" || context.buffersClean();
     // The undo of the turn puts back only what governed staging changed, and only while the index
     // still holds the entry the mutation wrote: the entries are read around the mutation (U-34b).
-    const { value: outcome, transitions } = await readGovernedTransitions(
+    const {
+      value: outcome,
+      transitions,
+      unproven,
+    } = await readGovernedTransitions(
       context.workspace.root,
       proposal.command.pathspecs,
       () =>
@@ -1258,8 +1275,7 @@ export class RuntimeGitService {
     );
     const status = outcome.outcome.status;
     if (status === "succeeded") {
-      if (transitions === undefined) noteGovernedIndexUnproven(context.runId, proposal.command.pathspecs);
-      else noteGovernedIndexTransitions(context.runId, transitions);
+      this.recordGovernedIndex(context, proposal, transitions, unproven);
       return this.result(proposal, "succeeded", "none");
     }
     if (status === "blocked") return this.result(proposal, "blocked", outcome.outcome.category);
@@ -1268,6 +1284,25 @@ export class RuntimeGitService {
     return status === "recovery-required"
       ? this.result(proposal, status, "execution-uncertain")
       : this.result(proposal, status, "execution-failed");
+  }
+  // The undo owns only what the index proved: an unobserved mutation withdraws its paths and says why.
+  private recordGovernedIndex(
+    context: VerifiedCommitRunContext,
+    proposal: RuntimeGitProposal,
+    transitions: readonly GovernedIndexTransition[] | undefined,
+    unproven: GovernedTransitionsUnproven | undefined,
+  ): void {
+    if (transitions !== undefined) {
+      noteGovernedIndexTransitions(context.runId, transitions);
+      return;
+    }
+    noteGovernedIndexUnproven(context.runId, proposal.command.pathspecs);
+    this.log(context, `${proposal.command.kind}-execute`, {
+      state: "completed",
+      proposalId: proposal.proposalId,
+      pathCount: proposal.command.pathspecs.length,
+      ...(unproven === undefined ? {} : { indexUnproven: unproven }),
+    });
   }
   private result(
     proposal: RuntimeGitProposal,

@@ -33258,6 +33258,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      indexUnproven: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["no-transaction", "state-missing", "index-read-failed", "index-unreadable"],
+      },
       refusedBeforeAsk: {
         type: "boolean",
         dataClass: "closed-enum",

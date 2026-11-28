@@ -244,13 +244,40 @@ export async function readGovernedTransitions<T>(
   pathspecs: readonly string[],
   mutate: () => Promise<T>,
   succeeded: (value: T) => boolean,
-): Promise<{ value: T; transitions: readonly GovernedIndexTransition[] | undefined }> {
+): Promise<GovernedTransitionsRead<T>> {
   const seen: TransactionStates[] = [];
   const value = await observeGitIndexTransactions(transactionObserver(root, seen), mutate);
   if (!succeeded(value)) return { value, transitions: [] };
   const proven = seen.every((states) => states.after !== undefined);
-  if (seen.length === 0 || !proven) return { value, transitions: undefined };
-  return { value, transitions: mergeTransitions(seen, pathspecs) };
+  if (seen.length === 0 || !proven) {
+    return {
+      value,
+      transitions: undefined,
+      unproven: seen.length === 0 ? "no-transaction" : "state-missing",
+    };
+  }
+  const transitions = mergeTransitions(seen, pathspecs);
+  if (transitions !== undefined) return { value, transitions };
+  return {
+    value,
+    transitions,
+    unproven: seen.some(readFailed) ? "index-read-failed" : "index-unreadable",
+  };
+}
+
+/** Why a successful mutation's index transitions could not be proven (a closed vocabulary). */
+export type GovernedTransitionsUnproven =
+  "no-transaction" | "state-missing" | "index-read-failed" | "index-unreadable";
+
+/** The mutation's result and what it changed in the index; `unproven` names why that is unknown. */
+export interface GovernedTransitionsRead<T> {
+  readonly value: T;
+  readonly transitions: readonly GovernedIndexTransition[] | undefined;
+  readonly unproven?: GovernedTransitionsUnproven;
+}
+
+function readFailed({ before, after }: TransactionStates): boolean {
+  return before === "failed" || after === "failed";
 }
 
 interface TransactionStates {

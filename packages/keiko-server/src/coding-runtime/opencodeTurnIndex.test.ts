@@ -723,7 +723,7 @@ describe("transitions read inside the governed index transaction", () => {
         () => Promise.resolve(true),
         (ok) => ok,
       ),
-    ).resolves.toEqual({ value: true, transitions: undefined });
+    ).resolves.toEqual({ value: true, transitions: undefined, unproven: "no-transaction" });
   });
 });
 
