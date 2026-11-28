@@ -501,7 +501,6 @@ function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutco
   return COMMIT_OUTCOME_BY_REASON.get(commit.reason) ?? gitStepOutcome(commit.status);
 }
 
-// `ready` is a stage or unstage proposal prepared but not yet carried out: it claims no outcome.
 function branchOutcome(
   git: Extract<CodingRuntimeGitResult, { readonly kind: "branch" }>,
 ): CodingSafeActivityGitOutcome {
@@ -510,6 +509,7 @@ function branchOutcome(
     : gitStepOutcome(git.status);
 }
 
+// `ready` is a stage or unstage proposal prepared but not yet carried out: it claims no outcome.
 function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
   if (git.kind === "fetch" || git.kind === "pull")
     return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
