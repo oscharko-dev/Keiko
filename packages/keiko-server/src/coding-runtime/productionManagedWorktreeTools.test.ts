@@ -1981,7 +1981,7 @@ describe("production managed worktree tools", () => {
       const replanned: Parameters<
         NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>
       >[0][] = [];
-      const runToReport = vi.fn((_input: { readonly expectedPlanDigest?: string }) =>
+      const runToReport = vi.fn((_input: VerificationRunInput, _signal: AbortSignal) =>
         Promise.reject(
           options.runnerRefuses === "plan-changed"
             ? new VerificationPlanChangedError()

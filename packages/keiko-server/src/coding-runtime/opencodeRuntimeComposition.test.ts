@@ -29,6 +29,7 @@ import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
+import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import {
   plantDirectoryRedirect,
@@ -323,7 +324,7 @@ interface OpenCodeRuntimeComposition {
       // A built-in, or a custom primary agent the runtime lists (#3903 AC1).
       agent?: string,
       inputs?: AdmittedPromptInputs,
-      origin?: "verification-continuation",
+      origin?: CodingRuntimeTurnOrigin,
     ) => Promise<boolean>;
     /** What a prompt may carry besides its text, and the operations that honour it (ADR-0137 D10). */
     readonly promptInputs?:

@@ -463,7 +463,7 @@ describe("privateStepNode: the run executes its own copy, proven against the pin
     const failing = ports(files, { copyFile: () => Promise.reject(new Error("denied")) });
     const node = await privateStepNode(installed, failing);
     expect(node).toMatchObject({ outcome: "copy-failed", stepNode: undefined });
-    expect(node.failure).toBeInstanceOf(Error);
+    expect(node.stepNode === undefined ? node.failure : undefined).toBeInstanceOf(Error);
     expect(failing.removed).toEqual(["/private/run-1"]);
   });
 });
