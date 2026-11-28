@@ -248,6 +248,7 @@ export function tabUnderlineStyle(active: boolean): CSSProperties {
 // Summary strip above the file list: changed-file count, staged count, then bulk actions.
 export const SUMMARY_STRIP_STYLE: CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   gap: 8,
   padding: "10px 12px 8px",
@@ -257,7 +258,7 @@ export const SUMMARY_STRIP_STYLE: CSSProperties = {
 export const CHANGES_COUNT_STYLE: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  minWidth: 0,
+  whiteSpace: "nowrap",
   color: "var(--fg)",
   fontSize: 12,
   fontWeight: 700,
@@ -275,10 +276,11 @@ export const STAGING_COUNT_STYLE: CSSProperties = {
 
 export const SUMMARY_ACTIONS_STYLE: CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   gap: 5,
   marginLeft: "auto",
-  flex: "none",
+  maxWidth: "100%",
 };
 
 export const STAGING_SCOPE_HINT_STYLE: CSSProperties = {
@@ -495,6 +497,7 @@ export const COMMIT_WORKSPACE_DESCRIPTION_FIELD_STYLE: CSSProperties = {
 
 export const FLOW_ROW_STYLE: CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   gap: 6,
 };

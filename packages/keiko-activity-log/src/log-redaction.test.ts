@@ -1306,6 +1306,8 @@ describe("code-owned client diagnostic notes (F29)", () => {
     "Keiko editor runtime notice: host-edit-ignored (reason=read-only)",
     "Keiko editor runtime notice: model-ownership-changed",
     "git-client: stale generated commit draft cleared (repository-revision-changed)",
+    "git-client: generated commit draft discarded (composer edited before response)",
+    "git-client: generated commit draft discarded (staged revision changed before response)",
     "git-client: commit draft cleared (repository-selection-changed)",
     "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=0, reason=connecting)",
     "[keiko] relationship-activity sse stream error (kind=sse-error, readyState=2, reason=closed)",

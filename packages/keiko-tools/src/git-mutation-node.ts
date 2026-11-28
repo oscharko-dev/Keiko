@@ -740,6 +740,8 @@ export {
   readGitTreeDigest,
   readGitWorktreeSnapshot,
   readGitStagedDiff,
+  readGitStagedDraft,
+  GitStagedDraftScopeError,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,

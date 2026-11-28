@@ -29,6 +29,7 @@ import {
   CancelledError,
   ProviderOutputExhaustedError,
   ProviderEmptyAnswerError,
+  ProviderError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security";
 import { UI_HOST } from "../server.js";
@@ -778,6 +779,218 @@ describe("commit preview — read-only verification context (AC3)", () => {
 });
 
 describe("commit draft — explicit model-backed generation", () => {
+  it.each(["snapshot", "retry", "result"] as const)(
+    "withholds model input after managed workspace authority is revoked during %s",
+    async (phase) => {
+      const fixture = managedWorkspaceDeps();
+      try {
+        const provisioning = fixture.override.workspaceProvisioning;
+        if (provisioning === undefined) throw new Error("Missing managed workspace fixture");
+        let revoked = false;
+        const correlationId = "git-commit-draft-revoked-fixture";
+        const events: ServerLogEvent[] = [];
+        const model = vi.fn(() => {
+          if (phase === "retry" && !revoked) {
+            revoked = true;
+            throw new ProviderError("Unavailable", 501);
+          }
+          if (phase === "result") revoked = true;
+          return draftResponse({ subject: "fix: repair review", body: "Handle empty results." });
+        });
+        const handler = createHandleCommitDraft({
+          execution: seams({
+            stagedDiffReader: () => {
+              if (phase === "snapshot") revoked = true;
+              return Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change");
+            },
+          }),
+          activityLog: { write: (event) => events.push(event) },
+        });
+        const context = ctxFor(DRAFT, {
+          schemaVersion: "1",
+          projectId: fixture.instance.managedWorktreePath,
+        });
+        const res = await handler(
+          { ...context, correlationId },
+          deps({
+            ...fixture.override,
+            workspaceProvisioning: {
+              ...provisioning,
+              getInstance: (id) => (revoked ? undefined : provisioning.getInstance(id)),
+            },
+            config: DRAFT_GATEWAY_CONFIG,
+            modelPortFactory: () => draftModelPort(model),
+          }),
+        );
+        expect(res.status).toBe(409);
+        expect(model).toHaveBeenCalledTimes(phase === "snapshot" ? 0 : 1);
+        expect(events).toContainEqual(
+          expect.objectContaining({ op: "workspace.root.denied", correlationId }),
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it("accepts a style draft for blank-line and trailing-whitespace edits", async () => {
+    const patch = [
+      "diff --git a/src/review.ts b/src/review.ts",
+      "--- a/src/review.ts",
+      "+++ b/src/review.ts",
+      "@@ -1,2 +1 @@",
+      "-",
+      "-const ready = true;  ",
+      "+const ready = true;",
+    ].join("\n");
+    const subject = "style: remove blank lines and trailing whitespace";
+    const handler = createHandleCommitDraft({
+      execution: seams({ stagedDiffReader: () => Promise.resolve(patch) }),
+    });
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => draftResponse({ subject, body: "Tidy spacing." })),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((res.body as GitDeliveryCommitDraftBody).suggestedMessage.startsWith(subject)).toBe(
+      true,
+    );
+  });
+
+  it("explains that a nested project must reopen the repository root before drafting", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: projectId });
+    const nestedRoot = join(projectId, "nested");
+    mkdirSync(nestedRoot);
+    const nestedProject = store.createProject(nestedRoot).path;
+    const events: ServerLogEvent[] = [];
+    const modelPortFactory = vi.fn<UiHandlerDeps["modelPortFactory"]>();
+    const handler = createHandleCommitDraft({
+      activityLog: { write: (event) => events.push(event) },
+    });
+    const result = await handler(
+      {
+        ...ctxFor(DRAFT, { schemaVersion: "1", projectId: nestedProject }),
+        correlationId: "git-commit-draft-nested-root",
+      },
+      deps({ modelPortFactory }),
+    );
+    expect(result.status).toBe(409);
+    const failureCode = "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED";
+    expect(result.body).toMatchObject({ error: { code: failureCode } });
+    expect(modelPortFactory).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.commit.draft.completed",
+        correlationId: "git-commit-draft-nested-root",
+        errorKind: "validation-failed",
+        extra: expect.objectContaining({ failureCode }) as unknown,
+      }),
+    );
+  });
+
+  it("retries without the response schema when the model endpoint does not implement it", async () => {
+    const calls: GatewayCallRequest[] = [];
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: { write: (event) => events.push(event) },
+    });
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            calls.push(request);
+            if (request.responseFormat !== undefined) throw new ProviderError("Unavailable", 501);
+            const response = draftResponse({
+              subject: "fix: repair review",
+              body: "Handle empty results.",
+            });
+            return { ...response, structuredOutput: null };
+          }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.responseFormat).toBeDefined();
+    expect(calls[1]?.responseFormat).toBeUndefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.commit.draft.attempt.completed",
+        extra: expect.objectContaining({
+          attempt: 1,
+          structuredOutputUnavailable: true,
+        }) as unknown,
+      }),
+    );
+  });
+
+  it("repairs a blank-line-only subject when the staged patch changes behavior", async () => {
+    const patch = [
+      "diff --git a/src/review.ts b/src/review.ts",
+      "--- a/src/review.ts",
+      "+++ b/src/review.ts",
+      "@@ -1,3 +1,2 @@",
+      " function review(result) {",
+      "-",
+      "-  return result.document;",
+      "+  return result.ready ? result.document : null;",
+    ].join("\n");
+    const attempts: GatewayCallRequest[] = [];
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader: () => Promise.resolve(["src/review.ts"]),
+        stagedDiffReader: () => Promise.resolve(patch),
+      }),
+      activityLog: { write: (event) => events.push(event) },
+    });
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            attempts.push(request);
+            return attempts.length === 1
+              ? draftResponse({
+                  subject: "style: remove redundant blank lines in review route",
+                  body: "- Remove blank lines in the review route.",
+                })
+              : draftResponse({
+                  subject: "fix: wait for review results to be ready",
+                  body: "- Return no document until extraction is ready.",
+                });
+          }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      suggestedMessage: expect.stringContaining("extraction is ready") as unknown,
+    });
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]?.messages[0]?.content).toContain("overlooked nonblank changes");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.commit.draft.attempt.completed",
+        extra: expect.objectContaining({
+          attempt: 1,
+          blankLineDraftRejected: true,
+          blankChangedLines: 1,
+          nonBlankChangedLines: 2,
+          mixedBlankChangeFiles: 1,
+        }) as unknown,
+      }),
+    );
+  });
+
   it("generates a draft from the staged diff only when requested", async () => {
     const stagedDiff = [
       "diff --git a/packages/keiko-ui/src/CommitComposer.tsx b/packages/keiko-ui/src/CommitComposer.tsx",
@@ -955,6 +1168,9 @@ describe("commit draft — explicit model-backed generation", () => {
         promptTokens: preparation().promptTokens,
         maxPromptTokens: preparation().maxPromptTokens,
         diffCompacted: preparation().diffCompacted,
+        blankChangedLines: 0,
+        nonBlankChangedLines: 0,
+        mixedBlankChangeFiles: 0,
         draftKeyDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
         maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
         deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
@@ -1356,6 +1572,16 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(res.body).toMatchObject({
       error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
     });
+  });
+
+  it("skips staging and generation when the response is already closed", async () => {
+    const stagedPathsReader = vi.fn<NonNullable<GitDeliveryExecutionSeams["stagedPathsReader"]>>();
+    const handler = createHandleCommitDraft({ execution: seams({ stagedPathsReader }) });
+    const context = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    Object.defineProperty(context.res, "destroyed", { value: true });
+    const result = await handler(context, deps());
+    expect(result.status).toBe(499);
+    expect(stagedPathsReader).not.toHaveBeenCalled();
   });
 
   it("aborts the in-flight model call when the client disconnects", async () => {

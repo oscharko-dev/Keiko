@@ -80,7 +80,7 @@ import { ConnectToChatDialog } from "./ConnectToChatDialog";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
-import { CommitComposer } from "./CommitComposer";
+import { CommitComposer, useCommitDraftController } from "./CommitComposer";
 import { DiffPane } from "./DiffPane";
 import { NewBranchDialog } from "./NewBranchDialog";
 import {
@@ -1506,11 +1506,13 @@ export function GitClientWindow({
         } catch (error) {
           // A transport failure or timeout may follow a server that already changed the index.
           moveEpoch();
+          if (originRepository !== null)
+            notifyGitRepositoryStateInvalidated(originRepository, mutationRepositoryRoot);
           throw error;
         }
       });
     },
-    [runStaging, selectedPath],
+    [mutationRepositoryRoot, runStaging, selectedPath],
   );
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
   const runCommitPreview = commit.runPreview;
@@ -2109,12 +2111,27 @@ export function GitClientWindow({
     [client, commit, hasActiveConflicts, selectedPath],
   );
 
-  const generateCommitDraft = useCallback(async (): Promise<string> => {
-    if (selectedPath === null) throw new Error(optionalT("gitClientWindow.error.noRepository"));
-    if (hasActiveConflicts) throw new Error(optionalT("gitClientWindow.ui.resolveConflicts"));
-    const result = await client.commitDraft({ projectId: selectedPath });
-    return result.suggestedMessage;
-  }, [client, hasActiveConflicts, optionalT, selectedPath]);
+  const generateCommitDraft = useCallback(
+    async (signal: AbortSignal): Promise<string> => {
+      if (selectedPath === null) throw new Error(optionalT("gitClientWindow.error.noRepository"));
+      if (hasActiveConflicts) throw new Error(optionalT("gitClientWindow.ui.resolveConflicts"));
+      const result = await client.commitDraft({ projectId: selectedPath }, signal);
+      return result.suggestedMessage;
+    },
+    [client, hasActiveConflicts, optionalT, selectedPath],
+  );
+
+  const draftController = useCommitDraftController(
+    {
+      revision: `${commitDraftRevision}:${commitNonce.toString()}`,
+      summaryValue: commitSummary,
+      bodyValue: commitBody,
+      onSummaryChange: setCommitSummary,
+      onBodyChange: setCommitBody,
+      onGenerateDraft: generateCommitDraft,
+    },
+    optionalT,
+  );
 
   const switchBranch = useCallback(
     (branchName: string, trigger: HTMLButtonElement): void => {
@@ -2337,6 +2354,7 @@ export function GitClientWindow({
       stagedFileCount={activeStatus?.stagedCount ?? 0}
       hasConflicts={hasActiveConflicts}
       busy={commit.flow.busy}
+      stagingBusy={staging.flow.busy}
       outcome={commit.flow.outcome}
       error={commit.flow.error}
       preview={commit.preview}
@@ -2344,14 +2362,9 @@ export function GitClientWindow({
       previewRequestRevision={commit.previewRequestRevision}
       previewError={commit.previewError}
       previewRevision={commitPreviewRevision}
-      draftRevision={commitDraftRevision}
+      draftController={draftController}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
-      summaryValue={commitSummary}
-      bodyValue={commitBody}
-      onSummaryChange={setCommitSummary}
-      onBodyChange={setCommitBody}
       onPreview={previewCommitDraft}
-      onGenerateDraft={generateCommitDraft}
       onCommit={commitChanges}
       onCreateBranch={openNewBranchDialog}
       onCreatePullRequest={() => openRightPane("pull-request")}

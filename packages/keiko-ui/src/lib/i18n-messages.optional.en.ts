@@ -3344,6 +3344,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.hint.stageChanges": "Stage changes to prepare a commit draft.",
   "commitComposer.hint.enterSummary": "Enter a commit summary.",
   "commitComposer.hint.waitPreview": "Wait for commit policy preview.",
+  "commitComposer.hint.waitStaging": "Wait for staging to finish.",
   "commitComposer.hint.createBranchForProtected":
     "Create a working branch before committing to this protected branch.",
   "commitComposer.hint.resolvePolicy": "Resolve the commit-policy issues below to commit.",
@@ -3381,6 +3382,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.draft.detail": "Review or edit this message before committing.",
   "commitComposer.draft.subject": "Subject",
   "commitComposer.draft.body": "Body",
+  "commitComposer.draft.stagedChanged":
+    "The staged changes changed. Generate a draft for the current selection.",
+  "commitComposer.draft.editsKept": "Your edits were kept. The generated draft was discarded.",
+  "commitComposer.draft.applied": "Commit draft added to Summary and Description.",
+  "commitComposer.error.draftRepositoryRoot":
+    "Open the repository root in Git to generate a draft for all staged changes.",
+  "commitComposer.error.draftWorktreeUnavailable":
+    "Keiko could not read all staged changes for the draft. You can enter the message manually.",
   "commitComposer.draft.generateHint":
     "Keiko reads the selected staged diff only when you click this button.",
   "commitComposer.draft.unavailable":
@@ -5928,6 +5937,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "reviewWidget.confirmApplySingular": "Confirm apply ({count} file)",
   "reviewWidget.confirmApplyPlural": "Confirm apply ({count} files)",
   "reviewWidget.unexpectedError": "Unexpected error.",
+  "gitClientWindow.changes.countOne": "{count} change",
+  "gitClientWindow.changes.countMany": "{count} changes",
+  "gitClientWindow.changes.stagedCount": "{count} staged",
   "gitClientWindow.changes.stagingScopeHint":
     "Select files with the checkboxes. Keiko uses only staged files for the commit draft.",
   "gitClientWindow.connect.stagedDraftHint":

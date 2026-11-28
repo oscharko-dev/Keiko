@@ -29030,6 +29030,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
           "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
           "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+          "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED",
           "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
           "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
         ],
@@ -29055,6 +29056,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       diffCompacted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      blankChangedLines: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      nonBlankChangedLines: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      mixedBlankChangeFiles: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      blankLineDraftRejected: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      structuredOutputUnavailable: {
         type: "boolean",
         dataClass: "closed-enum",
         required: false,
@@ -29195,6 +29221,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
           "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
           "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+          "GIT_DELIVERY_COMMIT_DRAFT_REPOSITORY_ROOT_REQUIRED",
           "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
           "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
         ],
@@ -29220,6 +29247,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       diffCompacted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      blankChangedLines: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      nonBlankChangedLines: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      mixedBlankChangeFiles: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      blankLineDraftRejected: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      structuredOutputUnavailable: {
         type: "boolean",
         dataClass: "closed-enum",
         required: false,

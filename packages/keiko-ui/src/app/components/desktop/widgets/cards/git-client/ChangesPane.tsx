@@ -342,9 +342,18 @@ function ChangesList({
       {hasChanges ? (
         <div style={SUMMARY_STRIP_STYLE}>
           <span style={CHANGES_COUNT_STYLE}>
-            {status.changes.length} {status.changes.length === 1 ? "change" : "changes"}
+            {t(
+              status.changes.length === 1
+                ? "gitClientWindow.changes.countOne"
+                : "gitClientWindow.changes.countMany",
+              { count: status.changes.length },
+            )}
           </span>
-          {stagedCount > 0 ? <span style={STAGING_COUNT_STYLE}>{stagedCount} staged</span> : null}
+          {stagedCount > 0 ? (
+            <span style={STAGING_COUNT_STYLE}>
+              {t("gitClientWindow.changes.stagedCount", { count: stagedCount })}
+            </span>
+          ) : null}
           <span style={SUMMARY_ACTIONS_STYLE}>
             <button
               type="button"

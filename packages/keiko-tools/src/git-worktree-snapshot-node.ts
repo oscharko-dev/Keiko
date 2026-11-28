@@ -17,6 +17,7 @@
 import { gitEnv } from "@oscharko-dev/keiko-git";
 import { createHash } from "node:crypto";
 import {
+  isDenied,
   PathDeniedError,
   type WorkspaceFs,
   type WorkspaceInfo,
@@ -198,6 +199,13 @@ export class GitWorktreeReadError extends Error {
   public constructor(message: string) {
     super(message);
     this.name = "GitWorktreeReadError";
+  }
+}
+
+export class GitStagedDraftScopeError extends GitWorktreeReadError {
+  public constructor() {
+    super("a staged draft requires the repository root");
+    this.name = "GitStagedDraftScopeError";
   }
 }
 
@@ -723,6 +731,10 @@ export async function readGitUntrackedPaths(
     "-z",
     "--",
   ]);
+  return parseNulPathList(output);
+}
+
+function parseNulPathList(output: string): readonly string[] {
   if (output === "") return [];
   if (!output.endsWith("\0") || output.includes("\uFFFD"))
     throw new TypeError("git-path-list-incomplete");
@@ -831,12 +843,7 @@ export async function readGitCommitIdentity(
   };
 }
 
-/**
- * Reads the relative paths currently staged for commit (`git diff --cached --name-only`). Used by the
- * server for commit-intent scope inference; the paths stay in-process and are never persisted.
- */
-/** Bounded staged patch for the existing interactive review parser; never evidence or a PR snapshot. */
-export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promise<string> {
+function stagedPatchContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
   // Stage-all selections routinely include lockfiles larger than the generic 256 KiB command
   // output allowance. Keep the read bounded to the existing Git metadata ceiling; explicit
   // narrower policies still win, and runRead rejects truncation instead of returning a prefix.
@@ -844,21 +851,90 @@ export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promis
     ...(deps.policy ?? DEFAULT_SANDBOX_POLICY),
     maxOutputBytes: Math.min(deps.policy?.maxOutputBytes ?? 4_194_304, 4_194_304),
   };
-  return runRead(buildReadContext({ ...deps, policy }), [
+  return buildReadContext({ ...deps, policy });
+}
+
+function stagedPatchArgs(format: readonly string[]): readonly string[] {
+  return [
     "diff",
     "--cached",
+    ...format,
     "--no-ext-diff",
     "--no-textconv",
     "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--submodule=short",
+    "--ignore-submodules=none",
     "--unified=3",
     "--",
-  ]);
+  ];
 }
 
+/** Bounded staged patch for the existing interactive review parser; never persisted. */
+export function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promise<string> {
+  return runRead(stagedPatchContext(deps), stagedPatchArgs(["--patch"]));
+}
+
+interface GitStagedDraft {
+  readonly paths: readonly string[];
+  readonly patch: string;
+}
+
+const STAGED_RAW_RECORD = /^:[0-7]{6} [0-7]{6} [a-f0-9]+ [a-f0-9]+ ([ACDMRT])\d*$/u;
+const STAGED_RAW_TWO_PATHS: ReadonlySet<string> = new Set(["R", "C"]);
+
+function admittedDraftPath(source: string | undefined, path: string | undefined): string {
+  if (!source || !path) throw new GitWorktreeReadError("staged draft path missing");
+  if (isDenied(source) || isDenied(path))
+    throw new PathDeniedError("staged draft includes a denied path", "");
+  return path;
+}
+
+function stagedDraftPaths(raw: string): readonly string[] {
+  if (raw.includes("[REDACTED]"))
+    throw new GitWorktreeReadError("staged draft paths were redacted");
+  const records = parseNulPathList(raw);
+  const paths = new Set<string>();
+  for (let index = 0; index < records.length;) {
+    const kind = STAGED_RAW_RECORD.exec(records[index++] ?? "")?.[1];
+    if (kind === undefined) throw new GitWorktreeReadError("staged draft status unavailable");
+    const source = records[index++];
+    const path = STAGED_RAW_TWO_PATHS.has(kind) ? records[index++] : source;
+    paths.add(admittedDraftPath(source, path));
+  }
+  return [...paths];
+}
+
+/** One Git invocation binds the paths and patch to the same HEAD and index read. */
+export async function readGitStagedDraft(deps: NodeGitWorktreeReaderDeps): Promise<GitStagedDraft> {
+  const ctx = stagedPatchContext(deps);
+  const scope = (
+    await runRead(ctx, ["rev-parse", "--is-inside-work-tree", "--show-prefix"])
+  ).replaceAll("\r\n", "\n");
+  if (!scope.startsWith("true\n"))
+    throw new GitWorktreeReadError("staged draft worktree unavailable");
+  if (scope !== "true\n\n") throw new GitStagedDraftScopeError();
+  const output = await runRead(ctx, stagedPatchArgs(["--patch-with-raw", "-z", "--no-relative"]));
+  if (output === "") return { paths: [], patch: "" };
+  const separator = output.indexOf("\0\0");
+  const patch = output.slice(separator + 2);
+  if (separator < 0 || !patch.startsWith("diff --git "))
+    throw new GitWorktreeReadError("staged draft patch unavailable");
+  return { paths: stagedDraftPaths(output.slice(0, separator + 1)), patch };
+}
+
+/** Relative staged paths for commit-intent scope inference; never persisted. */
 export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> {
-  const ctx = machineReadContext(deps);
-  const out = await runRead(ctx, ["diff", "--cached", "--name-only"]);
-  return parseLines(out);
+  const output = await runRead(metadataReadContext(deps), [
+    "diff",
+    "--cached",
+    "--name-only",
+    "--ignore-submodules=none",
+    "-z",
+    "--",
+  ]);
+  return parseNulPathList(output);
 }
 
 /**

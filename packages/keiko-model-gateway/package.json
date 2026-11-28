@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./internal/generated-json": {
+      "types": "./dist/generated-json.d.ts",
+      "import": "./dist/generated-json.js"
+    },
     "./internal/http": {
       "types": "./dist/http.d.ts",
       "import": "./dist/http.js"

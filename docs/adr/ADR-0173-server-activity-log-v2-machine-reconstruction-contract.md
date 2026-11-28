@@ -1368,6 +1368,12 @@ explain model-context compaction, a corrective generation and a cached result wi
 paths, prompts or draft bodies. Once normalization runs, the selected result also carries `normalizationVersion`, `normalizationRule`, `normalizationChanged`, `bodyBulletCount`, `trailerLikeLineCount`, `trailerCount`, `trailerContinuationCount`, `trailerParagraphBreakCount`, `referenceTrailerCount` and `breakingTrailerCount`. The rule is a closed class and counts are bounded by the validated 12,000-character model body. Successful generation and cache reuse carry the same structural evidence; a policy-rejected normalized answer retains it, while failures before normalization omit it. Each preparation/generation attempt separately emits `git.commit.draft.attempt.completed` under the same correlation, with `attempt`, outcome, closed failure code, bounds and that attempt's normalization evidence. The completion line describes only the selected result; attempt lines retain earlier rejected normalizations and the cause of repair, including when recovery fails before formatting or is refused before a second model call. Cache hits emit no attempt line. The timeline therefore distinguishes retained footers from normalized body items without storing labels, references or content. Chat retries before the first delivered chunk use the existing
 `gateway.retry.*` operations under the same correlation; a partial answer is never replayed.
 
+Staged-diff preparation also records blank and nonblank edit counts and the number of files
+containing both on the two draft
+operations. An attempt records a closed flag when its subject overlooks nonblank edits or the
+provider rejects the structured request with HTTP 501. Staged read failures retain a correlated
+completion without counts that were unavailable.
+
 Repository-add lifecycle correction (2026-09-27): clone/register emits
 `client.git-operation.attempted` before sending the request with that same correlation id.
 An active dialog reports `client.git-operation.settled` with `succeeded` or `failed`; failures also

@@ -1,4 +1,5 @@
 import { workspaceStorageArgs } from "./support/workspace-storage.js";
+import { evidenceArtifactPath } from "./support/evidence.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import {
@@ -19,18 +20,18 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 //   • Changed-file list (nav[aria-label="Changed files"]) shows one row per change; each row
 //     button's accessible name carries "path, status" (status word also present sr-only), and the
 //     stage/unstage checkboxes carry their aria-labels.
-//   • Summary strip reads "{M} of {N} files staged" and "Stage all" / "Unstage all" are present.
+//   • The summary strip shows both counts and keeps bulk controls visible at minimum sidebar width.
+//   • An unresolved conflict blocks staging and commit actions.
 //   • Clicking a path button loads the diff; the diff pane shows role=group[aria-label="Diff scope"]
 //     with "Worktree" and "Staged" buttons.
 //   • Diff pane empty state ("No diff content") when the selected change has no text diff.
 //   • section[aria-label="Commit"] with "Summary" input, "Description" textarea, and "Commit" button.
-//   • [data-testid="git-commit-preview"] appears after the debounced policy preview fires.
+//   • The policy preview appears after a subject is entered in a conflict-free repository.
 //
 // The real git repo provides the fixture root. The read surface (/api/git/status + /api/git/diff) is
 // intercepted with a deterministic fixture so the assertion is stable across CI environments and
 // machines where the git binary path may differ. Only the staging mutation routes
-// (/api/git-delivery/staging/*) are intercepted with lightweight governed JSON. The commit routes
-// are NOT exercised (the commit button is disabled without staged files; this spec does not stage).
+// (/api/git-delivery/staging/*) and commit preview are intercepted with lightweight governed JSON.
 
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "1575");
@@ -271,12 +272,17 @@ function jsonBody(body: unknown): { status: number; contentType: string; body: s
   return { status: 200, contentType: "application/json", body: JSON.stringify(body) };
 }
 
-async function interceptStatusRoute(page: Page): Promise<void> {
+async function interceptStatusRoute(page: Page, withConflict: boolean): Promise<void> {
+  const fixture = withConflict
+    ? STATUS_FIXTURE
+    : {
+        ...STATUS_FIXTURE,
+        conflictedCount: 0,
+        changes: STATUS_FIXTURE.changes.filter((change) => !change.conflicted),
+      };
   await page.route("**/api/git/status**", async (route) => {
     const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
-    await route.fulfill(
-      jsonBody({ ...STATUS_FIXTURE, root: rootParam, repositoryRoot: rootParam }),
-    );
+    await route.fulfill(jsonBody({ ...fixture, root: rootParam, repositoryRoot: rootParam }));
   });
 }
 
@@ -297,7 +303,7 @@ async function interceptBranchRoute(page: Page): Promise<void> {
   });
 }
 
-async function interceptSummaryRoute(page: Page): Promise<void> {
+async function interceptSummaryRoute(page: Page, withConflict: boolean): Promise<void> {
   await page.route("**/api/git/summary**", async (route) => {
     const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
     await route.fulfill(
@@ -315,7 +321,7 @@ async function interceptSummaryRoute(page: Page): Promise<void> {
         stagedCount: 3,
         unstagedCount: 1,
         untrackedCount: 1,
-        conflictedCount: 1,
+        conflictedCount: Number(withConflict),
         clean: false,
         remotes: [{ name: "origin" }],
         truncated: false,
@@ -386,10 +392,10 @@ async function interceptDiffRoute(page: Page): Promise<void> {
 }
 
 // Read surface: deterministic Git state for every route the Git window loads.
-async function interceptReadRoutes(page: Page): Promise<void> {
-  await interceptStatusRoute(page);
+async function interceptReadRoutes(page: Page, withConflict: boolean): Promise<void> {
+  await interceptStatusRoute(page, withConflict);
   await interceptBranchRoute(page);
-  await interceptSummaryRoute(page);
+  await interceptSummaryRoute(page, withConflict);
   await interceptHistoryRoute(page);
   await interceptRemotesRoute(page);
   await interceptDiffRoute(page);
@@ -436,8 +442,12 @@ async function interceptProjectAndMutationRoutes(
   });
 }
 
-async function interceptGitRoutes(page: Page, browserProjectPath: string): Promise<void> {
-  await interceptReadRoutes(page);
+async function interceptGitRoutes(
+  page: Page,
+  browserProjectPath: string,
+  withConflict = true,
+): Promise<void> {
+  await interceptReadRoutes(page, withConflict);
   await interceptProjectAndMutationRoutes(page, browserProjectPath);
 }
 
@@ -496,7 +506,7 @@ function artifactPath(name: ArtifactName): string {
   if (existsSync(resolved) && lstatSync(resolved).isSymbolicLink()) {
     throw new Error("Issue #1575 git-changes evidence artifact path is a symlink");
   }
-  return resolved;
+  return evidenceArtifactPath(relative(REPO_ROOT, resolved));
 }
 
 const MANIFEST_ROUTES = [
@@ -524,7 +534,7 @@ const MANIFEST_FIXTURE_STATES = {
 const MANIFEST_NOTES = [
   "Real governedGit window rendered through the real WindowsRegistry + GitClientWindow.",
   "Read surface (status/diff) intercepted with deterministic fixture carrying all six states.",
-  "Staging mutation routes intercepted for determinism; commit is not exercised (no staged files).",
+  "The conflicted fixture disables staging and commit; conflict-free controls verify staged actions and the commit preview.",
   "The real git fixture is built in a temp dir (execFileSync git init/add/commit/mv/rm/merge).",
 ] as const;
 
@@ -570,8 +580,8 @@ async function assertChangedFileList(gitWindow: Locator): Promise<Locator> {
   // ChangesPane emits, and had not been for long enough that the whole suite was red unnoticed.
   await expect(gitWindow.getByText("6 changes", { exact: true })).toBeVisible();
   await expect(gitWindow.getByText("3 staged", { exact: true })).toBeVisible();
-  await expect(gitWindow.getByRole("button", { name: "Stage all", exact: true })).toBeVisible();
-  await expect(gitWindow.getByRole("button", { name: "Unstage all", exact: true })).toBeVisible();
+  await expect(gitWindow.getByRole("button", { name: "Stage all", exact: true })).toBeDisabled();
+  await expect(gitWindow.getByRole("button", { name: "Unstage all", exact: true })).toBeDisabled();
 
   // MODIFIED (unstaged → "Stage") vs staged ADDED/DELETED/RENAMED (→ "Unstage").
   await expect(nav.locator('input[type="checkbox"][aria-label="Stage src/app.ts"]')).toBeVisible();
@@ -627,14 +637,12 @@ async function assertDiffAndCommitComposer(
   await nav.getByRole("button", { name: "docs/OVERVIEW.md, staged renamed" }).click();
   await expect(gitWindow.getByText("No diff content for this change.")).toBeVisible();
 
-  // Commit composer: labelled Summary + Description, a Commit button, and a debounced policy preview.
+  // Commit composer remains visible during a conflict and correctly blocks commit.
   const commitSection = gitWindow.locator('section[aria-label="Commit"]');
   await expect(commitSection).toBeVisible();
   await expect(commitSection.getByLabel("Summary")).toBeVisible();
   await expect(commitSection.getByLabel("Description")).toBeVisible();
-  await expect(commitSection.getByRole("button", { name: /Commit/u })).toBeVisible();
-  await commitSection.getByLabel("Summary").fill("chore: verify git changes view for issue 1575");
-  await expect(page.locator('[data-testid="git-commit-preview"]')).toBeVisible();
+  await expect(commitSection.getByRole("button", { name: /^Commit (?:to|into)/u })).toBeDisabled();
 }
 
 test("Issue #1575 — Git Changes view renders all six file states against a real git fixture", async ({
@@ -654,6 +662,13 @@ test("Issue #1575 — Git Changes view renders all six file states against a rea
   const nav = await assertChangedFileList(gitWindow);
   await assertDiffAndCommitComposer(page, gitWindow, nav);
 
+  const sidebar = gitWindow.getByRole("slider", { name: "Resize changes column" });
+  await sidebar.press("Home");
+  const counts = gitWindow.getByText("6 changes", { exact: true }).locator("..");
+  await expect.poll(() => counts.evaluate((row) => row.scrollWidth <= row.clientWidth)).toBe(true);
+  const actions = gitWindow.getByRole("button", { name: "Create pull request" }).locator("..");
+  await expect.poll(() => actions.evaluate((row) => row.scrollWidth <= row.clientWidth)).toBe(true);
+
   await page.locator("body").screenshot({ path: artifactPath("git-changes-view.png") });
   writeEvidenceManifest();
 });
@@ -664,7 +679,7 @@ test("Issue #1575 — Stage all button is enabled when unstaged changes are pres
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH, false);
   await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
@@ -681,7 +696,7 @@ test("Issue #1575 — Unstage all button is enabled when staged changes are pres
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH, false);
   await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
@@ -692,6 +707,9 @@ test("Issue #1575 — Unstage all button is enabled when staged changes are pres
   await expect(unstageAllBtn).toBeVisible();
   // The fixture has 3 staged files → Unstage all must be enabled.
   await expect(unstageAllBtn).toBeEnabled();
+  const commitSection = gitWindow.locator('section[aria-label="Commit"]');
+  await commitSection.getByLabel("Summary").fill("chore: verify git changes view for issue 1575");
+  await expect(page.getByTestId("git-commit-preview")).toBeVisible();
 });
 
 test("Issue #1575 — Untracked row checkbox aria-label uses 'Stage' not 'Unstage'", async ({

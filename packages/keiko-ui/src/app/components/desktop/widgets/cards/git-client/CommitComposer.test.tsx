@@ -10,7 +10,30 @@ import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { ApiError, type GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
-import { CommitComposer, composeCommitMessage } from "./CommitComposer";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import {
+  CommitComposer as RepositoryCommitComposer,
+  composeCommitMessage,
+  useCommitDraftController,
+} from "./CommitComposer";
+import type { ReactNode } from "react";
+
+type CommitComposerFixtureProps = Omit<
+  Parameters<typeof RepositoryCommitComposer>[0],
+  "draftController"
+> &
+  Omit<Parameters<typeof useCommitDraftController>[0], "revision"> & {
+    readonly draftRevision?: string;
+  };
+
+function CommitComposer(props: CommitComposerFixtureProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const draftController = useCommitDraftController(
+    { ...props, revision: props.draftRevision ?? String(props.previewRevision) },
+    t,
+  );
+  return <RepositoryCommitComposer {...props} draftController={draftController} />;
+}
 
 function makePreview(
   overrides: Partial<GitDeliveryCommitPreviewResponse> = {},
@@ -420,6 +443,56 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(screen.getByLabelText("Summary")).toHaveValue("docs: user typed this");
     expect(screen.getByLabelText("Description")).toHaveValue("");
   });
+
+  it.each([true, false])(
+    "binds in-flight generation to the staged revision (changed: %s)",
+    async (changed) => {
+      const user = userEvent.setup();
+      const diagnostics: string[] = [];
+      setClientDiagnosticWriter((message) => diagnostics.push(message));
+      let resolveDraft = (_message: string): void => undefined;
+      const props = {
+        projectId: "/repos/alpha",
+        stagedFileCount: 1,
+        busy: false,
+        outcome: null,
+        error: null,
+        preview: null,
+        previewDraft: null,
+        previewError: null,
+        onPreview: vi.fn(),
+        onGenerateDraft: (): Promise<string> =>
+          new Promise((resolve) => {
+            resolveDraft = resolve;
+          }),
+        onCommit: vi.fn(),
+      } as const;
+      const view = render(<CommitComposer {...props} previewRevision={1} draftRevision="before" />);
+      const generate = screen.getByRole("button", { name: "Generate with Keiko" });
+      await user.click(generate);
+      view.rerender(
+        <CommitComposer
+          {...props}
+          previewRevision={changed ? 1 : 2}
+          draftRevision={changed ? "after" : "before"}
+        />,
+      );
+      resolveDraft("fix: wait for review\n\nRequire a ready document.");
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeEnabled(),
+      );
+      expect(screen.getByLabelText("Summary")).toHaveValue(changed ? "" : "fix: wait for review");
+      expect(diagnostics).toEqual([
+        changed
+          ? "git-client: generated commit draft discarded (staged revision changed before response)"
+          : "git-client: model commit draft applied from explicit action",
+      ]);
+      if (changed) {
+        view.rerender(<CommitComposer {...props} previewRevision={1} draftRevision="before" />);
+        expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeEnabled();
+      }
+    },
+  );
 
   // The applied draft's stored representation must be canonical: a generated message with CRLF
   // or trailing whitespace, once split and applied, has to compare equal to

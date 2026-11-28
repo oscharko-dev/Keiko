@@ -4451,9 +4451,10 @@ describe("GitClientWindow — unresolved conflict controls (#4445)", () => {
     const pending = new Promise<GitDeliveryCommitDraftResponse>((resolve) => {
       resolveDraft = resolve;
     });
+    const commitDraft = vi.fn<GitClientSeam["commitDraft"]>(() => pending);
     const client = makeClient({
       getStatus: vi.fn(async () => status),
-      commitDraft: vi.fn(() => pending),
+      commitDraft,
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
@@ -4469,6 +4470,10 @@ describe("GitClientWindow — unresolved conflict controls (#4445)", () => {
     await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
     await act(async () => resolveDraft(makeCommitDraft("fix: obsolete generated draft")));
     expect(screen.getByLabelText("Summary")).toHaveValue("fix: keep the human draft");
+    expect(commitDraft.mock.calls[0]?.[1]?.aborted).toBe(true);
+    expect(
+      screen.getByText("The staged changes changed. Generate a draft for the current selection."),
+    ).toBeVisible();
   });
 
   it("requires a fresh preview after the conflict clears across two re-pairs", async () => {
@@ -4864,9 +4869,123 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
       expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
     );
 
+    await user.click(screen.getByText("README.md"));
+    await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalled());
     await user.click(screen.getByLabelText("Stage README.md"));
 
     await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+  });
+
+  it("pauses draft generation and commit while a stage operation is pending", async () => {
+    let resolveStage!: (outcome: Awaited<ReturnType<GitClientSeam["stage"]>>) => void;
+    const stage = new Promise<Awaited<ReturnType<GitClientSeam["stage"]>>>((resolve) => {
+      resolveStage = resolve;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn(async () => makeCommitDraft()),
+      stage: vi.fn(() => stage),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    const generate = await screen.findByRole("button", { name: "Generate with Keiko" });
+    await user.click(generate);
+    const commit = screen.getByRole("button", { name: "Commit to main" });
+    await waitFor(() => expect(commit).toBeEnabled());
+
+    await user.click(screen.getByRole("checkbox", { name: "Stage README.md" }));
+    expect(client.stage).toHaveBeenCalledTimes(1);
+    expect(generate).toBeDisabled();
+    expect(commit).toBeDisabled();
+
+    await act(async () => {
+      resolveStage({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "stage",
+        blockReason: "policy-denied",
+      });
+    });
+    expect(generate).toBeEnabled();
+    expect(commit).toBeEnabled();
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+  });
+
+  it("refreshes the index and commit preview after an uncertain stage failure", async () => {
+    const getStatus = vi.fn(async () => makeStatusRich());
+    const client = makeClient({
+      getStatus,
+      stage: vi.fn(async () => {
+        throw new Error("Staging response lost");
+      }),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    const summary = await screen.findByLabelText("Summary");
+    await user.type(summary, "fix: keep manual summary");
+    const commit = screen.getByRole("button", { name: "Commit to main" });
+    await waitFor(() => expect(commit).toBeEnabled());
+
+    const priorReadCount = getStatus.mock.calls.length;
+    vi.mocked(client.commitPreview).mockImplementation(() => new Promise(() => undefined));
+    await user.click(screen.getByRole("checkbox", { name: "Stage README.md" }));
+
+    await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(priorReadCount));
+    expect(commit).toBeDisabled();
+    expect(summary).toHaveValue("fix: keep manual summary");
+  });
+
+  it("keeps a pending draft when branch metadata arrives for the same staged patch", async () => {
+    let resolveBranches!: (response: GitBranchListResponse) => void;
+    const branches = new Promise<GitBranchListResponse>((resolve) => {
+      resolveBranches = resolve;
+    });
+    let resolveDraft!: (response: GitDeliveryCommitDraftResponse) => void;
+    const draft = new Promise<GitDeliveryCommitDraftResponse>((resolve) => {
+      resolveDraft = resolve;
+    });
+    const commitDraft = vi.fn<GitClientSeam["commitDraft"]>(() => draft);
+    const client = makeClient({
+      getStatus: vi.fn(async () => ({ ...makeStatusRich(), stagedDigest: "a".repeat(64) })),
+      listBranches: vi.fn(() => branches),
+      commitDraft,
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    expect(commitDraft).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveBranches(makeBranchList());
+    });
+    expect(commitDraft.mock.calls[0]?.[1]?.aborted).toBe(false);
+
+    await act(async () => {
+      resolveDraft(makeCommitDraft());
+    });
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+  });
+
+  it("preserves a human edit made after moving the composer while generation is pending", async () => {
+    let resolveDraft!: (response: GitDeliveryCommitDraftResponse) => void;
+    const pending = new Promise<GitDeliveryCommitDraftResponse>((resolve) => {
+      resolveDraft = resolve;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn(() => pending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await user.click(screen.getByText("README.md"));
+    await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalled());
+    await user.type(screen.getByLabelText("Summary"), "fix: keep my draft");
+    await act(async () => resolveDraft(makeCommitDraft("fix: out of date")));
+    expect(screen.getByLabelText("Summary")).toHaveValue("fix: keep my draft");
+    expect(
+      screen.getByText("Your edits were kept. The generated draft was discarded."),
+    ).toBeVisible();
   });
 
   it("clears an unedited generated draft when the staging request rejects in the active repository", async () => {
