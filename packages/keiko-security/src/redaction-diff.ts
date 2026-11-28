@@ -476,7 +476,9 @@ function canonicalEscape(content: string, at: number): readonly [number, number]
  * unescaped quote, an unknown escape) is something Git never emits and is refused, so an escape
  * can never hide a value from the redactor. Undefined unless the result is valid UTF-8.
  */
-function decodeCanonicalQuotedPath(token: string): string | undefined {
+function decodeCanonicalQuotedPath(rawToken: string): string | undefined {
+  // A CRLF patch ends each header line with the carriage return after the closing quote.
+  const token = rawToken.endsWith("\r") ? rawToken.slice(0, -1) : rawToken;
   if (token.length < 2 || !token.startsWith('"') || !token.endsWith('"')) return undefined;
   const content = token.slice(1, -1);
   const bytes: number[] = [];
@@ -570,12 +572,22 @@ function withoutGitPathHeaderLines(text: string, ports: ProjectionPorts): string
     .join("");
 }
 
+/** A `rename|copy from|to` record whose path starts as an escaped quoted token. */
+function isQuotedEscapedRecord(body: string): boolean {
+  const match = GIT_PATH_HEADER.exec(body);
+  if (match === null || match[1] !== undefined) return false;
+  const rest = body.slice(match[0].length);
+  return rest.startsWith('"') && rest.includes("\\");
+}
+
 /**
- * Path records are classified wherever they appear, in an owned header region, ahead of a file
- * header with no `diff --git` line, or in text no patch owns. A record that spells a quoted or
- * escaped path must be in Git's canonical spelling and its decoded path must pass the credential
- * floor; any other line is masked whole. A plain record, which holds no quote and no backslash, is
- * left to the ordinary floor.
+ * Path records of a patch are classified wherever they appear after its first `diff --git ` line.
+ * A record that spells a quoted or escaped path must be in Git's canonical spelling and its decoded
+ * path must pass the credential floor; any other line is masked whole. A plain record, which holds
+ * no quote and no backslash, is left to the ordinary floor. Outside a patch (no `diff --git ` line
+ * yet) only a record whose path opens with a quote and holds an escape is classified, which keeps an escaped
+ * credential from hiding in an orphan record while ordinary prose such as `copy from "x" here` or a
+ * `rename to \\srv\share` sentence stays readable under the content threshold.
  */
 export function maskNonCanonicalGitPathRecords(
   text: string,
@@ -584,11 +596,14 @@ export function maskNonCanonicalGitPathRecords(
   if (!text.includes("rename ") && !text.includes("copy ") && !text.includes("diff --git ")) {
     return text;
   }
+  let inPatch = false;
   return text
     .split(/(?<=\n)/u)
     .map((line) => {
       const body = line.endsWith("\n") ? line.slice(0, -1) : line;
-      const suspect = GIT_PATH_HEADER.test(body) && /["\\]/u.test(body);
+      inPatch ||= body.startsWith("diff --git ");
+      const suspect =
+        GIT_PATH_HEADER.test(body) && (inPatch ? /["\\]/u.test(body) : isQuotedEscapedRecord(body));
       if (!suspect || isCanonicalGitPathHeader(body, ports)) return line;
       return `${REDACTION_PLACEHOLDER}${line.slice(body.length)}`;
     })
