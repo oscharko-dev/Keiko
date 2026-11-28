@@ -3,6 +3,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_UPDATED_EVENT,
+  requestGatewayModelCatalogRefresh,
   gatewayModelCatalogCorrelationId,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import type {
@@ -111,6 +112,45 @@ function useModelRefusalReread(
   }, [refused, refreshSource]);
 }
 
+/**
+ * U-45: a page that stays open across a Keiko restart and is paired again in place (a fragment
+ * navigation, no reload) still holds a source that said "admitted" for a server whose models are all
+ * inactive again (ADR-0171 D2), which hid the activation notice. A NEW app session therefore re-reads
+ * the source and the runtime posture and asks for the model catalog once. It is not a mount read:
+ * the first value of the count is the mount's own, and only a later change acts.
+ */
+function useNewSessionReread(
+  refreshRuntime: () => Promise<void>,
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  const established = useCodingAppSessionEstablishments();
+  const seen = useRef(established);
+  useEffect(() => {
+    if (seen.current === established) return;
+    seen.current = established;
+    void refreshRuntime();
+    void refreshSource(false, undefined, "use");
+    requestGatewayModelCatalogRefresh({ check: true });
+  }, [established, refreshRuntime, refreshSource]);
+}
+
+function useModelRereads(
+  mutation: CodingWorkbenchRuntimeState["mutation"],
+  refreshRuntime: () => Promise<void>,
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  useModelRefusalReread(mutation, refreshSource);
+  useNewSessionReread(refreshRuntime, refreshSource);
+}
+
 export function useCodingWorkbenchRuntimeRefreshEffects({
   state,
   refreshRuntime,
@@ -132,7 +172,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
   usePickedModelRefreshEffect({ state, refreshSource, intent });
-  useModelRefusalReread(state.mutation, refreshSource);
+  useModelRereads(state.mutation, refreshRuntime, refreshSource);
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,

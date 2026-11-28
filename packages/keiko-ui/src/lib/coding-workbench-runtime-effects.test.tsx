@@ -389,6 +389,39 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
   // U-45: Start is not the first place the person may learn the model is inactive. A start the server
   // refused as "model unavailable" re-reads the source, which also asks for the catalog, so the
   // in-place activation notice appears right after the refusal.
+  // U-45: a page that stays open across a Keiko restart and is paired again in place (a fragment
+  // navigation, no reload) holds a source that said "admitted" for a server whose models are all
+  // inactive again (ADR-0171 D2). The new session re-reads source and runtime and asks for the
+  // catalog once; a mount reads nothing extra.
+  it("re-reads source, runtime and catalog once when a new app session is established in place", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const refreshRuntime = vi.fn(async () => undefined);
+    const catalogRequested = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRequested);
+    const intent = { current: { pickedModelId: null } };
+    try {
+      renderHook(() => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state: createInitialCodingWorkbenchRuntimeState(),
+          refreshSource,
+          refreshRuntime,
+          refreshRun: vi.fn(async () => undefined),
+          intent,
+        });
+      });
+      expect(refreshSource).toHaveBeenCalledOnce();
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+      expect(catalogRequested).not.toHaveBeenCalled();
+      act(() => notifyCodingAppSessionEstablished());
+      expect(refreshSource).toHaveBeenCalledTimes(2);
+      expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, "use");
+      expect(refreshRuntime).toHaveBeenCalledTimes(2);
+      expect(catalogRequested).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRequested);
+    }
+  });
+
   it("re-reads the source once per start refused as model-unavailable", () => {
     const refreshSource = vi.fn(async () => undefined);
     const initial = createInitialCodingWorkbenchRuntimeState();
