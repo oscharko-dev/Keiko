@@ -780,11 +780,11 @@ export function isGitDeliveryExecutionResult(value: unknown): value is GitDelive
 }
 
 function isCommitSigningDecision(value: unknown): value is GitCommitSigningDecision {
-  return GIT_COMMIT_SIGNING_DECISIONS.some((decision) => decision === value);
+  return (GIT_COMMIT_SIGNING_DECISIONS as readonly unknown[]).includes(value);
 }
 
 function isCommitSigningReadFailure(value: unknown): value is GitCommitSigningReadFailure {
-  return GIT_COMMIT_SIGNING_READ_FAILURES.some((failure) => failure === value);
+  return (GIT_COMMIT_SIGNING_READ_FAILURES as readonly unknown[]).includes(value);
 }
 
 function isActionPreview(value: unknown): value is GitDeliveryActionPreview {
