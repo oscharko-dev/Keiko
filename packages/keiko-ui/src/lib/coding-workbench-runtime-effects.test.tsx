@@ -364,6 +364,64 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
       vi.useRealTimers();
     }
   });
+  // A later refresh the person started (a mode change) that fails again earns its own retries, and
+  // an exhausted streak is reported once, not on every effect re-run.
+  it("retries a failure that follows a person-started refresh and reports exhaustion once", () => {
+    vi.useFakeTimers();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const refreshRuntime = vi.fn(async () => undefined);
+      const withStatus = (status: "error" | "loading" | "ready"): CodingWorkbenchRuntimeState => ({
+        ...createInitialCodingWorkbenchRuntimeState(),
+        runtime: { status, value: null, error: null },
+      });
+      const { rerender } = renderHook(
+        ({
+          state,
+          refresh,
+        }: {
+          readonly state: CodingWorkbenchRuntimeState;
+          readonly refresh: () => Promise<void>;
+        }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshSource: vi.fn(async () => undefined),
+            refreshRuntime: refresh,
+            refreshRun: vi.fn(async () => undefined),
+            intent: { current: { pickedModelId: null } },
+          });
+        },
+        { initialProps: { state: withStatus("error"), refresh: refreshRuntime } },
+      );
+      const outcomes = (): unknown[] =>
+        writer.mock.calls
+          .map(
+            ([, meta]) =>
+              (meta as { codingWorkbenchInteraction?: { readinessRetryOutcome?: string } })
+                .codingWorkbenchInteraction?.readinessRetryOutcome,
+          )
+          .filter((outcome) => outcome !== undefined);
+      for (const delay of RUNTIME_READINESS_RETRY_DELAYS_MS) {
+        act(() => vi.advanceTimersByTime(delay));
+        rerender({ state: withStatus("loading"), refresh: refreshRuntime });
+        rerender({ state: withStatus("error"), refresh: refreshRuntime });
+      }
+      // The effect runs again (a new refresh callback) while exhausted: still one exhaustion line.
+      rerender({ state: withStatus("error"), refresh: vi.fn(async () => undefined) });
+      expect(outcomes().filter((outcome) => outcome === "exhausted")).toHaveLength(1);
+      // The person changes the mode: a refresh the retry did not start, and it fails.
+      rerender({ state: withStatus("loading"), refresh: refreshRuntime });
+      rerender({ state: withStatus("error"), refresh: refreshRuntime });
+      refreshRuntime.mockClear();
+      act(() => vi.advanceTimersByTime(RUNTIME_READINESS_RETRY_DELAYS_MS[0] ?? 0));
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+    } finally {
+      resetClientDiagnosticWriter();
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes an open Workbench after a background catalog change without invalidating the catalog", () => {
     const refreshSource = vi.fn(async () => undefined);
     const refreshRuntime = vi.fn(async () => undefined);

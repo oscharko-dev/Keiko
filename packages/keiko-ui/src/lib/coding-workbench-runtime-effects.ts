@@ -221,30 +221,59 @@ function useRuntimeReadinessRetry(
   status: CodingWorkbenchResourceStatus,
   refreshRuntime: () => Promise<void>,
 ): void {
-  const attempts = useRef(0);
-  const correlationId = useRef<string | undefined>(undefined);
+  const episode = useRef<ReadinessRetryEpisode>({
+    attempts: 0,
+    exhausted: false,
+    retryInFlight: false,
+    correlationId: undefined,
+  });
   useEffect(() => {
-    if (status === "ready" && attempts.current > 0) {
-      reportReadinessRetry("recovered", attempts.current, correlationId.current);
-      attempts.current = 0;
-      correlationId.current = undefined;
+    const current = episode.current;
+    if (status === "loading" && !current.retryInFlight) {
+      // A refresh the retry did not start (a mode change, a manual read) opens a new episode: the
+      // earlier attempts were spent on an earlier failure.
+      resetReadinessRetryEpisode(current);
     }
+    if (status === "ready" && current.attempts > 0) {
+      reportReadinessRetry("recovered", current.attempts, current.correlationId);
+    }
+    if (status === "ready") resetReadinessRetryEpisode(current);
+    if (status === "ready" || status === "error") current.retryInFlight = false;
     if (status !== "error") return;
-    const delay = RUNTIME_READINESS_RETRY_DELAYS_MS[attempts.current];
+    const delay = RUNTIME_READINESS_RETRY_DELAYS_MS[current.attempts];
     if (delay === undefined) {
-      reportReadinessRetry("exhausted", attempts.current, correlationId.current);
+      if (!current.exhausted) {
+        current.exhausted = true;
+        reportReadinessRetry("exhausted", current.attempts, current.correlationId);
+      }
       return;
     }
     const timer = window.setTimeout(() => {
-      attempts.current += 1;
-      correlationId.current ??= newClientCorrelationId();
-      reportReadinessRetry("started", attempts.current, correlationId.current);
+      current.attempts += 1;
+      current.retryInFlight = true;
+      current.correlationId ??= newClientCorrelationId();
+      reportReadinessRetry("started", current.attempts, current.correlationId);
       void refreshRuntime();
     }, delay);
     return (): void => {
       window.clearTimeout(timer);
     };
   }, [status, refreshRuntime]);
+}
+
+interface ReadinessRetryEpisode {
+  attempts: number;
+  /** `exhausted` is reported once per episode, not on every effect re-run. */
+  exhausted: boolean;
+  /** The refresh now loading was started by the retry itself. */
+  retryInFlight: boolean;
+  correlationId: string | undefined;
+}
+
+function resetReadinessRetryEpisode(episode: ReadinessRetryEpisode): void {
+  episode.attempts = 0;
+  episode.exhausted = false;
+  episode.correlationId = undefined;
 }
 
 function reportReadinessRetry(
