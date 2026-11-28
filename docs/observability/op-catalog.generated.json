@@ -124695,20 +124695,7 @@
         }
       ]
     },
-    "violations": [
-      {
-        "code": "typescript-diagnostic",
-        "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:576",
-        "correctiveAction": "Repair the typed Activity Log registration or emission before generating the registry.",
-        "detail": "TS2741"
-      },
-      {
-        "code": "typescript-diagnostic",
-        "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:651",
-        "correctiveAction": "Repair the typed Activity Log registration or emission before generating the registry.",
-        "detail": "TS2304"
-      }
-    ]
+    "violations": []
   },
   "legacyDiscovery": {
     "dynamicCount": 104,

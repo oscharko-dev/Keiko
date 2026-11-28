@@ -802,7 +802,7 @@ function conversionCanSettle(
 // not judge it (`cannot-judge`: an unadmitted attribute, an unknown index class, a path form
 // `hash-object --stdin-paths` cannot carry, or a hash that failed).
 function unsettledVerdict(
-  file: GitStageFile,
+  file: Pick<GitStageFile, "path" | "mode">,
   row: readonly string[] | undefined,
   stage: FileStage | undefined,
 ): "none" | "cannot-judge" {

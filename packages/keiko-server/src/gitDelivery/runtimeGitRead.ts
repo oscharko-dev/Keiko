@@ -573,7 +573,15 @@ async function workingSide(
     const { objectId, hasNul } = await blobIdOfLargeFile(context.workspace.root, file, hashLength, {
       fs,
     });
-    return { tooLarge: true, objectId, mode: file.mode, text: "", missing: false, binary: hasNul };
+    return {
+      tooLarge: true,
+      conversionUnknown: false,
+      objectId,
+      mode: file.mode,
+      text: "",
+      missing: false,
+      binary: hasNul,
+    };
   }
   const tooLarge = file.bytes.length > RUNTIME_GIT_SIDE_MAX_BYTES;
   const raw: FileSide = {
@@ -648,9 +656,12 @@ async function conversionCandidates(
   for (const path of paths) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const file = await readGitStageFile(context.workspace.root, path, {
+    const file = await inspectGitStageFile(context.workspace.root, path, {
       fs: runtimeWorkspaceFs(context),
+      inlineMaxBytes: RUNTIME_GIT_SIDE_MAX_BYTES,
     }); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
+    // A file above the side bound is streamed elsewhere and never rendered, so it cannot be a CRLF candidate.
+    if (isGitStageLargeFile(file)) continue;
     const bytes = file.bytes;
     if (file.mode === "0" || !crTextBytes(bytes)) continue;
     const length = hashLengths.get(path) ?? 40;
