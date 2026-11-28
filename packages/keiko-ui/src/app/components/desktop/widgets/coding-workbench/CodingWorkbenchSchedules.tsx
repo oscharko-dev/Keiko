@@ -21,6 +21,8 @@ import styles from "./CodingHistory.module.css";
  */
 export const SCHEDULE_REREAD_GRACE_MS = 16_000;
 export const SCHEDULE_REREAD_MAX_ATTEMPTS = 20;
+export const SCHEDULE_REREAD_MAX_ARM_MS = 24 * 60 * 60 * 1_000;
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 /**
  * The scheduled continuations of the shown task (#4271, ADR-0137 D10): what the task's model
@@ -159,12 +161,16 @@ function useWakeReread(schedules: readonly CodingWorkbenchSchedule[], reread: ()
       attempts.current = 0;
     }
     if (wakeAt === undefined || attempts.current >= SCHEDULE_REREAD_MAX_ATTEMPTS) return;
+    const untilWake = Math.max(wakeAt - Date.now(), 0);
+    // A wake more than a day away arms nothing (the focus and visibility reads remain), and no
+    // delay exceeds what a timer holds: a larger one fires at once and would burn every attempt.
+    if (untilWake > SCHEDULE_REREAD_MAX_ARM_MS) return;
     const timer = window.setTimeout(
       () => {
         attempts.current += 1;
         reread();
       },
-      Math.max(wakeAt - Date.now(), 0) + SCHEDULE_REREAD_GRACE_MS,
+      Math.min(untilWake + SCHEDULE_REREAD_GRACE_MS, MAX_TIMER_DELAY_MS),
     );
     return (): void => {
       window.clearTimeout(timer);

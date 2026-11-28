@@ -92,6 +92,35 @@ describe("the schedule list after a scheduled wake fires (U-57)", () => {
     expect(fetchCodingSchedules).toHaveBeenCalledTimes(1 + SCHEDULE_REREAD_MAX_ATTEMPTS);
   });
 
+  it("arms no timer for a wake far beyond a day, so no request burst follows", async () => {
+    const armed = vi.spyOn(window, "setTimeout");
+    lists([active(40 * 24 * 3_600_000, 0)]);
+    render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
+    await flush();
+    const wakeTimers = armed.mock.calls.filter(
+      ([, delay]) => typeof delay === "number" && delay >= SCHEDULE_REREAD_GRACE_MS,
+    );
+    expect(wakeTimers).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_600_000);
+    });
+    expect(fetchCodingSchedules).toHaveBeenCalledTimes(1);
+    armed.mockRestore();
+  });
+
+  it("re-arms with a fresh attempt budget when the next wake changes", async () => {
+    lists([active(-1_000, 0)], [active(5_000, 1)]);
+    render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SCHEDULE_REREAD_GRACE_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000 + SCHEDULE_REREAD_GRACE_MS);
+    });
+    expect(fetchCodingSchedules).toHaveBeenCalledTimes(3);
+  });
+
   it("reads again when the window is shown again", async () => {
     lists([active(600_000, 0)], [active(600_000, 1)]);
     render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
