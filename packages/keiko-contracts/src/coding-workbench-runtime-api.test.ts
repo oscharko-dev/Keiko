@@ -66,7 +66,7 @@ const TERMINAL_RUN_CAUSES = [
 ] as const;
 
 describe("Coding Workbench runtime API contracts", () => {
-  it("validates the repository the person sees when stated, exact-keyed and bounded", () => {
+  it("requires the repository the person sees, exact-keyed and bounded", () => {
     const start = {
       requestId: "request-1",
       taskIntent: "Fix issue",
@@ -77,8 +77,7 @@ describe("Coding Workbench runtime API contracts", () => {
       ok: true,
       value: { ...start, expectedWorkspace },
     });
-    // A stale bundle from before the upgrade sends no field: that asserts nothing.
-    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toEqual({ ok: true, value: start });
+    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toMatchObject({ ok: false });
     for (const bad of [
       {},
       { root: "" },

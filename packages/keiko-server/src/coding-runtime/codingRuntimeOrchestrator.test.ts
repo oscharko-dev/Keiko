@@ -3530,18 +3530,6 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(serialized).not.toContain(ACTIVE_REPOSITORY_ROOT);
   });
 
-  // A UI bundle opened before an upgrade sends no `expectedWorkspace`: that asserts nothing, so the
-  // run starts in the server's own active workspace instead of failing as a contract error.
-  it("starts in the active workspace when the request states no expected repository", async () => {
-    const f = fixtureFrom({});
-    const { expectedWorkspace: _stated, ...unstated } = start;
-
-    const result = await f.orchestrator.start(unstated, "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b14");
-
-    expect(result).toMatchObject({ ok: true });
-    expect(f.launchResolver.resolve).toHaveBeenCalled();
-  });
-
   // A repository deleted and cloned again at the same path invalidates the server's active
   // pointer while the window still shows it. The start is refused with the named, recoverable
   // selection refusal (the window re-reads and re-binds), never the generic authority failure.

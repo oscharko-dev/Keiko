@@ -4833,8 +4833,23 @@ export class CodingRuntimeOrchestrator {
     const found = this.startActiveWorkspace(correlationId);
     if ("gap" in found) return found;
     const { active } = found;
-    const mismatch = startSelectionMismatch(request, active.instance.repositoryRoot);
-    if (mismatch !== undefined) return mismatch;
+    // The run starts in the repository the person sees or not at all: the request states the root
+    // the Workbench shows, and the server's global pointer is not allowed to differ from it.
+    if (
+      !workspaceRootsNameSameFolder(
+        request.expectedWorkspace.root,
+        active.instance.repositoryRoot,
+        process.platform !== "linux",
+      )
+    ) {
+      return {
+        gap: "workspace-selection-mismatch",
+        detail: selectionMismatchDetail(
+          request.expectedWorkspace.root,
+          active.instance.repositoryRoot,
+        ),
+      };
+    }
     const principal = this.deps.serverPrincipal();
     if (!principal) return { gap: "no-principal" };
     if (request.conversationId === undefined) return { active, principal, request };
@@ -6106,24 +6121,4 @@ function scheduledWakeRefusal(code: CodingWorkbenchRuntimeStartFailureCode): Sch
   if (code === "active-run-conflict") return "active-run-conflict";
   if (code === "authority-resolution-failed") return "authority-resolution-failed";
   return code === "invalid-intent" ? "invalid-intent" : "start-failed";
-}
-
-// The run starts in the repository the person sees or not at all: the request states the root the
-// Workbench shows, and the server's global pointer is not allowed to differ from it. A request that
-// states none (a UI bundle from before the upgrade) asserts nothing.
-function startSelectionMismatch(
-  request: CodingWorkbenchRuntimeStartRequest,
-  activeRoot: string,
-): { readonly gap: "workspace-selection-mismatch"; readonly detail: string } | undefined {
-  const expectedRoot = request.expectedWorkspace?.root;
-  if (
-    expectedRoot === undefined ||
-    workspaceRootsNameSameFolder(expectedRoot, activeRoot, process.platform !== "linux")
-  ) {
-    return undefined;
-  }
-  return {
-    gap: "workspace-selection-mismatch",
-    detail: selectionMismatchDetail(expectedRoot, activeRoot),
-  };
 }
