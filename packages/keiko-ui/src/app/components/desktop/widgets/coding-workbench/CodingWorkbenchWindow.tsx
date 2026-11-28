@@ -1154,32 +1154,39 @@ function checkoutBranchMovedTo(
  */
 function useRunRepositoryPin(
   runIsActive: boolean,
+  runResource: CodingWorkbenchRuntimeState["run"],
   selectedRoot: string | undefined,
   repositoryRoot: string | null,
-  mutation: Pick<CodingWorkbenchRuntimeState["mutation"], "status" | "kind">,
+  mutation: Pick<CodingWorkbenchRuntimeState["mutation"], "status" | "kind" | "cancelled">,
   onPinRepository: ((root: string) => void) | undefined,
 ): void {
-  const startedHere = useRef(false);
-  const sawActive = useRef(false);
-  const starting = mutation.status === "pending" && RUN_STARTING_MUTATIONS.has(mutation.kind);
-  // Declared before the pin effect so the same commit that shows the run sees the claim. The claim
-  // ends with the run it was made for (or with a refused start), never carrying over to a later
-  // run of another window.
+  // The run this window's own start or continuation was acknowledged with. A run another window
+  // started never becomes it: while a start is pending, after it is refused and after it is
+  // cancelled, whichever run the shared runtime shows is not this window's.
+  const run = { active: runIsActive, runId: runResource.value?.runId };
+  const claimedRunId = useRef<string | undefined>(undefined);
+  const starting = useRef(false);
+  const pending = mutation.status === "pending" && RUN_STARTING_MUTATIONS.has(mutation.kind);
+  // Declared before the pin effect so the same commit that shows the run sees the claim.
   useEffect(() => {
-    if (starting) startedHere.current = true;
-    else if (mutation.status === "error" && !runIsActive) startedHere.current = false;
-  }, [starting, mutation.status, runIsActive]);
-  useEffect(() => {
-    if (runIsActive) sawActive.current = true;
-    else if (sawActive.current) {
-      sawActive.current = false;
-      startedHere.current = false;
+    if (pending) {
+      starting.current = true;
+      return;
     }
-  }, [runIsActive]);
+    if (!starting.current) return;
+    starting.current = false;
+    const acknowledged = mutation.status === "idle" && mutation.cancelled !== true;
+    if (acknowledged && run.active) claimedRunId.current = run.runId;
+  }, [pending, mutation.status, mutation.cancelled, run.active, run.runId]);
+  // The claim ends with the run it was made for.
   useEffect(() => {
-    if (startedHere.current && runIsActive && selectedRoot === undefined && repositoryRoot !== null)
+    if (!run.active || run.runId !== claimedRunId.current) claimedRunId.current = undefined;
+  }, [run.active, run.runId]);
+  useEffect(() => {
+    const claimed = claimedRunId.current !== undefined && claimedRunId.current === run.runId;
+    if (claimed && run.active && selectedRoot === undefined && repositoryRoot !== null)
       onPinRepository?.(repositoryRoot);
-  }, [runIsActive, selectedRoot, repositoryRoot, onPinRepository]);
+  }, [run.active, run.runId, selectedRoot, repositoryRoot, onPinRepository]);
 }
 
 const RUN_STARTING_MUTATIONS: ReadonlySet<CodingWorkbenchMutationKind | null> = new Set([
@@ -1338,7 +1345,14 @@ export function CodingWorkbenchWindow({
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   useWorkspaceReadAfterRun(runIsActive, activeWorkspace.refresh);
-  useRunRepositoryPin(runIsActive, selectedRoot, repositoryRoot, state.mutation, onPinRepository);
+  useRunRepositoryPin(
+    runIsActive,
+    state.run,
+    selectedRoot,
+    repositoryRoot,
+    state.mutation,
+    onPinRepository,
+  );
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,

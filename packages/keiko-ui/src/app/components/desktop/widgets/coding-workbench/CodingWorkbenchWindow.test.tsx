@@ -5887,6 +5887,62 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(onPinRepository).toHaveBeenCalledTimes(1);
   });
 
+  // The pin follows the run this window's own start was acknowledged with, never whichever run the
+  // shared runtime shows while that start is pending, refused or cancelled.
+  it.each([
+    [
+      "refused",
+      {
+        status: "error",
+        kind: "start",
+        requestId: "req-refused",
+        error: { code: "active-run", message: "refused" },
+      },
+    ],
+    ["cancelled", { status: "idle", kind: null, requestId: null, error: null, cancelled: true }],
+  ] as const)(
+    "does not pin another window's run that became visible while this window's start was pending and then %s",
+    (_name, ended) => {
+      const onPinRepository = vi.fn();
+      const window = (): ReactElement => (
+        <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+          <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+        </ActiveWorkspaceProvider>
+      );
+      runtimeHookMock.mockReturnValue({
+        state: {
+          ...stateIn(WORKSPACE_A),
+          mutation: { status: "pending", kind: "start", requestId: "req-mine", error: null },
+        },
+        actions: actions(),
+      });
+      const view = render(window());
+      runtimeHookMock.mockReturnValue({
+        state: {
+          ...stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+          mutation: { status: "pending", kind: "start", requestId: "req-mine", error: null },
+        },
+        actions: actions(),
+      });
+      view.rerender(window());
+      runtimeHookMock.mockReturnValue({
+        state: {
+          ...stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+          mutation: ended as unknown as CodingWorkbenchRuntimeState["mutation"],
+        },
+        actions: actions(),
+      });
+      view.rerender(window());
+      runtimeHookMock.mockReturnValue({
+        state: stateIn(WORKSPACE_A, { state: "running", runId: "run-other-again" }),
+        actions: actions(),
+      });
+      view.rerender(window());
+
+      expect(onPinRepository).not.toHaveBeenCalled();
+    },
+  );
+
   // The runtime follows one run for every window: a window that never started it must not take the
   // repository of another window's run as its own.
   it("does not pin the run of another window", () => {
