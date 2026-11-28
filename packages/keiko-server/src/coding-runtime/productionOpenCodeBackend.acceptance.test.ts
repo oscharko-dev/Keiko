@@ -541,8 +541,9 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       governed: "after-check",
     },
     check: (observed): void => {
-      // The refusal leaves the failing shell check the run's last word: Keiko still sends the
-      // model back to repair it and never settles the run as blocked by the refused verifier.
+      // The refusal leaves the failing shell check the run's last word: the check was red before
+      // the edit, so no repair phase starts (target-unproven), and the refused verifier never
+      // settles the run as blocked.
       expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
       expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
       expect(observed.verificationBlockedReason).toBeUndefined();
