@@ -54,9 +54,8 @@ export function openCodeToolDetail(
   const origin = failureOrigin(name, state, displayState);
   const durationMs = partDuration(part);
   const shortened = shortenedOutput(state);
-  const programKind = name === "execute" ? openCodeProgramKind(state) : undefined;
   return {
-    ...(programKind === undefined ? {} : { programKind }),
+    ...programKindDetail(name, state),
     ...(shortened === undefined ? {} : { outputShortened: shortened }),
     ...(origin === undefined ? {} : { failureOrigin: origin }),
     ...(durationMs === undefined ? {} : { durationMs }),
@@ -90,6 +89,14 @@ function subagentDetail(
 
 function inputText(value: unknown, maxChars: number): CodingSafeActivityToolText | undefined {
   return typeof value === "string" ? boundedToolText(value, maxChars) : undefined;
+}
+
+function programKindDetail(
+  name: string,
+  state: Readonly<Record<string, unknown>>,
+): Pick<ToolDetail, "programKind"> {
+  const programKind = name === "execute" ? openCodeProgramKind(state) : undefined;
+  return programKind === undefined ? {} : { programKind };
 }
 
 // The Code Mode namespaces a program reaches a tool through: `tools.automation.*` changes a
