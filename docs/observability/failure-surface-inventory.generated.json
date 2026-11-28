@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8fcbac381d3d6575524265912229252318d229da17bdd3a067cc1b268e645940"
+    "catalogDigest": "c2b318c55f39a35895a41c8a570e3f02ddf6ef94d810b57fb3c911b6d4b88b07"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2978,7 +2978,10 @@
       "packages/keiko-server/src/mcp/mcpOAuthIssuer.test.ts"
     ],
     "mcp.registry.loaded.emitted-line": ["packages/keiko-server/src/mcp/mcpServerRegistry.test.ts"],
-    "mcp.settings.updated.emitted-line": ["packages/keiko-server/src/mcp/mcpSettingsStore.test.ts"],
+    "mcp.settings.updated.emitted-line": [
+      "packages/keiko-server/src/mcp/mcpSettingsRoutes.test.ts",
+      "packages/keiko-server/src/mcp/mcpSettingsStore.test.ts"
+    ],
     "memory-vault.log.sink-failed.body-free": ["packages/keiko-memory-vault/src/vault-log.test.ts"],
     "memory-vault.store.encryption-checkpoint-degraded.state": [
       "packages/keiko-memory-vault/src/schema.test.ts"

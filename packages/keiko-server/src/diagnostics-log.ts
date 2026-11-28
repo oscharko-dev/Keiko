@@ -761,6 +761,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "sse-subscriber-write-failed",
   "sse-listener-failed",
   "runtime-event-invalid",
+  "mcp-settings-update-invalid",
   "runtime-exit-code",
   "runtime-stderr-counts",
   "runtime-stream-drain-failed",

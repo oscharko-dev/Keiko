@@ -66,7 +66,7 @@ it("preserves other credential headers when replacing only the Bearer token", as
     .mockResolvedValueOnce(snapshot())
     .mockResolvedValueOnce({ snapshot: snapshot(), toolCount: 1 });
   await editAndSave(() =>
-    fireEvent.change(screen.getByLabelText(/^Bearer token/), {
+    fireEvent.change(screen.getByLabelText("Access token (optional)"), {
       target: { value: "synthetic-replacement-token" },
     }),
   );
@@ -104,12 +104,12 @@ it("drops the imported environment payload when changing from local to remote", 
   Object.defineProperty(file, "text", {
     value: (): Promise<string> => Promise.resolve("TOKEN=synthetic"),
   });
-  fireEvent.change(screen.getByLabelText("Import .env file"), { target: { files: [file] } });
+  fireEvent.change(screen.getByLabelText("Settings file (.env)"), { target: { files: [file] } });
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Save and connect" })).toBeEnabled(),
   );
   fireEvent.change(screen.getByLabelText("Connection type"), { target: { value: "remote" } });
-  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+  fireEvent.change(screen.getByLabelText("Server address (HTTPS)"), {
     target: { value: "https://synthetic.example.invalid/mcp" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
@@ -151,7 +151,7 @@ it("refuses retargeting retained remote credentials before persisting the change
     .mockResolvedValueOnce({ snapshot: snapshot(), toolCount: 1 });
   panel();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+  fireEvent.change(screen.getByLabelText("Server address (HTTPS)"), {
     target: { value: "https://another.example.invalid/mcp" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
@@ -166,10 +166,10 @@ it("requires replacing every bound header when retargeting, not just the Bearer 
     .mockResolvedValueOnce({ snapshot: snapshot(), toolCount: 1 });
   panel();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+  fireEvent.change(screen.getByLabelText("Server address (HTTPS)"), {
     target: { value: "https://another.example.invalid/mcp" },
   });
-  fireEvent.change(screen.getByLabelText(/^Bearer token/), {
+  fireEvent.change(screen.getByLabelText("Access token (optional)"), {
     target: { value: "synthetic-replacement-token" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
@@ -197,7 +197,7 @@ it("refuses a changed local command while its bound environment credentials rema
     .mockResolvedValueOnce({ snapshot: snapshot(local), toolCount: 1 });
   panel();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("Executable (absolute path)"), {
+  fireEvent.change(screen.getByLabelText("Start program"), {
     target: { value: "/synthetic/other-mcp" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
@@ -228,14 +228,14 @@ it("does not carry old target-bound secret references into a changed command wit
     .mockResolvedValueOnce({ snapshot: snapshot(local), toolCount: 1 });
   panel();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("Executable (absolute path)"), {
+  fireEvent.change(screen.getByLabelText("Start program"), {
     target: { value: "/synthetic/other-mcp" },
   });
   const file = new File(["TOKEN=synthetic-replacement"], "synthetic.env");
   Object.defineProperty(file, "text", {
     value: (): Promise<string> => Promise.resolve("TOKEN=synthetic-replacement"),
   });
-  fireEvent.change(screen.getByLabelText("Import .env file"), { target: { files: [file] } });
+  fireEvent.change(screen.getByLabelText("Settings file (.env)"), { target: { files: [file] } });
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Save and connect" })).toBeEnabled(),
   );
@@ -253,12 +253,12 @@ it("returns focus to the actual form opener after cancelling add and edit", asyn
   panel();
   const edit = await screen.findByRole("button", { name: "Edit" });
   fireEvent.click(edit);
-  await waitFor(() => expect(screen.getByLabelText(/^Name /)).toHaveFocus());
+  await waitFor(() => expect(screen.getByLabelText("Server name")).toHaveFocus());
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(edit).toHaveFocus());
   const add = screen.getByRole("button", { name: "Add MCP server" });
   fireEvent.click(add);
-  await waitFor(() => expect(screen.getByLabelText(/^Name /)).toHaveFocus());
+  await waitFor(() => expect(screen.getByLabelText("Server name")).toHaveFocus());
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(add).toHaveFocus());
 });
@@ -310,10 +310,42 @@ it("still accepts the initial server list after a local env import during loadin
   Object.defineProperty(file, "text", {
     value: (): Promise<string> => Promise.resolve("TOKEN=synthetic"),
   });
-  fireEvent.change(screen.getByLabelText("Import .env file"), { target: { files: [file] } });
-  await waitFor(() => expect(screen.getByLabelText("Executable (absolute path)")).toBeEnabled());
+  fireEvent.change(screen.getByLabelText("Settings file (.env)"), { target: { files: [file] } });
+  await waitFor(() => expect(screen.getByLabelText("Start program")).toBeEnabled());
   await act(async () => {
     finishLoad?.(empty);
   });
   expect(screen.getByRole("button", { name: "Save and connect" })).toBeEnabled();
+});
+
+it("keeps a draft from recreating a server deleted while it was open", async () => {
+  api
+    .mockResolvedValueOnce(snapshot())
+    .mockRejectedValueOnce(new Error("Conflict"))
+    .mockResolvedValueOnce(empty);
+  panel();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await screen.findByText("No servers yet");
+  fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This server changed while you were editing",
+  );
+  expect(api.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+  expect(screen.getByLabelText("Server name")).toHaveValue(remote.name);
+});
+
+it("retains the registry order when editing a server", async () => {
+  const together = { ...snapshot(), servers: [remote, { ...remote, name: "another" }] };
+  api
+    .mockResolvedValueOnce(together)
+    .mockResolvedValueOnce(together)
+    .mockResolvedValueOnce({ snapshot: together, toolCount: 1 });
+  panel();
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0] as HTMLElement);
+  fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+  await waitFor(() => expect(api).toHaveBeenCalledTimes(3));
+  expect(mutation().servers.map(({ name }) => name)).toEqual(["synthetic", "another"]);
 });

@@ -1344,20 +1344,20 @@
     "de": "MCP-Server hinzufügen"
   },
   "settings.mcp.name": {
-    "en": "Name (lowercase letters, numbers, - and _)",
-    "de": "Name (Kleinbuchstaben, Zahlen, - und _)"
+    "en": "Server name",
+    "de": "Servername"
   },
   "settings.mcp.transport": {
     "en": "Connection type",
     "de": "Verbindungsart"
   },
   "settings.mcp.url": {
-    "en": "MCP endpoint (HTTPS)",
-    "de": "MCP-Endpunkt (HTTPS)"
+    "en": "Server address (HTTPS)",
+    "de": "Serveradresse (HTTPS)"
   },
   "settings.mcp.token": {
-    "en": "Bearer token / PAT (leave blank to keep the stored token)",
-    "de": "Bearer-Token / PAT (leer lassen, um den gespeicherten Token zu behalten)"
+    "en": "Access token (optional)",
+    "de": "Zugangstoken (optional)"
   },
   "settings.mcp.private": {
     "en": "Server on a private network",
@@ -1368,16 +1368,16 @@
     "de": "Älteres HTTP + SSE"
   },
   "settings.mcp.command": {
-    "en": "Executable (absolute path)",
-    "de": "Programm (absoluter Pfad)"
+    "en": "Start program",
+    "de": "Startprogramm"
   },
   "settings.mcp.args": {
-    "en": "Arguments (one per line, without shell quoting)",
-    "de": "Argumente (eines pro Zeile, ohne Shell-Anführungszeichen)"
+    "en": "Arguments (optional)",
+    "de": "Argumente (optional)"
   },
   "settings.mcp.env": {
-    "en": "Import .env file",
-    "de": "Datei .env importieren"
+    "en": "Settings file (.env)",
+    "de": "Einstellungsdatei (.env)"
   },
   "settings.mcp.envHelp": {
     "en": "Imported values are encrypted and supplied only to this server. The file path is not stored.",
@@ -1420,12 +1420,12 @@
     "de": "Füge einen MCP-Server hinzu, um seine Tools in Keiko zu nutzen."
   },
   "settings.mcp.remote": {
-    "en": "Remote · HTTPS",
-    "de": "Remote · HTTPS"
+    "en": "Server address (HTTPS)",
+    "de": "Serveradresse (HTTPS)"
   },
   "settings.mcp.local": {
-    "en": "Local · stdio",
-    "de": "Lokal · stdio"
+    "en": "Program on this computer",
+    "de": "Programm auf diesem Computer"
   },
   "settings.mcp.errorTitle": {
     "en": "Could not complete the request",
@@ -1476,8 +1476,8 @@
     "de": "Status nicht verfügbar"
   },
   "settings.mcp.oauth": {
-    "en": "Use OAuth",
-    "de": "OAuth verwenden"
+    "en": "Sign in through a browser (OAuth)",
+    "de": "Im Browser anmelden (OAuth)"
   },
   "settings.mcp.issuer": {
     "en": "Expected OAuth issuer (HTTPS)",
@@ -1550,5 +1550,229 @@
   "settings.mcp.localUnsupported": {
     "en": "Local MCP is unavailable on this installation. Use a remote MCP server.",
     "de": "Lokales MCP ist auf dieser Installation nicht verfügbar. Verwende einen entfernten MCP-Server."
+  },
+  "settings.mcp.savedConnectionFailed": {
+    "en": "Server saved. Connection failed.",
+    "de": "Server gespeichert. Verbindung fehlgeschlagen."
+  },
+  "settings.mcp.savedConnectionHelp": {
+    "en": "Check the server address or program and credentials, then select Check connection on its card.",
+    "de": "Prüfe Adresse oder Programm und Zugangsdaten. Wähle danach auf der Serverkarte „Verbindung prüfen“."
+  },
+  "settings.mcp.manual": {
+    "en": "Set up a connection",
+    "de": "Verbindung einrichten"
+  },
+  "settings.mcp.manualHelp": {
+    "en": "Use the address or program details your provider gave you.",
+    "de": "Verwende die Adresse oder Programmangaben deines Anbieters."
+  },
+  "settings.mcp.connectionOptions": {
+    "en": "Network and compatibility",
+    "de": "Netzwerk und Kompatibilität"
+  },
+  "settings.mcp.help.transport": {
+    "en": "Choose a server address if you received an HTTPS link. Choose a local program if the server runs on this computer.",
+    "de": "Wähle eine Serveradresse, wenn du einen HTTPS-Link erhalten hast. Wähle ein lokales Programm, wenn der Server auf diesem Computer läuft."
+  },
+  "settings.mcp.help.name": {
+    "en": "Choose a name such as team-tools. Start with a lowercase letter, then use up to 63 lowercase letters, digits, hyphens or underscores.",
+    "de": "Wähle einen Namen wie team-tools. Beginne mit einem Kleinbuchstaben. Danach sind bis zu 63 Kleinbuchstaben, Zahlen, Bindestriche oder Unterstriche erlaubt."
+  },
+  "settings.mcp.help.url": {
+    "en": "Paste the HTTPS address for the MCP connection provided by the service. Its usual website address may be different.",
+    "de": "Füge die HTTPS-Adresse für die MCP-Verbindung ein, die du vom Anbieter erhalten hast. Seine normale Website kann eine andere Adresse haben."
+  },
+  "settings.mcp.help.command": {
+    "en": "Enter the full path to the program that starts this server. If your instructions list a program and a file, enter the program here and the file under Arguments.",
+    "de": "Gib den vollständigen Pfad zum Startprogramm ein. Wenn deine Anleitung ein Programm und eine Datei nennt, trage das Programm hier und die Datei unter Argumente ein."
+  },
+  "settings.mcp.help.args": {
+    "en": "Use a separate line for each option or file path your provider gave you. Keep spaces within a path on that same line.",
+    "de": "Trage jede Option und jeden Dateipfad aus deiner Anleitung in eine eigene Zeile ein. Leerzeichen innerhalb eines Pfads bleiben in derselben Zeile."
+  },
+  "settings.mcp.help.oauth": {
+    "en": "Choose this if your provider asks you to sign in through a browser. You can sign in from the server card after saving.",
+    "de": "Wähle diese Option, wenn dein Anbieter eine Anmeldung im Browser verlangt. Nach dem Speichern kannst du dich über die Serverkarte anmelden."
+  },
+  "settings.mcp.help.issuer": {
+    "en": "Enter the exact HTTPS address of the sign-in provider from your setup instructions.",
+    "de": "Gib die genaue HTTPS-Adresse des Anmeldedienstes aus deiner Einrichtungsanleitung ein."
+  },
+  "settings.mcp.help.clientId": {
+    "en": "Enter a public client ID if your provider gave you one. Leave this empty if the provider lets Keiko register automatically.",
+    "de": "Trage eine öffentliche Client-ID ein, wenn du eine erhalten hast. Lass das Feld frei, wenn der Anbieter Keiko automatisch registrieren lässt."
+  },
+  "settings.mcp.help.scope": {
+    "en": "Enter the permissions listed in your provider’s instructions, separated by spaces.",
+    "de": "Trage die Berechtigungen aus der Anleitung deines Anbieters ein. Trenne mehrere Berechtigungen durch Leerzeichen."
+  },
+  "settings.mcp.help.token": {
+    "en": "Paste the access token supplied for this server. Leave the field empty if the server needs none or you want to keep the stored token.",
+    "de": "Füge den Zugangstoken für diesen Server ein. Lass das Feld frei, wenn kein Token nötig ist oder du den gespeicherten Token behalten möchtest."
+  },
+  "settings.mcp.help.headerName": {
+    "en": "Keep Authorization unless your provider names a different field for the token.",
+    "de": "Behalte Authorization bei, sofern dein Anbieter kein anderes Feld für den Token vorgibt."
+  },
+  "settings.mcp.help.headerPrefix": {
+    "en": "Keep Bearer and its trailing space unless your provider tells you to use another prefix or just the token.",
+    "de": "Behalte Bearer mit dem folgenden Leerzeichen bei, sofern dein Anbieter kein anderes Präfix oder nur den Token verlangt."
+  },
+  "settings.mcp.help.private": {
+    "en": "Enable this only for a server your organization hosts on its internal network.",
+    "de": "Aktiviere dies nur für einen Server im internen Netzwerk deiner Organisation."
+  },
+  "settings.mcp.help.legacy": {
+    "en": "Enable this only when your provider calls the connection SSE or Server-Sent Events.",
+    "de": "Aktiviere dies nur, wenn dein Anbieter die Verbindung als SSE oder Server-Sent Events bezeichnet."
+  },
+  "settings.mcp.help.environmentValues": {
+    "en": "If you received settings as text, paste one NAME=value per line. Keiko encrypts the values.",
+    "de": "Wenn du Einstellungen als Text erhalten hast, füge pro Zeile einen Eintrag im Format NAME=Wert ein. Keiko verschlüsselt die Werte."
+  },
+  "settings.mcp.help.toolPermissions": {
+    "en": "Choose Read only only when you know the tool cannot change anything. Keiko treats new tools as able to change data.",
+    "de": "Wähle Nur lesen nur für ein Tool, das nachweislich keine Daten ändert. Bei neuen Tools geht Keiko davon aus, dass sie Daten ändern können."
+  },
+  "settings.mcp.problem.name": {
+    "en": "Start the name with a lowercase letter and use only lowercase letters, digits, hyphens or underscores.",
+    "de": "Beginne den Namen mit einem Kleinbuchstaben und verwende nur Kleinbuchstaben, Zahlen, Bindestriche oder Unterstriche."
+  },
+  "settings.mcp.problem.duplicate": {
+    "en": "A server already uses this name. Choose a different name.",
+    "de": "Diesen Namen gibt es bereits. Wähle einen anderen Namen."
+  },
+  "settings.mcp.problem.url": {
+    "en": "Enter a valid HTTPS server address without sign-in details or a # fragment.",
+    "de": "Gib eine gültige HTTPS-Serveradresse ohne Zugangsdaten oder #-Abschnitt ein."
+  },
+  "settings.mcp.problem.command": {
+    "en": "Enter the full path to the program, for example /opt/tools/node or C:\\Tools\\node.exe.",
+    "de": "Gib den vollständigen Pfad zum Programm ein, zum Beispiel /opt/tools/node oder C:\\Tools\\node.exe."
+  },
+  "settings.mcp.problem.envSize": {
+    "en": "Choose a settings file smaller than 64 KB. Your previous values are still here.",
+    "de": "Wähle eine Einstellungsdatei unter 64 KB. Deine bisherigen Werte bleiben erhalten."
+  },
+  "settings.mcp.problem.envRead": {
+    "en": "Keiko could not read that settings file. Choose it again or paste its contents under Advanced options.",
+    "de": "Keiko konnte die Einstellungsdatei nicht lesen. Wähle sie erneut oder füge ihren Inhalt unter Erweiterte Optionen ein."
+  },
+  "settings.mcp.problem.invalid": {
+    "en": "Some details do not match the required format. Check the field instructions and your provider’s setup guide.",
+    "de": "Einige Angaben haben ein ungültiges Format. Prüfe die Feldhinweise und die Anleitung deines Anbieters."
+  },
+  "settings.mcp.problem.stale": {
+    "en": "This server changed while you were editing. Reopen it from the list to work with the latest version.",
+    "de": "Dieser Server hat sich während der Bearbeitung geändert. Öffne ihn erneut aus der Liste, um die aktuelle Version zu bearbeiten."
+  },
+  "settings.mcp.importTitle": {
+    "en": "Import JSON",
+    "de": "JSON importieren"
+  },
+  "settings.mcp.importSetupHelp": {
+    "en": "Paste JSON or choose a file for one or more servers.",
+    "de": "Füge JSON ein oder wähle eine Datei für einen oder mehrere Server."
+  },
+  "settings.mcp.importHelp": {
+    "en": "Paste the setup data you received from your administrator. You can review one or several servers before adding them.",
+    "de": "Füge die Einrichtungsdaten ein, die du von deiner Administration erhalten hast. Du kannst einen oder mehrere Server prüfen, bevor du sie hinzufügst."
+  },
+  "settings.mcp.importText": {
+    "en": "JSON configuration",
+    "de": "JSON-Konfiguration"
+  },
+  "settings.mcp.importFile": {
+    "en": "Choose JSON file",
+    "de": "JSON-Datei auswählen"
+  },
+  "settings.mcp.importFileHelp": {
+    "en": "You can also open a .json or .jsonc file up to 64 KB.",
+    "de": "Du kannst auch eine .json- oder .jsonc-Datei bis 64 KB öffnen."
+  },
+  "settings.mcp.importExample": {
+    "en": "Insert example",
+    "de": "Beispiel einfügen"
+  },
+  "settings.mcp.importCheck": {
+    "en": "Review servers",
+    "de": "Server prüfen"
+  },
+  "settings.mcp.importSave": {
+    "en": "Add servers",
+    "de": "Server hinzufügen"
+  },
+  "settings.mcp.importReview": {
+    "en": "Servers to add",
+    "de": "Server zum Hinzufügen"
+  },
+  "settings.mcp.importPaused": {
+    "en": "Keiko adds these servers disabled. Check that you trust the provider before enabling a server. Local servers can run programs on this computer.",
+    "de": "Keiko fügt diese Server deaktiviert hinzu. Aktiviere einen Server erst, wenn du seinem Anbieter vertraust. Lokale Server können Programme auf diesem Computer starten."
+  },
+  "settings.mcp.importSuccess": {
+    "en": "Servers added: {count}. Enable a server, then check its connection. Sign in first if the server requires it.",
+    "de": "Server hinzugefügt: {count}. Aktiviere einen Server und prüfe danach seine Verbindung. Melde dich vorher an, falls der Server es verlangt."
+  },
+  "settings.mcp.importFileFailed": {
+    "en": "Keiko could not read the file. Select it again or paste the JSON.",
+    "de": "Keiko konnte die Datei nicht lesen. Wähle sie erneut oder füge den JSON-Text ein."
+  },
+  "settings.mcp.importConflict": {
+    "en": "The server list changed since the review. Review the list again before adding servers.",
+    "de": "Die Serverliste hat sich seit der Prüfung geändert. Prüfe die Liste erneut, bevor du Server hinzufügst."
+  },
+  "settings.mcp.importSyntax": {
+    "en": "Keiko could not read this JSON. Copy the complete configuration, including the opening and closing brackets.",
+    "de": "Keiko konnte den JSON-Text nicht lesen. Kopiere die vollständige Konfiguration mit öffnenden und schließenden Klammern."
+  },
+  "settings.mcp.importDuplicateKey": {
+    "en": "A field is repeated or has a reserved name. Check the configuration with the person who supplied it.",
+    "de": "Ein Feld kommt mehrfach vor oder hat einen reservierten Namen. Prüfe die Konfiguration mit der Person, die sie erstellt hat."
+  },
+  "settings.mcp.importShape": {
+    "en": "Use a named server, a list of named servers, or a block named mcp or mcpServers.",
+    "de": "Verwende einen benannten Server, eine Liste benannter Server oder einen Block namens mcp oder mcpServers."
+  },
+  "settings.mcp.importEmpty": {
+    "en": "This configuration contains no servers.",
+    "de": "Diese Konfiguration enthält keine Server."
+  },
+  "settings.mcp.importCapacity": {
+    "en": "This list exceeds Keiko’s configuration limit. Import fewer servers or remove entries that are no longer used.",
+    "de": "Die Liste überschreitet die Konfigurationsgrenze von Keiko. Importiere weniger Server oder entferne ungenutzte Einträge."
+  },
+  "settings.mcp.importDuplicate": {
+    "en": "A server with this name already exists in the list or in Keiko. Give it a unique name and review again.",
+    "de": "Ein Server mit diesem Namen steht bereits in der Liste oder in Keiko. Vergib einen eindeutigen Namen und prüfe erneut."
+  },
+  "settings.mcp.importType": {
+    "en": "Specify whether this server uses an HTTPS address or starts a local program.",
+    "de": "Gib an, ob dieser Server eine HTTPS-Adresse verwendet oder ein lokales Programm startet."
+  },
+  "settings.mcp.importOptions": {
+    "en": "This server uses settings the import cannot carry. Ask for a Keiko configuration or enter its connection details manually.",
+    "de": "Dieser Server enthält Einstellungen, die Keiko beim Import nicht übernehmen kann. Bitte um eine Keiko-Konfiguration oder gib die Verbindungsdaten manuell ein."
+  },
+  "settings.mcp.importLocal": {
+    "en": "Use a full program path and put each separate argument in its own JSON list entry.",
+    "de": "Verwende einen vollständigen Programmpfad und schreibe jedes Argument als eigenen Eintrag in die JSON-Liste."
+  },
+  "settings.mcp.importRemote": {
+    "en": "Use an HTTPS server address without embedded sign-in details or a # fragment. Check any optional sign-in or network settings.",
+    "de": "Verwende eine HTTPS-Serveradresse ohne eingebettete Zugangsdaten oder #-Abschnitt. Prüfe optionale Anmelde- und Netzwerkeinstellungen."
+  },
+  "settings.mcp.importCredentials": {
+    "en": "Check the headers or environment values with your provider. Put tokens in a credential header or an environment value.",
+    "de": "Prüfe die Header oder Umgebungswerte mit deinem Anbieter. Hinterlege Tokens in einem Zugangsdaten-Header oder einer Umgebungsvariable."
+  },
+  "settings.mcp.importSize": {
+    "en": "The configuration is too large. Choose a file up to 64 KB or import a smaller group of servers.",
+    "de": "Die Konfiguration ist zu groß. Wähle eine Datei bis 64 KB oder importiere eine kleinere Gruppe von Servern."
+  },
+  "settings.mcp.importEntry": {
+    "en": "Server {entry} · {problem}",
+    "de": "Server {entry} · {problem}"
   }
 }

@@ -38736,7 +38736,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["applied", "conflict", "reconciled"],
+        values: ["applied", "conflict", "reconciled", "import-ready", "import-invalid"],
       },
       serverCount: {
         type: "integer",
@@ -38747,6 +38747,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      importIntent: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["preview", "save"],
+      },
+      importCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       registrySha256: {
         type: "string",

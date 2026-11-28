@@ -18,7 +18,7 @@ import {
  * outcome and a digest of what was admitted.
  */
 export const MCP_SERVER_REGISTRY_FILE = "mcp-servers.json";
-const MAX_REGISTRY_BYTES = 64 * 1024;
+export const MAX_REGISTRY_BYTES = 64 * 1024;
 
 const LOAD_STATES = ["absent", "loaded", "refused"] as const;
 type McpRegistryLoadState = (typeof LOAD_STATES)[number];

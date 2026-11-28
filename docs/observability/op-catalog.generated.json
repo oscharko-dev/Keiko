@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8fcbac381d3d6575524265912229252318d229da17bdd3a067cc1b268e645940",
+    "catalogDigest": "c2b318c55f39a35895a41c8a570e3f02ddf6ef94d810b57fb3c911b6d4b88b07",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -40288,7 +40288,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["applied", "conflict", "reconciled"]
+            "values": ["applied", "conflict", "reconciled", "import-ready", "import-invalid"]
           },
           "serverCount": {
             "type": "integer",
@@ -40299,6 +40299,17 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "importIntent": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["preview", "save"]
+          },
+          "importCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           },
           "registrySha256": {
             "type": "string",
@@ -40325,8 +40336,8 @@
         "failureClasses": ["mcp-registry"],
         "proofIds": ["mcp.settings.updated.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:26",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:95"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:30",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:107"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108981,6 +108992,18 @@
                   "required": false
                 },
                 {
+                  "name": "importCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "importIntent",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -129321,14 +129344,14 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:338",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:347",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:395",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:404",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129342,7 +129365,7 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:134",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:254",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129380,9 +129403,16 @@
       "package": "keiko-server"
     },
     {
+      "op": "mcp.settings",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:109",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "mcp.settings.updated",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:29",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:33",
       "package": "keiko-server"
     },
     {
@@ -129930,7 +129960,7 @@
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1133",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1134",
       "package": "keiko-server"
     },
     {
@@ -131230,6 +131260,7 @@
     "mcp.mutation-execution-failed",
     "mcp.oauth.issuer.checked",
     "mcp.registry.loaded",
+    "mcp.settings",
     "mcp.settings.updated",
     "memory-vault.log.sink-failed",
     "memory-vault.store.encryption-checkpoint-degraded",

@@ -20,8 +20,13 @@ import * as oauthPersistence from "./mcpOAuthCredentialStore.js";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
   handleConnectMcpServer,
   handleGetMcpSettings,
+  handleImportMcpSettings,
   handlePutMcpSettings,
 } from "./mcpSettingsRoutes.js";
 
@@ -160,6 +165,7 @@ describe("authenticated shared MCP settings routes", () => {
     const update = vi.spyOn(deps.mcpSettings, "update");
     expect(handleGetMcpSettings(context(""), deps).status).toBe(403);
     expect((await handlePutMcpSettings(context(""), deps)).status).toBe(403);
+    expect((await handleImportMcpSettings(context(""), deps)).status).toBe(403);
     expect(read).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
@@ -373,3 +379,80 @@ function authorizationOwner(
     close: vi.fn(() => Promise.resolve()),
   };
 }
+
+describe("MCP JSON import through Settings", () => {
+  const text = JSON.stringify({
+    mcp: {
+      notes: {
+        type: "remote",
+        url: "https://tools.example.test/mcp",
+        headers: { Authorization: "Bearer synthetic-import-token" },
+      },
+      local: { type: "local", command: ["/opt/fixture"] },
+    },
+  });
+  it("previews a mixed batch before saving through the authenticated Settings store", async () => {
+    const { deps, cookie } = fixture();
+    const store = deps.mcpSettings;
+    if (store === undefined) throw new Error("fixture requires the store");
+    const write = vi.fn<(event: ServerLogEvent) => void>();
+    const input = { ...deps, activityLog: { write } };
+    const preview = await handleImportMcpSettings(context(cookie, { text }), input);
+    expect(preview).toMatchObject({
+      status: 200,
+      headers: { "cache-control": "no-store" },
+      body: {
+        kind: "preview",
+        servers: [
+          { name: "notes", kind: "remote" },
+          { name: "local", kind: "local" },
+        ],
+      },
+    });
+    expect(store.read("check").servers).toEqual([]);
+    const revision = store.read("check").revision;
+    const saved = await handleImportMcpSettings(context(cookie, { text, revision }), input);
+    expect(saved).toMatchObject({
+      status: 200,
+      body: {
+        kind: "saved",
+        snapshot: {
+          servers: [
+            { name: "notes", enabled: false, tools: {} },
+            { name: "local", enabled: false, tools: {} },
+          ],
+        },
+      },
+    });
+    const event = write.mock.calls[0]?.[0];
+    if (event === undefined) throw new Error("missing import event");
+    const line = expectActivityLogProof(
+      "mcp.settings.updated.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(line).toMatchObject({
+      op: "mcp.settings.updated",
+      correlationId: "mcp-settings-test",
+      importIntent: "preview",
+      outcome: "import-ready",
+      importCount: 2,
+    });
+    expect(JSON.stringify([preview, saved, write.mock.calls])).not.toContain(
+      "synthetic-import-token",
+    );
+  });
+
+  it("rejects an outdated confirmation and keeps the committed state", async () => {
+    const { deps, cookie } = fixture();
+    const revision = deps.mcpSettings?.read("before").revision;
+    expect((await handleImportMcpSettings(context(cookie, { text, revision }), deps)).status).toBe(
+      200,
+    );
+    const stale = await handleImportMcpSettings(context(cookie, { text, revision }), deps);
+    expect(stale.status).toBe(409);
+    expect(deps.mcpSettings?.read("after").servers.map(({ name }) => name)).toEqual([
+      "notes",
+      "local",
+    ]);
+  });
+});

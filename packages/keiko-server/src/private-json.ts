@@ -54,6 +54,10 @@ function fsyncDirectory(dir: string): void {
   }
 }
 
+export function serializePrivateJson(raw: Record<string, unknown>): string {
+  return `${JSON.stringify(raw, null, 2)}\n`;
+}
+
 export function savePrivateJson(path: string, raw: Record<string, unknown>): void {
   const resolvedPath = resolve(path);
   const dir = dirname(resolvedPath);
@@ -68,7 +72,7 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
     `.keiko-config.${String(process.pid)}.${Date.now().toString(36)}.${randomUUID()}.tmp`,
   );
   try {
-    writeDurableTextFile(tempPath, `${JSON.stringify(raw, null, 2)}\n`, 0o600);
+    writeDurableTextFile(tempPath, serializePrivateJson(raw), 0o600);
     if (process.platform === "win32") {
       // Mode bits mean nothing on Windows: give the file a protected owner-only DACL before it is
       // published, so it never inherits a profile or drive ACL that lets other accounts modify it.

@@ -205,11 +205,14 @@ describe("failure before the tools/call frame is effect-free (finding 1)", () =>
 
   it("cancels a waiting call without letting its successor overtake the active declaration check", async () => {
     let lists = 0;
-    const checking = Promise.withResolvers<void>();
+    let markChecking = (): void => undefined;
+    const checking = new Promise<void>((resolve) => {
+      markChecking = resolve;
+    });
     const f = fixture({
       intercept: (rpc, request) => {
         if (rpc.method !== "tools/list" || ++lists !== 2) return undefined;
-        checking.resolve();
+        markChecking();
         return stalled(request);
       },
     });
@@ -217,7 +220,7 @@ describe("failure before the tools/call frame is effect-free (finding 1)", () =>
     const first = new AbortController();
     const blocked = rejection(connection.call("work", {}, context({ signal: first.signal })));
     try {
-      await checking.promise;
+      await checking;
       const second = new AbortController();
       const waiting = rejection(connection.call("work", {}, context({ signal: second.signal })));
       // Let the invocation enter the declaration queue before cancelling its slot.

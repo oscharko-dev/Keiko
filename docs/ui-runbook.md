@@ -78,22 +78,51 @@ new turns only after its connection and tools have been validated.
 
 ### Add a server
 
-Choose **Add MCP server** and enter a unique name using lowercase letters, numbers, `-` or `_`.
-Select the connection type provided by the server's operator:
+Choose **Add MCP server** and enter a unique name such as `team-tools`. The field help explains
+the allowed characters. Select the connection type provided by the server's operator:
 
-- **HTTPS:** enter the actual MCP endpoint. An ordinary REST API URL is not an MCP endpoint.
-  Enter a Bearer token or personal access token if that MCP endpoint requires it. For a server
-  on the company network, select **Server on a private network**. Its TLS certificate must still
+- **Server address (HTTPS):** use the MCP address supplied by the provider. Enter an access token
+  if required. If the provider asks for browser sign-in, select **Sign in through a browser (OAuth)**
+  and enter the provider's issuer details. For an internal server, open **Network and compatibility**
+  and select **Server on a private network**. Its TLS certificate must still
   be valid and trusted; the operator can provide the company CA through `KEIKO_CA_BUNDLE_PATH`
   before starting Keiko. Select **Legacy HTTP + SSE** only when the server provides that transport.
-- **Local process:** enter the executable's absolute path and one argument per line. Import a
+- **Program on this computer:** enter the full path to the start program and one argument per line. Import a
   `.env` file if the server needs provider credentials. The variable names must match that
   server's configuration. Keiko stores the imported secrets in its sealed local credential store
   and supplies them to that server; it does not execute the `.env` file as a shell script.
 
-Choose **Save and connect**. **Connected** and a tool count confirm that Keiko completed discovery.
+Choose **Save and connect**. For OAuth, select **Save**, use **Sign in** on the server card, then
+check the connection. **Connected** and a tool count confirm that Keiko completed discovery.
 A token that the MCP server uses to reach a downstream service belongs in that server's own
 configuration. It is separate from a Bearer token used to authenticate Keiko to an HTTPS MCP endpoint.
+
+### Import one or several servers
+
+Choose **Import JSON**, paste a configuration or select a `.json` or `.jsonc` file, then choose
+**Review servers**. The preview lists the server names and connection types. Choose **Add servers**
+to save the whole batch. New entries start disabled. Enable a server you trust and check its
+connection to discover tools. If it requires browser sign-in, sign in before checking.
+
+For an administrator preparing a file, this example contains one server of each type:
+
+```json
+{
+  "mcp": {
+    "team-tools": { "type": "remote", "url": "https://example.test/mcp" },
+    "local-tools": { "type": "local", "command": ["/opt/tools/node", "/opt/tools/server.js"] }
+  }
+}
+```
+
+Keiko also accepts a single object with a `name`, a list of such objects, a name-to-server map,
+`mcp.servers`, or a `mcpServers` map. In the latter format a local entry can use `command` as a
+string and `args` as a list. Remote `headers` and local `environment` or `env` accept string
+values. Credential values are sealed in Keiko's local store. Supply credentials there instead of in
+the URL or command line. Optional remote `oauth` takes the Keiko issuer, optional public client ID
+(`clientId`) and space-separated `scope`. Use `protocol: "sse"` for SSE or `network: "private"`
+for an organization-hosted private target. Unsupported options, invalid entries, and names already
+in Keiko prevent the batch save. The input limit is 64 KiB and the registry admits up to 16 servers.
 
 ### Manage connections
 
