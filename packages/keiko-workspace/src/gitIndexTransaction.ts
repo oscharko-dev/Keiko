@@ -194,7 +194,7 @@ function packFilesOf(
 ): readonly QuarantinedFile[] {
   const packs = join(directory, "pack");
   if (lstatSync(packs, { throwIfNoEntry: false }) === undefined) return [];
-  const name = new RegExp(`^pack-[0-9a-f]{${String(hashLength)}}\\.(pack|rev|idx)$`, "u");
+  const name = new RegExp(String.raw`^pack-[0-9a-f]{${String(hashLength)}}\.(pack|rev|idx)$`, "u");
   const names = readdirSync(packs);
   const stems = new Set(names.map((entry) => entry.slice(0, entry.lastIndexOf("."))));
   const ordered = [...stems].flatMap((stem) =>
@@ -308,8 +308,10 @@ export async function withGitBranchRefLocks<T>(
     }
     return await run();
   } finally {
-    for (const lock of held.reverse()) releaseRefLock(lock);
-    for (const directory of created.reverse()) removeEmptyDirectory(directory);
+    held.reverse();
+    for (const lock of held) releaseRefLock(lock);
+    created.reverse();
+    for (const directory of created) removeEmptyDirectory(directory);
   }
 }
 
