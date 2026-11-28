@@ -31,12 +31,6 @@ function refusedAsActiveRunConflict(mutation: CodingWorkbenchMutationState): boo
   );
 }
 
-// Identifies one read of the run snapshot: a re-render of the same read keeps the key, a newer
-// revision of the run changes it.
-function runReadKey(run: CodingWorkbenchRuntimeState["run"]["value"]): string {
-  return run === null ? "none" : `${run.runId ?? ""}:${String(run.revision)}`;
-}
-
 function startsTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
   return mutation.status === "pending" && TASK_INTENT_KINDS.has(mutation.kind);
 }
@@ -78,8 +72,10 @@ export function useActiveRunConflictNotice({
   keptRef.current = kept;
   const armed = useRef(false);
   const sawRun = useRef(false);
-  // The run snapshot the refusal was read against: only a later read can say the other run ended.
-  const armedRun = useRef<string | undefined>(undefined);
+  // The run resource the refusal was read against. The reducer publishes a new resource object for
+  // every status read it accepts, even one that repeats the same revision, so a different object
+  // is a read made after the refusal and the only thing that can say the other run ended.
+  const armedRun = useRef<CodingWorkbenchRuntimeState["run"] | undefined>(undefined);
   const runRef = useRef(state.run);
   runRef.current = state.run;
   const latestIntent = useRef(taskIntent);
@@ -96,7 +92,7 @@ export function useActiveRunConflictNotice({
     }
     if (!refusedAsActiveRunConflict(mutation) || armed.current) return;
     armed.current = true;
-    armedRun.current = runReadKey(runRef.current.value);
+    armedRun.current = runRef.current;
     setKept(latestIntent.current === "" ? null : latestIntent.current);
     setVisible(true);
     reportClientDiagnostic("[keiko] coding workbench start refused: active-run-elsewhere");
@@ -123,7 +119,7 @@ function useNoticeEnd({
   readonly run: CodingWorkbenchRuntimeState["run"];
   readonly armed: { current: boolean };
   readonly sawRun: { current: boolean };
-  readonly armedRun: { readonly current: string | undefined };
+  readonly armedRun: { readonly current: CodingWorkbenchRuntimeState["run"] | undefined };
   readonly setVisible: (visible: boolean) => void;
 }): void {
   useEffect(() => {
@@ -137,7 +133,7 @@ function useNoticeEnd({
 
   useEffect(() => {
     if (!armed.current || runIsActive || run.status !== "ready") return;
-    if (runReadKey(run.value) === armedRun.current) return;
+    if (run === armedRun.current) return;
     armed.current = false;
     sawRun.current = false;
     setVisible(false);

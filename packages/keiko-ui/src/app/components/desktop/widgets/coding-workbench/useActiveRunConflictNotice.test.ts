@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchMutationKind,
@@ -29,11 +29,28 @@ function pending(kind: CodingWorkbenchMutationKind): CodingWorkbenchMutationStat
   return { status: "pending", kind, requestId: "req-1", error: null };
 }
 
+// The reducer keeps one run resource object until it accepts another status read, so a render that
+// repeats the state keeps the object and a new `read` stands for one more accepted read.
+const RUNS = new Map<string, CodingWorkbenchRuntimeState["run"]>();
+
+afterEach(() => RUNS.clear());
+
 function stateOf(
   mutation: CodingWorkbenchMutationState,
   runState: "running" | "succeeded" | null,
   revision = 1,
+  read = 0,
 ): Pick<CodingWorkbenchRuntimeState, "mutation" | "run"> {
+  const key = `${String(runState)}:${String(revision)}:${String(read)}`;
+  const run = RUNS.get(key) ?? runOf(runState, revision);
+  RUNS.set(key, run);
+  return { mutation, run };
+}
+
+function runOf(
+  runState: "running" | "succeeded" | null,
+  revision: number,
+): CodingWorkbenchRuntimeState["run"] {
   const value =
     runState === null
       ? null
@@ -44,7 +61,7 @@ function stateOf(
           updatedAt: "2026-07-13T12:00:00.000Z",
           runId: "run-other",
         } as CodingWorkbenchRuntimeSnapshot);
-  return { mutation, run: { status: "ready", value, error: null } };
+  return { status: "ready", value, error: null };
 }
 
 interface Props {
@@ -52,6 +69,8 @@ interface Props {
   readonly runState: "running" | "succeeded" | null;
   readonly draft: string;
   readonly revision?: number;
+  /** Which accepted status read produced the run: a repeat of the same revision is a new read. */
+  readonly read?: number;
 }
 
 function mount(initial: Props): {
@@ -62,9 +81,9 @@ function mount(initial: Props): {
 } {
   const setTaskIntent = vi.fn<(value: string) => void>();
   const hook = renderHook(
-    ({ mutation, runState, draft, revision }: Props) =>
+    ({ mutation, runState, draft, revision, read }: Props) =>
       useActiveRunConflictNotice({
-        state: stateOf(mutation, runState, revision),
+        state: stateOf(mutation, runState, revision, read),
         taskIntent: draft,
         setTaskIntent,
       }),
@@ -145,6 +164,25 @@ describe("useActiveRunConflictNotice (U-14)", () => {
       draft: "",
       revision: 2,
     });
+    expect(hook.result.current.visible).toBe(false);
+    expect(hook.result.current.taskIntent).toBe(TASK);
+  });
+
+  it("ends the notice when a fresh read repeats the terminal revision the refusal was armed against", () => {
+    const { hook } = mount({ mutation: IDLE, runState: null, draft: TASK });
+    // The other run's terminal snapshot reaches the window in the same render as the refusal.
+    hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: TASK });
+    expect(hook.result.current.visible).toBe(true);
+    hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: "" });
+    expect(hook.result.current.visible).toBe(true);
+
+    hook.rerender({
+      mutation: superseded("start", CONFLICT),
+      runState: "succeeded",
+      draft: "",
+      read: 1,
+    });
+
     expect(hook.result.current.visible).toBe(false);
     expect(hook.result.current.taskIntent).toBe(TASK);
   });
