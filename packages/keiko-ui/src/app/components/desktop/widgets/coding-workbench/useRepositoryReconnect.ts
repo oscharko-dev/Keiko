@@ -15,6 +15,8 @@ export interface RepositoryReconnect {
   /** The picker's selection handler: reconnects a changed folder, selects any other directly. */
   readonly choose: (path: string) => void;
   readonly failed: boolean;
+  /** A reconnect is running: the picker stays locked so no choice can be dropped or replaced. */
+  readonly reconnecting: boolean;
 }
 
 // A reconnect that failed: a rejected request carries its error, a request that answered but left
@@ -64,6 +66,17 @@ function useMounted(): { readonly current: boolean } {
   return mounted;
 }
 
+function useReconnectStatus(): {
+  readonly failed: boolean;
+  readonly setFailed: (failed: boolean) => void;
+  readonly reconnecting: boolean;
+  readonly setReconnecting: (reconnecting: boolean) => void;
+} {
+  const [failed, setFailed] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  return { failed, setFailed, reconnecting, setReconnecting };
+}
+
 /**
  * Reconnects a drifted folder through the same `reconnectProject` call the Git window uses. It runs
  * only from `choose`, which the picker calls on the person's selection click — never on mount.
@@ -74,15 +87,15 @@ export function useRepositoryReconnect(
   repositories: readonly ProjectWithAvailability[],
   reload: () => void,
   onSelect: (root: string) => void,
-  current: string | null,
 ): RepositoryReconnect {
-  const [failed, setFailed] = useState(false);
+  const { failed, setFailed, reconnecting, setReconnecting } = useReconnectStatus();
   const mounted = useMounted();
   const latest = useRef<string | null>(null);
   const inFlight = useRef(new Set<string>());
   const settle = useCallback(
     (path: string, failure: ReconnectFailure): void => {
       inFlight.current.delete(path);
+      if (mounted.current) setReconnecting(inFlight.current.size > 0);
       const outcome = reconnectOutcome(mounted.current, latest.current === path);
       if (failure !== null) {
         if (outcome !== "selector-gone") reportReconnectFailure(failure);
@@ -95,32 +108,30 @@ export function useRepositoryReconnect(
       if (outcome === "selected") onSelect(path);
       reportReconnected(outcome);
     },
-    [mounted, onSelect, reload],
+    [mounted, onSelect, reload, setFailed, setReconnecting],
   );
   const reconnect = useCallback(
     (path: string): void => {
       if (inFlight.current.has(path)) return;
       inFlight.current.add(path);
+      setReconnecting(true);
       void DEFAULT_GIT_CLIENT.reconnectRepository(path).then(
         (response): void =>
           settle(path, response.project.workspaceAvailable === true ? null : { error: undefined }),
         (error: unknown): void => settle(path, { error }),
       );
     },
-    [settle],
+    [settle, setReconnecting],
   );
   const choose = useCallback(
     (path: string): void => {
-      // U-44: while another folder's reconnect runs, a repeat of the repository already shown is
-      // not a new choice; taking it as one made the awaited folder lose its selection.
-      if (path === current && inFlight.current.size > 0) return;
       latest.current = path;
       setFailed(false);
       const project = repositories.find((entry) => entry.path === path);
       if (project !== undefined && needsReconnect(project)) reconnect(path);
       else onSelect(path);
     },
-    [current, onSelect, reconnect, repositories],
+    [onSelect, reconnect, repositories, setFailed],
   );
-  return { choose, failed };
+  return { choose, failed, reconnecting };
 }

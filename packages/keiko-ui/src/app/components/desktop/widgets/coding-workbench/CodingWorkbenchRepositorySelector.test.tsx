@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import {
   branchOptions,
   CodingWorkbenchRepositorySelector,
 } from "./CodingWorkbenchRepositorySelector";
+import { useRepositoryReconnect } from "./useRepositoryReconnect";
 
 const selectableRepositories = vi.hoisted(() => vi.fn());
 vi.mock("./codingWorkbenchRepositories", () => ({ selectableRepositories }));
@@ -501,35 +502,41 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("keeps the awaited folder when the shown repository is chosen again during its reconnect", async () => {
+  it("locks the field with a label while a folder reconnects, then selects it and unlocks", async () => {
     selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
     let finish: (value: unknown) => void = () => undefined;
     reconnectRepository.mockReturnValue(new Promise((resolve) => (finish = resolve)));
     const onSelect = vi.fn();
     const user = await openPicker({ onSelect });
     await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
-    await user.click(screen.getByRole("combobox", { name: "Choose coding repository" }));
-    await user.click(screen.getByRole("option", { name: /^app/u }));
+    expect(await screen.findByText("Reconnecting…")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
+    expect(onSelect).not.toHaveBeenCalled();
     finish({ project: project("/work/cloned") });
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith("/work/cloned"));
-    expect(onSelect).not.toHaveBeenCalledWith("/work/app");
+    await waitFor(() => expect(screen.queryByText("Reconnecting…")).toBeNull());
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeEnabled();
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a real later choice win over the reconnecting folder, and still reads the catalog", async () => {
-    const other = project("/work/other");
-    selectableRepositories.mockResolvedValue([project("/work/app"), drifted, other]);
+  it("lets a real later choice win over the reconnecting folder and still reads the catalog", async () => {
     let finish: (value: unknown) => void = () => undefined;
     reconnectRepository.mockReturnValue(new Promise((resolve) => (finish = resolve)));
     const onSelect = vi.fn();
-    const user = await openPicker({ onSelect });
-    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
-    await user.click(screen.getByRole("combobox", { name: "Choose coding repository" }));
-    await user.click(screen.getByRole("option", { name: /^other/u }));
-    const reads = selectableRepositories.mock.calls.length;
-    finish({ project: project("/work/cloned") });
-    await waitFor(() => expect(selectableRepositories.mock.calls.length).toBeGreaterThan(reads));
-    expect(onSelect).toHaveBeenCalledTimes(1);
+    const reload = vi.fn();
+    const { result } = renderHook(() =>
+      useRepositoryReconnect(
+        [project("/work/app"), drifted, project("/work/other")],
+        reload,
+        onSelect,
+      ),
+    );
+    act(() => result.current.choose("/work/cloned"));
+    act(() => result.current.choose("/work/other"));
     expect(onSelect).toHaveBeenCalledWith("/work/other");
+    await act(async () => finish({ project: project("/work/cloned") }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledTimes(1);
     expect(interactions()).toEqual([
       { interaction: "repository-reconnected", outcome: "superseded" },
     ]);
@@ -565,19 +572,20 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
-  it("sends one request for a repeated choice of the same folder", async () => {
-    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+  // Both invariants now live at the hook that owns them: the picker is locked during a reconnect,
+  // so only a direct `choose` can repeat or overtake a choice.
+  it("sends one request for a repeated choice of the same folder", () => {
     reconnectRepository.mockReturnValue(new Promise(() => undefined));
-    const user = await openPicker();
-    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
-    await user.click(screen.getByRole("combobox", { name: "Choose coding repository" }));
-    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    const { result } = renderHook(() =>
+      useRepositoryReconnect([project("/work/app"), drifted], vi.fn(), vi.fn()),
+    );
+    act(() => result.current.choose("/work/cloned"));
+    act(() => result.current.choose("/work/cloned"));
     expect(reconnectRepository).toHaveBeenCalledTimes(1);
   });
 
   it("lets only the latest choice apply when an earlier reconnect resolves late", async () => {
     const other = { ...project("/work/other"), workspaceAvailable: false };
-    selectableRepositories.mockResolvedValue([project("/work/app"), drifted, other]);
     const settle: Record<string, (value: unknown) => void> = {};
     reconnectRepository.mockImplementation(
       (path: string) =>
@@ -586,15 +594,14 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
         }),
     );
     const onSelect = vi.fn();
-    const user = await openPicker({ onSelect });
-    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
-    await user.click(screen.getByRole("combobox", { name: "Choose coding repository" }));
-    await user.click(screen.getByRole("option", { name: /other, Changed since it was added/u }));
-    settle["/work/other"]?.({ project: project("/work/other") });
-    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("/work/other"));
-    settle["/work/cloned"]?.({ project: project("/work/cloned") });
-    await waitFor(() => expect(reconnectRepository).toHaveBeenCalledTimes(2));
-    await Promise.resolve();
+    const { result } = renderHook(() =>
+      useRepositoryReconnect([project("/work/app"), drifted, other], vi.fn(), onSelect),
+    );
+    act(() => result.current.choose("/work/cloned"));
+    act(() => result.current.choose("/work/other"));
+    await act(async () => settle["/work/other"]?.({ project: project("/work/other") }));
+    expect(onSelect).toHaveBeenCalledWith("/work/other");
+    await act(async () => settle["/work/cloned"]?.({ project: project("/work/cloned") }));
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 

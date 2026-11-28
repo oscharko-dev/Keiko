@@ -578,6 +578,8 @@ interface RepositorySelectorState {
   // U-16: choosing a changed folder reconnects it first; the failure stays visible.
   readonly choose: (root: string) => void;
   readonly reconnectFailed: boolean;
+  // U-44: a reconnect is running; the repository field stays locked until it lands.
+  readonly reconnecting: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
@@ -593,7 +595,7 @@ function useRepositorySelectorState(
   onSelect: (root: string) => void,
 ): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog(catalogRefreshKey);
-  const reconnect = useRepositoryReconnect(catalog.repositories, catalog.reload, onSelect, root);
+  const reconnect = useRepositoryReconnect(catalog.repositories, catalog.reload, onSelect);
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
@@ -613,6 +615,7 @@ function useRepositorySelectorState(
     reconnectable: repositoryReconnectable(root, catalog),
     choose: reconnect.choose,
     reconnectFailed: reconnect.failed,
+    reconnecting: reconnect.reconnecting,
   };
 }
 
@@ -788,7 +791,7 @@ function SelectorRecoveryForState({
           t={t}
         />
       ) : null}
-      <ReconnectNotice failed={state.reconnectFailed} t={t} />
+      <ReconnectNotice failed={state.reconnectFailed} reconnecting={state.reconnecting} t={t} />
     </>
   );
 }
@@ -854,11 +857,20 @@ function RepositorySelectorField({
 
 function ReconnectNotice({
   failed,
+  reconnecting,
   t,
 }: {
   readonly failed: boolean;
+  readonly reconnecting: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  if (reconnecting) {
+    return (
+      <p className={styles.cmpRepositorySelectorNotice} role="status">
+        {t("codingWorkbench.repository.reconnecting")}
+      </p>
+    );
+  }
   return failed ? (
     <p className={styles.cmpRepositorySelectorNotice} role="alert">
       {t("codingWorkbench.repository.reconnectChoiceFailed")}
@@ -882,7 +894,7 @@ export function CodingWorkbenchRepositorySelector({
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField
         root={root}
-        locked={locked}
+        locked={locked || state.reconnecting}
         catalog={state.catalog}
         onSelect={state.choose}
         t={t}
