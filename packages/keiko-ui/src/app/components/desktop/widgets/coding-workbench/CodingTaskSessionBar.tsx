@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -72,24 +72,34 @@ const COMPOSER_ID = "coding-workbench-task-intent";
 
 // Focus moves once the action has settled and the page shows its outcome: to the composer after a
 // success, to the Try again control after a failure, where Finish and Try again are still offered.
+// A click arms the wait and the action raises `pending` in the same event: a commit that sees it
+// rise starts the wait. An action that settles without any such commit was an early return, which
+// disarms, so a later unrelated pending change never steals the focus.
 function useFocusAfterAction(
   session: CodingTaskSession,
-  retryRef: { readonly current: HTMLButtonElement | null },
-): () => void {
-  const awaiting = useRef(false);
+  retryRef: RefObject<HTMLButtonElement | null>,
+): (action: () => Promise<void>) => Promise<void> {
+  const phase = useRef<"idle" | "armed" | "waiting">("idle");
   const { pending, error } = session;
   useEffect(() => {
-    if (!awaiting.current || pending) return;
-    awaiting.current = false;
+    if (phase.current === "armed") {
+      phase.current = pending ? "waiting" : "idle";
+      return;
+    }
+    if (phase.current !== "waiting" || pending) return;
+    phase.current = "idle";
     if (error) {
       retryRef.current?.focus();
       return;
     }
     const composer = document.getElementById(COMPOSER_ID);
     if (composer instanceof HTMLElement && !composer.hasAttribute("disabled")) composer.focus();
-  }, [pending, error, retryRef]);
-  return (): void => {
-    awaiting.current = true;
+  });
+  return (action) => {
+    phase.current = "armed";
+    return action().finally(() => {
+      if (phase.current === "armed") phase.current = "idle";
+    });
   };
 }
 
@@ -158,13 +168,13 @@ function RetryButton({
   buttonRef,
 }: {
   readonly retry: (() => void) | undefined;
-  readonly buttonRef: { readonly current: HTMLButtonElement | null };
+  readonly buttonRef: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (retry === undefined) return null;
   return (
     <button
-      ref={buttonRef as React.RefObject<HTMLButtonElement>}
+      ref={buttonRef}
       type="button"
       className={styles.cmpMessageFork}
       onClick={retry}
@@ -177,7 +187,7 @@ function RetryButton({
 export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const { session } = props;
   const t = useCodingWorkbenchTranslate();
-  const retryRef = useRef<HTMLButtonElement>(null);
+  const retryRef = useRef<HTMLButtonElement | null>(null);
   const awaitFocus = useFocusAfterAction(session, retryRef);
   // #3880: an unpaired window cannot read its task; the run status sentence says why.
   const errorHeld = useHeldNotice("task-session", session.error);
@@ -185,14 +195,8 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   if (session.detail === null && !session.pending && !error) return null;
   const marked: CodingTaskSession = {
     ...session,
-    finish: () => {
-      awaitFocus();
-      return session.finish();
-    },
-    newTask: () => {
-      awaitFocus();
-      return session.newTask();
-    },
+    finish: () => awaitFocus(session.finish),
+    newTask: () => awaitFocus(session.newTask),
   };
   return (
     <div className={styles.cmpSessionBar}>

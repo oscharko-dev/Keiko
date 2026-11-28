@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -790,6 +790,47 @@ describe("keyboard focus after Complete task and New task", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByLabelText("Task"));
     });
+  });
+
+  it("does not steal focus for a later pending change after an action that returned early", async () => {
+    function EarlyReturn(): ReactNode {
+      const [pending, setPending] = useState(false);
+      const current = {
+        ...sessionWith([]),
+        pending,
+        newTask: (): Promise<void> => Promise.resolve(),
+        finish: (): Promise<void> => Promise.resolve(),
+      };
+      return (
+        <>
+          <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
+          <textarea id="coding-workbench-task-intent" aria-label="Task" />
+          <button
+            type="button"
+            onClick={() => {
+              setPending(true);
+              setTimeout(() => {
+                setPending(false);
+              }, 0);
+            }}
+          >
+            Unrelated load
+          </button>
+        </>
+      );
+    }
+    render(<EarlyReturn />);
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const unrelated = screen.getByRole("button", { name: "Unrelated load" });
+    unrelated.focus();
+    fireEvent.click(unrelated);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "New task" })).toBeEnabled();
+    });
+    expect(document.activeElement).not.toBe(screen.getByLabelText("Task"));
   });
 
   it("keeps focus on a visible control when Complete task failed", async () => {
