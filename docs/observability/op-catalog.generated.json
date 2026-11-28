@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a5a09c1f48681feab452bd35fbdb70013f418d7c539bd6c819acc1596b0f01f3",
+    "catalogDigest": "b4c44c110c6ccbdee74eedce61b96273af5a2ac1721c9cffca9b0dd859acf4d3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31291,6 +31291,7 @@
               "empty-message",
               "message-invalid",
               "message-too-large",
+              "ref-symbolic",
               "cleanup-unavailable",
               "landed-after-failure",
               "nothing-to-commit",
@@ -31329,8 +31330,8 @@
         "failureClasses": ["git-delivery-precondition"],
         "proofIds": ["git.delivery.commit-refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:38",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:112"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:39",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:114"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31471,8 +31472,8 @@
         "failureClasses": ["git-delivery-authority-continuity"],
         "proofIds": ["git.delivery.dispatch.no-spawn.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:121",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:800"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:122",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:801"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31689,8 +31690,8 @@
         "failureClasses": ["git-delivery-mutation"],
         "proofIds": ["git.delivery.mutation.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:182",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1511"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:183",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1512"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31769,8 +31770,8 @@
         "failureClasses": ["git-delivery-precondition"],
         "proofIds": ["git.delivery.mutation.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:339",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1594"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:340",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1595"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32287,8 +32288,8 @@
         "failureClasses": ["git-upstream-tracking"],
         "proofIds": ["git.delivery.push.upstream-tracking-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:144",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:825"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:145",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:826"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -130928,7 +130929,7 @@
     {
       "op": "git.delivery.commit-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:41",
+      "site": "packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:42",
       "package": "keiko-server"
     },
     {
@@ -130958,19 +130959,19 @@
     {
       "op": "git.delivery.dispatch.no-spawn",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:124",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:125",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:185",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:186",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:342",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:343",
       "package": "keiko-server"
     },
     {
@@ -131066,7 +131067,7 @@
     {
       "op": "git.delivery.push.upstream-tracking-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:147",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:148",
       "package": "keiko-server"
     },
     {
