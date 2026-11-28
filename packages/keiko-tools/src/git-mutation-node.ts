@@ -89,6 +89,7 @@ import {
   type GitStageLineEndings,
 } from "./git-stage-node.js";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
+import { withGitBranchRefLocks } from "@oscharko-dev/keiko-workspace/internal/git-index";
 
 /** A failed `commit.gpgsign` read, reported once with its closed class and the cause. */
 export interface GitCommitSigningReadFailureReport {
@@ -825,20 +826,35 @@ async function createdCommitMatches(
 }
 
 // A branch from an unborn HEAD re-points HEAD instead of branching from a commit. The unborn state
-// and the absence of the new branch are proved again right before the write, so a branch or commit
-// that appeared since the review fails closed instead of being switched onto.
+// and the absence of the new branch are proved again right before the write, while Git's own lock on
+// the old and the new branch is held: a commit or branch another process creates meanwhile fails on
+// that lock instead of being switched away from or onto. A state that cannot be proved, or a lock
+// that cannot be taken, writes nothing.
 async function execUnbornBranch(
   ctx: RunContext,
   req: GitBranchCreateExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
-  // A failed read throws: the orchestrator turns a thrown adapter call into a failed result, so
-  // nothing is written on a state that could not be proved.
-  const deps = commitReadDeps(ctx);
-  const head = await readGitHeadState(deps);
-  if (head.kind !== "unborn" || head.branch !== req.fromUnbornBranch) return failureFromExit(0, 0);
-  const snapshot = await readGitWorktreeSnapshot(deps);
-  if (snapshot.existingLocalBranchNames.includes(req.branchName)) return failureFromExit(0, 0);
-  return execPlan(ctx, () => buildUnbornBranchArgv(req));
+  const fromBranch = req.fromUnbornBranch;
+  if (fromBranch === undefined) return failureFromExit(0, 0);
+  try {
+    return await withGitBranchRefLocks(
+      ctx.runDeps.workspace.root,
+      [fromBranch, req.branchName],
+      async () => {
+        const deps = commitReadDeps(ctx);
+        const head = await readGitHeadState(deps);
+        if (head.kind !== "unborn" || head.branch !== fromBranch) return failureFromExit(0, 0);
+        const snapshot = await readGitWorktreeSnapshot(deps);
+        if (snapshot.existingLocalBranchNames.includes(req.branchName))
+          return failureFromExit(0, 0);
+        return await execPlan(ctx, () => buildUnbornBranchArgv(req));
+      },
+      workspaceFsOf(ctx.runDeps),
+    );
+  } catch (error) {
+    // A failed read or an unavailable lock is a thrown failure: nothing was written.
+    return failureFromThrow(error, 0, 0);
+  }
 }
 
 function execBranchCreate(

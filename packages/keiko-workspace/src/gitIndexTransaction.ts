@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
@@ -78,6 +78,76 @@ export async function withGitIndexTransaction<T>(
     cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
   }
 }
+const GIT_REF_LOCK_UNAVAILABLE = "git-ref-lock-unavailable";
+
+// The directory that holds `refs/heads`: the repository's own gitdir, or the common directory a
+// linked worktree's gitdir (`<repo>/.git/worktrees/<name>`) shares.
+function branchRefsBase(gitdir: string): string {
+  return basename(dirname(gitdir)) === "worktrees" ? dirname(dirname(gitdir)) : gitdir;
+}
+
+function branchLockPath(heads: string, branch: string): string | undefined {
+  const parts = branch.split("/");
+  if (parts.some((part) => part === "" || part === "." || part === ".." || part.includes("\\")))
+    return undefined;
+  const target = join(heads, ...parts);
+  return relative(heads, target).startsWith("..") ? undefined : `${target}.lock`;
+}
+
+/**
+ * Holds Git's own `<ref>.lock` for each named local branch while `run` executes. Git refuses every
+ * update of a branch whose lock exists, so a state read inside `run` stays true until the write that
+ * follows it: a commit or branch created by another process meanwhile fails on the lock instead of
+ * being overwritten. A branch whose parent directory does not exist yet (a nested new name) cannot
+ * be raced through Git's own creation either, and is not locked. A lock that cannot be created fails
+ * closed.
+ */
+export async function withGitBranchRefLocks<T>(
+  workspaceRoot: string,
+  branches: readonly string[],
+  run: () => Promise<T>,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): Promise<T> {
+  const base = await resolveGitdir(fs, workspaceRoot);
+  if (base === undefined) throw new Error("git-index-metadata-unavailable");
+  const heads = join(branchRefsBase(base.path), "refs", "heads");
+  const held: { path: string; descriptor: number }[] = [];
+  try {
+    for (const branch of branches) {
+      const path = branchLockPath(heads, branch);
+      if (path === undefined) throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+      const parent = lstatSync(dirname(path), { throwIfNoEntry: false });
+      if (parent === undefined) continue;
+      if (!parent.isDirectory() || parent.isSymbolicLink())
+        throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+      held.push({ path, descriptor: openRefLock(path) });
+    }
+    return await run();
+  } finally {
+    for (const lock of held.reverse()) releaseRefLock(lock);
+  }
+}
+
+function openRefLock(path: string): number {
+  try {
+    return openSync(
+      path,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch {
+    throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+  }
+}
+
+function releaseRefLock(lock: { readonly path: string; readonly descriptor: number }): void {
+  try {
+    if (sameLock(lock.path, lock.descriptor)) rmSync(lock.path);
+  } finally {
+    closeSync(lock.descriptor);
+  }
+}
+
 function cleanupIndexTransaction(
   base: string,
   directory: NonNullable<ReturnType<typeof lstatSync>>,

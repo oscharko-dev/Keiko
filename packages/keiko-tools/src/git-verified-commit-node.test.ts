@@ -504,6 +504,51 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     expect(taken.outcome).not.toBe("succeeded");
     expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
   });
+  // A first commit made by another process just before the re-point must never be skipped over: the
+  // old and the new branch are locked from the proof to the write, so the other commit fails on
+  // Git's own lock instead of landing on a branch HEAD is about to leave.
+  it("holds the old and new branch locks from the proof to the write", async () => {
+    let attempt: { readonly threw: boolean } | undefined;
+    const racing = createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      spawn: (command, args, options) => {
+        if (args.includes("symbolic-ref") && attempt === undefined) {
+          let threw = false;
+          try {
+            git(["commit", "-qm", "external first commit"]);
+          } catch {
+            threw = true;
+          }
+          attempt = { threw };
+        }
+        return nodeSpawnFn(command, args, options);
+      },
+    });
+    const result = await racing.createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result.outcome).toBe("succeeded");
+    expect(attempt?.threw).toBe(true);
+    expect(existsSync(join(root, ".git", "refs", "heads", "fresh"))).toBe(false);
+    expect(existsSync(join(root, ".git", "refs", "heads", "fresh.lock"))).toBe(false);
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/feature/first");
+  });
+  it("writes nothing when another writer already holds a lock on the old branch", async () => {
+    const lock = join(root, ".git", "refs", "heads", "fresh.lock");
+    writeFileSync(lock, "");
+    const result = await adapter().createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result.outcome).toBe("failed");
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+    // The foreign lock is not ours to remove.
+    expect(existsSync(lock)).toBe(true);
+  });
   it("reads the orphan branch as an explicit unborn state", async () => {
     const head: GitHeadState = await readGitHeadState({ workspace });
     expect(head).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });
