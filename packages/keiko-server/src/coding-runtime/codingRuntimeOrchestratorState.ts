@@ -73,6 +73,9 @@ export class CodingRuntimeOrchestratorState {
       ...this.deps.runIdentity?.(snapshot.runId),
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
       ...(snapshot.verificationGap ? { verificationGap: snapshot.verificationGap } : {}),
+      ...(snapshot.verificationGapDetail
+        ? { verificationGapDetail: snapshot.verificationGapDetail }
+        : {}),
       ...(snapshot.stopCause ? { stopCause: snapshot.stopCause } : {}),
       ...contextUsageProjection(this.deps.contextUsage?.(snapshot.runId)),
       ...this.stateBoundDetail(snapshot),

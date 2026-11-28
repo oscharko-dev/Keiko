@@ -9433,6 +9433,73 @@ describe("verification truth at task settlement", () => {
     });
   });
 
+  // U-38: a check that was red before the turn must not make the run repair what the person never
+  // asked for, and a run that leaves it red says exactly that instead of a generic failed check.
+  describe("a run whose check stays red after Keiko asked once", () => {
+    async function continuedRun() {
+      const run = await runningTask();
+      let endContinuation: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+      const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+        endContinuation = resolve;
+      });
+      run.f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+      run.f.orchestrator.observeEditOutcome("run-1", {
+        kind: "applied",
+        changedPaths: ["src/a.js"],
+      });
+      await verification(run.f, "failed");
+      run.finish();
+      await vi.waitFor(() => {
+        expect(run.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      });
+      return { ...run, endContinuation: (): void => endContinuation?.("succeeded") };
+    }
+
+    it("scopes the dispatched continuation to the person's task end to end", async () => {
+      const { f } = await continuedRun();
+      const request = f.taskDispatcher.dispatch.mock.calls[1]?.[0] as { taskIntent: string };
+      expect(request.taskIntent).toBe(
+        verificationContinuationIntent({ check: "check", failedCount: 1 }, undefined),
+      );
+      expect(request.taskIntent).toContain("do not change any file to repair it");
+    });
+
+    it("settles failed with the unchanged-check detail, logged and persisted", async () => {
+      const { f, log, endContinuation } = await continuedRun();
+      endContinuation();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        verificationGap: "check-failed",
+        verificationGapDetail: "unchanged-after-continuation",
+      });
+      const settled = requireLoggedEvent(
+        log.records.find(
+          (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+        ),
+        "Expected the terminal settlement line",
+      );
+      expect(settled.extra).toMatchObject({
+        verificationGap: "check-failed",
+        verificationGapDetail: "unchanged-after-continuation",
+      });
+    });
+
+    it("names no detail when the run changed code after the continuation and the check still fails", async () => {
+      const { f, endContinuation } = await continuedRun();
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/b.js"] });
+      await verification(f, "failed");
+      endContinuation();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      const snapshot = f.orchestrator.getSnapshot("run-1");
+      expect(snapshot?.verificationGap).toBe("check-failed");
+      expect(snapshot?.verificationGapDetail).toBeUndefined();
+    });
+  });
+
   describe("the continuation a run's tool profile can follow", () => {
     async function continuedIntent(taskHasShellTool: boolean | undefined): Promise<string> {
       const { f, finish } = await runningTask(taskHasShellTool);

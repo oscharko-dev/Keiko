@@ -16879,6 +16879,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
       },
+      verificationGapDetail: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unchanged-after-continuation"],
+      },
       taskOutcomeStatus: {
         type: "string",
         dataClass: "closed-enum",
@@ -17348,12 +17354,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
-      },
-      failureOrigin: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: false,
-        values: ["before-first-edit", "unattributed"],
       },
       blockedReason: {
         type: "string",

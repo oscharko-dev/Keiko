@@ -212,7 +212,7 @@ it("upgrades an existing v40 run and admits only the closed verification settlem
   runMigrations(db);
   expect(
     db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = ?").get("run-v41"),
-  ).toEqual({ ...before, verification_gap: null, stop_cause: null });
+  ).toEqual({ ...before, verification_gap: null, stop_cause: null, verification_gap_detail: null });
   settle("verification-not-evidenced");
   expect(
     db.prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = ?").get("run-v41"),
@@ -300,7 +300,12 @@ describe("v40 migration — edit refusal causes (F5, #3873)", () => {
     // (v83 `verification_gap`, #4491; v85 `stop_cause`, U-31) read NULL for a row that predates them.
     expect(
       db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'").get(),
-    ).toEqual({ ...before, verification_gap: null, stop_cause: null });
+    ).toEqual({
+      ...before,
+      verification_gap: null,
+      stop_cause: null,
+      verification_gap_detail: null,
+    });
     const indexes = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -649,7 +654,12 @@ describe("v40 migration — terminal run causes (F9, #3873)", () => {
     // (v83 `verification_gap`, #4491; v85 `stop_cause`, U-31) read NULL for a row that predates them.
     expect(
       db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'").get(),
-    ).toEqual({ ...before, verification_gap: null, stop_cause: null });
+    ).toEqual({
+      ...before,
+      verification_gap: null,
+      stop_cause: null,
+      verification_gap_detail: null,
+    });
     const indexes = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",

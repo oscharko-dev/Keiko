@@ -85,7 +85,12 @@ describe("V81 supervisor-refusal causes", () => {
     // The columns later migrations appended (v83 `verification_gap`, #4491; v85 `stop_cause`, U-31)
     // read NULL for a row that predates them; every other value carries through unchanged.
     expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(
-      before.map((row) => ({ ...row, verification_gap: null, stop_cause: null })),
+      before.map((row) => ({
+        ...row,
+        verification_gap: null,
+        stop_cause: null,
+        verification_gap_detail: null,
+      })),
     );
     expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
     expect(
@@ -183,7 +188,7 @@ describe("V84 Windows session and path causes (#4495)", () => {
     runMigrations(db);
     // v85 appended `stop_cause` (U-31): NULL on the row that predates it, every other value kept.
     expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(
-      before.map((row) => ({ ...row, stop_cause: null })),
+      before.map((row) => ({ ...row, stop_cause: null, verification_gap_detail: null })),
     );
     for (const cause of [...WINDOWS_CAUSES, ...CAUSES, "output-limit-reached"]) settle(db, cause);
     expect(() => {
@@ -217,7 +222,7 @@ describe("V84 Windows session and path causes (#4495)", () => {
     runMigrations(db);
     // The one column v85 appended (U-31) is the only change to the v83 table.
     expect({ columns: columns(), indexes: indexes() }).toEqual({
-      columns: [...(before.columns as string[]), "stop_cause"].sort(),
+      columns: [...(before.columns as string[]), "stop_cause", "verification_gap_detail"].sort(),
       indexes: before.indexes,
     });
   });
@@ -243,7 +248,7 @@ describe("V85 stop cause (U-31)", () => {
 
 // The stored CREATE TABLE text with the one part V81 is allowed to change taken out.
 // The columns v83 and v85 appended to the table; the V81 and V82 rebuilds are judged without it.
-const LATER_COLUMNS = ["verification_gap", "stop_cause"];
+const LATER_COLUMNS = ["verification_gap", "stop_cause", "verification_gap_detail"];
 
 function tableDefinition(db: DatabaseSync): string {
   const row = db
@@ -259,5 +264,9 @@ function tableDefinition(db: DatabaseSync): string {
       /, verification_gap TEXT CHECK \(verification_gap IS NULL OR verification_gap IN \([^)]*\)\)/u,
       "",
     )
-    .replace(/, stop_cause TEXT CHECK \(stop_cause IS NULL OR stop_cause IN \([^)]*\)\)/u, "");
+    .replace(/, stop_cause TEXT CHECK \(stop_cause IS NULL OR stop_cause IN \([^)]*\)\)/u, "")
+    .replace(
+      /, verification_gap_detail TEXT CHECK \(verification_gap_detail IS NULL OR verification_gap_detail IN \([^)]*\)\)/u,
+      "",
+    );
 }

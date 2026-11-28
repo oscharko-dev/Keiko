@@ -894,7 +894,7 @@ ended without a passing check after its last change records why, on `coding-runt
 `errorKind=validation-failed` unless a check was blocked, and why no
 continuation ran on `coding-runtime.run.verification-continuation` as `state: skipped` with the closed `skipReason`
 (`docs-only`, `no-failed-check`, `blocked`, `budget-exhausted`, `already-continued`); the one continuation that does
-run records `state: continued` with the failed `check`, its `failedCount` and the closed `failureOrigin` (`before-first-edit` when the check already failed before the run's first code edit, else `unattributed`; the task scopes the repair to the person's work, U-38), never a path or output. What a delivery card showed is `delivery-step-shown` with the closed
+run records `state: continued` with the failed `check`, its `failedCount` and never a path or output. The continuation task scopes the repair to the person's work (U-38); when the run still ends with that check red and no code change after it, `coding-runtime.run.settled` adds the closed `verificationGapDetail: unchanged-after-continuation` beside `verificationGap: check-failed`. What a delivery card showed is `delivery-step-shown` with the closed
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;

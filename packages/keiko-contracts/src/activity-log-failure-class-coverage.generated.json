@@ -17964,6 +17964,12 @@
               "required": false
             },
             {
+              "name": "verificationGapDetail",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "wallDurationMs",
               "type": "integer",
               "dataClass": "duration",
@@ -19504,12 +19510,6 @@
               "name": "failedCount",
               "type": "integer",
               "dataClass": "count",
-              "required": false
-            },
-            {
-              "name": "failureOrigin",
-              "type": "string",
-              "dataClass": "closed-enum",
               "required": false
             },
             {

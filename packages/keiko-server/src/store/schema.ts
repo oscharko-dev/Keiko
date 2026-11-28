@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 85;
+export const SCHEMA_VERSION = 86;
 
 interface Migration {
   readonly version: number;
@@ -1677,6 +1677,14 @@ const V84_SQL = V82_SQL.replaceAll("coding_runtime_snapshots_v82", "coding_runti
 const V85_SQL = `
 ALTER TABLE coding_runtime_snapshots ADD COLUMN stop_cause TEXT
   CHECK (stop_cause IS NULL OR stop_cause IN ('server-shutdown-waiting','server-shutdown-working'));
+`;
+
+// V86 (U-38): `coding_runtime_snapshots.verification_gap_detail` — what the `check-failed` gap adds
+// when Keiko asked the model to look at the failing check and the model changed no code afterwards.
+// A plain ADD COLUMN: NULL on every existing row is the correct reading of history.
+const V86_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN verification_gap_detail TEXT
+  CHECK (verification_gap_detail IS NULL OR verification_gap_detail IN ('unchanged-after-continuation'));
 `;
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
@@ -3665,6 +3673,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 83, sql: V83_SQL },
   { version: 84, sql: V84_SQL, rebuildsReferencedTable: true },
   { version: 85, sql: V85_SQL },
+  { version: 86, sql: V86_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

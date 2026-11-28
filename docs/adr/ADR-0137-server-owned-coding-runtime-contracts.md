@@ -372,9 +372,14 @@ generic "verification is not complete" request at the end of a run. Three facts 
   person's task asks it to fix, and otherwise to leave every file alone and state once that the
   failure is pre-existing. Keiko cannot decide this deterministically without running the check on
   the unmodified tree (a second verification subsystem) or reading the task text, so the decision
-  stays with the model under that instruction; the ledger records the one fact it can observe, a
-  check that failed before the run's first code edit, and the `continued` line carries it as the
-  closed `failureOrigin` (`before-first-edit` or `unattributed`). It never
+  stays with the model under that instruction. A run that ends with the check still red after that
+  one continuation and no code change since (the edit revision at the continuation's dispatch equals
+  the revision at settlement) keeps the `check-failed` gap and adds the closed
+  `verificationGapDetail: unchanged-after-continuation` (snapshot column `verification_gap_detail`,
+  schema version 86; `coding-runtime.run.settled` carries it too). The Workbench's run status says
+  so in one sentence: the check is still failing, this run did not change it after Keiko asked, it
+  may have failed before the run, and the requested changes stay in the workspace. It never says
+  green. It never
   runs when no check ran at all (`no-failed-check`), when a check could not start or was refused or
   blocked (`blocked`, any `CODING_VERIFICATION_BLOCKED_REASONS` member), when the run's tool-call or
   patch budget refused a delegation (`budget-exhausted`; the budget refusal tells the model to

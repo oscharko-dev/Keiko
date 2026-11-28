@@ -201,6 +201,24 @@ function StopCauseNote({
   );
 }
 
+// The one honest sentence of a run whose check stayed red because the model, asked once, changed no
+// code (U-38): the check is named as still failing and the run as not having changed it.
+function VerificationGapDetailNote({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const detail = state.run.value?.verificationGapDetail;
+  if (detail === undefined) return null;
+  return (
+    <p className={styles.cmpRunStatusNote} data-testid="coding-runtime-verification-gap-detail">
+      {t(`codingWorkbench.runStatus.verificationGapDetail.${detail}`)}
+    </p>
+  );
+}
+
 export interface CodingWorkbenchRunStatusProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly researchGrant: CodingWorkbenchRuntimeResearchGrant | null;
@@ -261,6 +279,7 @@ export function CodingWorkbenchRunStatus({
         </p>
       ) : null}
       <StopCauseNote state={state} t={t} />
+      <VerificationGapDetailNote state={state} t={t} />
       <ReadinessDetails state={state} t={t} />
     </div>
   );

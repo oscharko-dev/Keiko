@@ -242,6 +242,17 @@ export const CODING_WORKBENCH_STOP_CAUSES = [
 
 export type CodingWorkbenchStopCause = (typeof CODING_WORKBENCH_STOP_CAUSES)[number];
 
+/**
+ * What a `check-failed` verification gap adds (U-38). `unchanged-after-continuation`: Keiko asked the
+ * model once to look at the failing check and the model changed no code afterwards, so the check is
+ * still red and this run did not change it (the failure may predate the run). A closed word, never
+ * inferred from text; absent on every other gap.
+ */
+export const CODING_WORKBENCH_VERIFICATION_GAP_DETAILS = ["unchanged-after-continuation"] as const;
+
+export type CodingWorkbenchVerificationGapDetail =
+  (typeof CODING_WORKBENCH_VERIFICATION_GAP_DETAILS)[number];
+
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
     "runtime-unavailable",

@@ -625,3 +625,43 @@ describe("CodingWorkbenchRunStatus stop cause", () => {
     expect(screen.getByTestId("coding-runtime-stop-cause")).toHaveTextContent(WAITING_DE);
   });
 });
+
+// U-38: a run whose check stayed red after Keiko asked says exactly that, never a repair claim.
+describe("CodingWorkbenchRunStatus unchanged failing check", () => {
+  it("says the check is still failing and the run did not change it", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(
+          snapshot("failed", {
+            failureCode: "verification-not-evidenced",
+            verificationGap: "check-failed",
+            verificationGapDetail: "unchanged-after-continuation",
+          }),
+          [status(0, "starting", STARTED)],
+        )}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-verification-gap-detail")).toHaveTextContent(
+      "The check is still failing, and this run did not change it after Keiko asked.",
+    );
+  });
+
+  it("shows nothing for an ordinary failed check", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(
+          snapshot("failed", {
+            failureCode: "verification-not-evidenced",
+            verificationGap: "check-failed",
+          }),
+          [status(0, "starting", STARTED)],
+        )}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-verification-gap-detail")).not.toBeInTheDocument();
+  });
+});

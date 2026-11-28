@@ -974,3 +974,44 @@ describe("stopCause persistence (schema v85)", () => {
     db.close();
   });
 });
+
+// U-38: what the check-failed gap adds is durable, and only beside that gap.
+describe("verificationGapDetail persistence (schema v86)", () => {
+  function failedWith(
+    gap: CodingRuntimeSnapshot["verificationGap"],
+    detail: CodingRuntimeSnapshot["verificationGapDetail"],
+  ): {
+    readonly db: DatabaseSync;
+    readonly store: ReturnType<typeof createCodingRuntimeSnapshotStore>;
+  } {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const store = createCodingRuntimeSnapshotStore(db);
+    store.create(snapshot());
+    store.transition("run-1", {
+      state: "failed",
+      revision: 1,
+      updatedAt: at,
+      terminalAt: at,
+      failureCode: "verification-not-evidenced",
+      ...(gap === undefined ? {} : { verificationGap: gap }),
+      ...(detail === undefined ? {} : { verificationGapDetail: detail }),
+    });
+    return { db, store };
+  }
+
+  it("round-trips the detail beside the check-failed gap", () => {
+    const { db, store } = failedWith("check-failed", "unchanged-after-continuation");
+    expect(store.get("run-1")).toMatchObject({
+      verificationGap: "check-failed",
+      verificationGapDetail: "unchanged-after-continuation",
+    });
+    db.close();
+  });
+
+  it("refuses the detail beside any other gap", () => {
+    expect(() => failedWith("no-check-run", "unchanged-after-continuation")).toThrow(
+      "verificationGapDetail is only valid with the check-failed gap",
+    );
+  });
+});

@@ -1491,10 +1491,12 @@ export type {
   CodingWorkbenchRuntimeVersion,
   CodingWorkbenchStopCause,
   CodingWorkbenchVerificationGap,
+  CodingWorkbenchVerificationGapDetail,
 } from "./coding-workbench-runtime-api.js";
 export type {
   CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAP_DETAILS,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,

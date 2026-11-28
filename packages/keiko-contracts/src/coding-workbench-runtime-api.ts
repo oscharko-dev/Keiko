@@ -41,11 +41,13 @@ import {
 } from "./coding-workbench-runtime.js";
 import {
   CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAP_DETAILS,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
   type CodingWorkbenchStopCause,
   type CodingWorkbenchTurnFailureCode,
   type CodingWorkbenchVerificationGap,
+  type CodingWorkbenchVerificationGapDetail,
 } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
 import { isChatJiraPodId } from "./bff-wire.js";
@@ -53,11 +55,13 @@ import { isMcpServerName, MCP_SERVER_MAX } from "./mcp-servers.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_STOP_CAUSES,
+  CODING_WORKBENCH_VERIFICATION_GAP_DETAILS,
   CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
   type CodingWorkbenchStopCause,
   type CodingWorkbenchTurnFailureCode,
   type CodingWorkbenchVerificationGap,
+  type CodingWorkbenchVerificationGapDetail,
 } from "./coding-workbench-runtime-constants.js";
 import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
@@ -1325,6 +1329,12 @@ export interface CodingWorkbenchRuntimeSnapshot {
    */
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
   /**
+   * Present only with the `check-failed` gap when Keiko asked the model to look at the failing check
+   * and the model changed no code afterwards (U-38): the check is still red and this run did not
+   * change it. Absent on every other settlement.
+   */
+  readonly verificationGapDetail?: CodingWorkbenchVerificationGapDetail | undefined;
+  /**
    * Present only on a `cancelled` run that Keiko's own shutdown ended (U-31): the person did not
    * press Stop, so the Workbench says Keiko was closed and whether work was in flight. Absent on a
    * person's own Stop and on a run settled by an older Keiko.
@@ -1840,6 +1850,7 @@ const CODING_WORKBENCH_RUNTIME_SNAPSHOT_KEYS = [
   "agent",
   "failureCode",
   "verificationGap",
+  "verificationGapDetail",
   "stopCause",
   "contextUsage",
   "recoveryAcknowledged",
@@ -2382,6 +2393,7 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateOptionalSnapshotFields(value, errors);
   validateFailureCode(value.failureCode, errors);
   validateVerificationGap(value, errors);
+  validateVerificationGapDetail(value, errors);
   validateStopCause(value, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
@@ -2480,6 +2492,17 @@ function validateVerificationGap(value: Record<string, unknown>, errors: string[
   if (value.failureCode !== "verification-not-evidenced") {
     errors.push("verificationGap is only allowed with failureCode verification-not-evidenced");
   }
+}
+
+// A gap detail refines the `check-failed` gap alone; beside any other gap it would contradict it.
+function validateVerificationGapDetail(value: Record<string, unknown>, errors: string[]): void {
+  if (value.verificationGapDetail === undefined) return;
+  if (!isOneOf(value.verificationGapDetail, CODING_WORKBENCH_VERIFICATION_GAP_DETAILS)) {
+    errors.push("verificationGapDetail is invalid");
+    return;
+  }
+  if (value.verificationGap !== "check-failed")
+    errors.push("verificationGapDetail is only allowed with verificationGap check-failed");
 }
 
 // A stop cause explains a cancellation; on any other state it would describe an ending the run did

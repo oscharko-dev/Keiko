@@ -178,6 +178,8 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "verification_gap",
   // V85 (U-31): one of two closed words naming why Keiko's shutdown cancelled a run. No text.
   "stop_cause",
+  // V86 (U-38): one closed word refining the check-failed gap. No text.
+  "verification_gap_detail",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque

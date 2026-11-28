@@ -48,11 +48,7 @@ export function verificationContinuationIntent(
     hasShellTool === false
       ? "rerun the same check with the governed verification tool"
       : `rerun the same check in your shell. ${SHELL_VERIFICATION_STATUS_RULE}`;
-  const origin =
-    failure.observedBeforeFirstEdit === true
-      ? "This check was already failing before your first change in this run. "
-      : "That failure may have existed before your first change in this run. ";
-  return `${subject} you ran after your last change failed (${failedStepsSentence(failure.failedCount)}). ${origin}Continue within the original task and authority. Read the relevant source and test files first to decide whether your own changes caused the failure or the person's task asks you to fix it. Only then repair the cause of the failure without weakening assertions, ${rerun} Do not claim completion until a check passes after your last change. Otherwise the failure is pre-existing and outside the task: do not change any file to repair it, state once that it is pre-existing and unrelated to your changes, and finish. If you cannot repair it or the check cannot run for a reason outside the task, state the exact cause once and finish.`;
+  return `${subject} you ran after your last change failed (${failedStepsSentence(failure.failedCount)}). That failure may have existed before your first change in this run. Continue within the original task and authority. Read the relevant source and test files first to decide whether your own changes caused the failure or the person's task asks you to fix it. Only then repair the cause of the failure without weakening assertions, ${rerun} Do not claim completion until a check passes after your last change. Otherwise the failure is pre-existing and outside the task: do not change any file to repair it, state once that it is pre-existing and unrelated to your changes, and finish. If you cannot repair a failure you caused, or the check cannot run for a reason outside the task, state the exact cause once and finish.`;
 }
 
 /**
@@ -174,14 +170,6 @@ const VERIFICATION_CONTINUATION_OPERATION = defineActivityLogOperation({
       values: ["test", "targeted-test", "typecheck", "lint", "build", "check"],
     },
     failedCount: { type: "integer", dataClass: "count", required: false },
-    // Whether the continued check had already failed before the run's first code edit (a fact the
-    // ledger observed) or its origin is unattributed; the continuation scopes the repair either way.
-    failureOrigin: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["before-first-edit", "unattributed"],
-    },
     // Why no further repair continuation ran: the blocker the ledger holds for the run (#4271).
     blockedReason: {
       type: "string",
@@ -235,7 +223,6 @@ function continuationDetailFields(detail: VerificationContinuationDetail): Parti
   readonly gap?: CodingWorkbenchVerificationGap;
   readonly check?: CodingVerificationFailureEvidence["check"];
   readonly failedCount?: number;
-  readonly failureOrigin?: "before-first-edit" | "unattributed";
 } {
   return {
     ...(detail.error === undefined ? {} : continuationErrorFields(detail.error)),
@@ -244,12 +231,7 @@ function continuationDetailFields(detail: VerificationContinuationDetail): Parti
     ...(detail.gap === undefined ? {} : { gap: detail.gap }),
     ...(detail.failure === undefined
       ? {}
-      : {
-          check: detail.failure.check,
-          failedCount: detail.failure.failedCount,
-          failureOrigin:
-            detail.failure.observedBeforeFirstEdit === true ? "before-first-edit" : "unattributed",
-        }),
+      : { check: detail.failure.check, failedCount: detail.failure.failedCount }),
   };
 }
 

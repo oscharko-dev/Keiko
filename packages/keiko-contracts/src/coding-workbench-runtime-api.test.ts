@@ -997,6 +997,27 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // U-38: the detail refines the check-failed gap alone.
+  it("admits the verification gap detail only beside the check-failed gap", () => {
+    const failed = {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 5,
+      updatedAt: AT,
+      runId: "run-1",
+      failureCode: "verification-not-evidenced",
+      verificationGap: "check-failed",
+      verificationGapDetail: "unchanged-after-continuation",
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(failed)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...failed, verificationGap: "no-check-run" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...failed, verificationGapDetail: "invented" }),
+    ).toMatchObject({ ok: false });
+  });
+
   // #4491: the concrete gap of a run that settled without a passing check after its last change.
   it("binds the verification gap to a verification-not-evidenced snapshot and status frame only", () => {
     const failed = {

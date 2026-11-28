@@ -29,6 +29,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchStopCause,
   CodingWorkbenchVerificationGap,
+  CodingWorkbenchVerificationGapDetail,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -801,6 +802,13 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [...VERIFICATION_GAP_WORDS],
+    },
+    // What the `check-failed` gap adds (U-38): Keiko asked once and the run changed no code after.
+    verificationGapDetail: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unchanged-after-continuation"],
     },
     taskOutcomeStatus: {
       type: "string",
@@ -1876,6 +1884,7 @@ interface RunSettledLogFacts {
   readonly cause?: RunSettlementCause | undefined;
   readonly verificationBlockedReason?: CodingVerificationBlockedReason | undefined;
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+  readonly verificationGapDetail?: CodingWorkbenchVerificationGapDetail | undefined;
 }
 
 function recordRuntimeRunSettled(
@@ -1885,7 +1894,8 @@ function recordRuntimeRunSettled(
   effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
   facts: RunSettledLogFacts,
 ): void {
-  const { failureCode, cause, verificationBlockedReason, verificationGap } = facts;
+  const { failureCode, cause, verificationBlockedReason, verificationGap, verificationGapDetail } =
+    facts;
   const errorKind = settlementErrorKind(state, cause, verificationBlockedReason, verificationGap);
   activityLog?.write(
     activityLogEvent(
@@ -1905,6 +1915,7 @@ function recordRuntimeRunSettled(
         ...(failureCode === undefined ? {} : { failureCode }),
         ...(verificationBlockedReason === undefined ? {} : { verificationBlockedReason }),
         ...(verificationGap === undefined ? {} : { verificationGap }),
+        ...(verificationGapDetail === undefined ? {} : { verificationGapDetail }),
         ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
         ...effort,
@@ -1918,6 +1929,8 @@ interface VerificationFailureSettlement {
   readonly failureCode: "verification-not-evidenced";
   /** Why no passing check followed the run's last change (#4491). */
   readonly gap: CodingWorkbenchVerificationGap;
+  /** What the gap adds: the model was asked once and changed no code afterwards (U-38). */
+  readonly gapDetail?: CodingWorkbenchVerificationGapDetail;
 }
 
 // The fact that named a failed run's cause: its own bounds or its last failed model call (F9), or
@@ -2251,6 +2264,8 @@ export class CodingRuntimeOrchestrator {
   // delivery. It covers only that proposal, so a later proposal settles on its own outcome.
   private readonly deniedCommitProposals = new Map<string, string>();
   private readonly verificationContinuations = new Map<string, number>();
+  // The run's code-edit revision when its verification continuation was dispatched (U-38).
+  private readonly continuationRevisions = new Map<string, number>();
   // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
   // settles.
   private readonly editRefusals = new CodingRuntimeEditRefusalStreaks();
@@ -3750,6 +3765,7 @@ export class CodingRuntimeOrchestrator {
           state: "failed",
           failureCode: "verification-not-evidenced",
           gap: this.verificationGap(runId),
+          ...this.verificationGapDetail(runId),
         }
       : undefined;
     await this.stopAndSettleTask(runId, outcome, cause, verificationFailure);
@@ -3814,6 +3830,20 @@ export class CodingRuntimeOrchestrator {
     return this.deps.toolBudgetExhausted?.(runId) === true ? "budget-exhausted" : "no-check-run";
   }
 
+  // A check that stays red although Keiko asked the model once to look at it, and the run changed no
+  // code afterwards, is a failure this run left as it found it (U-38): the person's own work may be
+  // done, and the result names exactly that instead of a repair that did not happen.
+  private verificationGapDetail(runId: string): {
+    readonly gapDetail?: CodingWorkbenchVerificationGapDetail;
+  } {
+    const dispatchedAt = this.continuationRevisions.get(runId);
+    const unchanged =
+      dispatchedAt !== undefined &&
+      this.effort.failedCheck(runId) !== undefined &&
+      this.effort.verificationRevision(runId) === dispatchedAt;
+    return unchanged ? { gapDetail: "unchanged-after-continuation" } : {};
+  }
+
   // Why no continuation runs: only a failed check, with a repair still unspent, justifies one.
   private verificationContinuationSkip(
     runId: string,
@@ -3851,6 +3881,8 @@ export class CodingRuntimeOrchestrator {
     }
     const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
+    const dispatchedAt = this.effort.verificationRevision(live.runId);
+    if (dispatchedAt !== undefined) this.continuationRevisions.set(live.runId, dispatchedAt);
     const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
     if (dispatched === undefined) return false;
     if (this.continuationSuperseded(live)) {
@@ -3955,6 +3987,7 @@ export class CodingRuntimeOrchestrator {
       undefined,
       settledCause,
       verificationFailure?.gap,
+      verificationFailure?.gapDetail,
     );
   }
 
@@ -5492,6 +5525,7 @@ export class CodingRuntimeOrchestrator {
     pauseReason?: CodingWorkbenchOperatorDecision,
     cause?: RunSettlementCause,
     verificationGap?: CodingWorkbenchVerificationGap,
+    verificationGapDetail?: CodingWorkbenchVerificationGapDetail,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
@@ -5503,6 +5537,7 @@ export class CodingRuntimeOrchestrator {
       failureCode,
       pauseReason,
       verificationGap,
+      verificationGapDetail,
     );
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);
@@ -5519,6 +5554,7 @@ export class CodingRuntimeOrchestrator {
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
     verificationGap?: CodingWorkbenchVerificationGap,
+    verificationGapDetail?: CodingWorkbenchVerificationGapDetail,
   ): CodingRuntimeSnapshot {
     const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
@@ -5528,6 +5564,7 @@ export class CodingRuntimeOrchestrator {
       ...(failureCode ? { failureCode } : {}),
       ...(pauseReason === undefined ? {} : { pauseReason }),
       ...(verificationGap === undefined ? {} : { verificationGap }),
+      ...(verificationGapDetail === undefined ? {} : { verificationGapDetail }),
       ...this.stopCauseFor(current.runId, state),
       ...(result === undefined ? {} : { result }),
     });
@@ -5591,6 +5628,7 @@ export class CodingRuntimeOrchestrator {
             ? this.effort.verificationBlockedReason(next.runId)
             : undefined,
         verificationGap: next.verificationGap,
+        verificationGapDetail: next.verificationGapDetail,
       },
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
@@ -5944,6 +5982,7 @@ export class CodingRuntimeOrchestrator {
     this.deliveryContinuations.delete(next.runId);
     this.deniedCommitProposals.delete(next.runId);
     this.verificationContinuations.delete(next.runId);
+    this.continuationRevisions.delete(next.runId);
     // Likewise its edit refusal streak and any escalation that has not settled it (F5).
     this.editRefusals.clear(next.runId);
     this.operations.clear(next.runId);
