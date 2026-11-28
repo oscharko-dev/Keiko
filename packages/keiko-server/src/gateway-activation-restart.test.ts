@@ -283,8 +283,7 @@ describe("activated models across a server restart", () => {
       first.gatewayConfig.generation(),
       undefined,
       undefined,
-      undefined,
-      "corr-record-invalidated",
+      { correlationId: "corr-record-invalidated" },
     );
     const line = sink.events.find(
       (event) =>

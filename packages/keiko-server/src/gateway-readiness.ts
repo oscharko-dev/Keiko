@@ -2418,8 +2418,7 @@ function recordReadinessObservation(
       observedGeneration,
       report.checkedAt,
       undefined,
-      undefined,
-      correlationId,
+      { correlationId },
     );
     return;
   }
@@ -2430,8 +2429,7 @@ function recordReadinessObservation(
     observedGeneration,
     undefined,
     undefined,
-    undefined,
-    correlationId,
+    { correlationId },
   );
 }
 
@@ -2470,8 +2468,7 @@ function retainBusyConversationReadiness(
     observedGeneration,
     report.checkedAt,
     undefined,
-    undefined,
-    correlationId,
+    { correlationId },
   );
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -2553,8 +2550,7 @@ function recordFailedReadinessObservation(
       observedGeneration,
       undefined,
       undefined,
-      failure,
-      correlationId,
+      { conversationReadinessFailure: failure, correlationId },
     );
 }
 
@@ -2577,8 +2573,7 @@ function preserveUnexecutedCapabilityObservation(
     observedGeneration,
     report.checkedAt,
     undefined,
-    conversationReadinessFailure,
-    correlationId,
+    { conversationReadinessFailure, correlationId },
   );
   return true;
 }
@@ -2609,8 +2604,7 @@ function preserveVerifiedToolCallingObservation(
     observedGeneration,
     report.checkedAt,
     undefined,
-    undefined,
-    correlationId,
+    { correlationId },
   );
   return true;
 }

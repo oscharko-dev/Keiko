@@ -4053,7 +4053,7 @@ describe("runtime gateway accepted source and active inventory", () => {
       original,
       undefined,
       undefined,
-      "transient",
+      { conversationReadinessFailure: "transient" },
     );
     expect(holder.verifiedCapability("retained-chat")).toMatchObject({
       generation: original,
@@ -4088,7 +4088,7 @@ describe("runtime gateway accepted source and active inventory", () => {
       oldConnection,
       undefined,
       undefined,
-      "transient",
+      { conversationReadinessFailure: "transient" },
     );
     expect(holder.verifiedCapability("retained-chat")).toBeUndefined();
     holder.recordVerifiedCapability("retained-chat", { conversationReady: false }, at);
@@ -4103,7 +4103,7 @@ describe("runtime gateway accepted source and active inventory", () => {
       holder.generation(),
       undefined,
       undefined,
-      "transient",
+      { conversationReadinessFailure: "transient" },
     );
     expect(currentConversationReadinessPresentation(deps, "retained-chat")).toBe(false);
     holder.recordVerifiedCapability(
@@ -4113,7 +4113,7 @@ describe("runtime gateway accepted source and active inventory", () => {
       holder.generation(),
       undefined,
       undefined,
-      "transient",
+      { conversationReadinessFailure: "transient" },
     );
     expect(holder.verifiedCapability("retained-chat")).not.toHaveProperty(
       "conversationReadinessFailure",

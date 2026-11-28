@@ -1120,8 +1120,7 @@ describe("gateway readiness route", () => {
       0,
       undefined,
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -1693,8 +1692,7 @@ describe("gateway readiness route", () => {
       0,
       undefined,
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -1805,8 +1803,7 @@ describe("gateway readiness route", () => {
       0,
       undefined,
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     expect(report.probes).toEqual([
       expect.objectContaining({ name: "chat", status: "passed" }),
@@ -1958,8 +1955,7 @@ describe("gateway readiness route", () => {
       7,
       undefined,
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -2003,8 +1999,7 @@ describe("gateway readiness route", () => {
       4,
       undefined,
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -2037,8 +2032,7 @@ describe("gateway readiness route", () => {
       0,
       undefined,
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -2076,8 +2070,7 @@ describe("gateway readiness route", () => {
       4,
       expect.any(String),
       undefined,
-      undefined,
-      expect.any(String),
+      { correlationId: expect.any(String) as string },
     );
     deps.store.close();
   });
@@ -2330,11 +2323,10 @@ it.each([true, false])(
         "2026-10-07T12:00:00.000Z",
         0,
         report.checkedAt,
-        // Citation and failure slots stay empty; the correlation id follows them.
-        undefined,
+        // The citation slot stays empty; the evidence object follows it.
         undefined,
         // The record carries the check's correlation id, so an invalidation it causes is traceable.
-        expect.any(String),
+        { correlationId: expect.any(String) as string },
       );
     } finally {
       deps.store.close();

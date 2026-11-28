@@ -722,8 +722,7 @@ export interface RuntimeGatewayConfig {
     observedGeneration?: number,
     conversationCheckedAt?: string,
     citationObservation?: CitationCapabilityObservation,
-    conversationReadinessFailure?: "transient",
-    correlationId?: string,
+    evidence?: RecordedCapabilityEvidence,
   ): void;
   /**
    * Drops a model's observation. `evidence.cause` says why for the activation record: a person's
@@ -740,6 +739,12 @@ export interface RuntimeGatewayConfig {
    */
   readonly rememberActivations?:
     ((memory: ModelActivationMemory, correlationId: string) => void) | undefined;
+}
+
+/** What a recorded observation carries beyond its fields: why chat failed, and the causing check. */
+export interface RecordedCapabilityEvidence {
+  readonly conversationReadinessFailure?: "transient" | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface ClearObservationEvidence {
@@ -2100,6 +2105,15 @@ function runtimeObservationFacets(
   };
 }
 
+function transientChatFailure(
+  fields: VerifiedModelCapabilityFields,
+  failure: "transient" | undefined,
+): Pick<VerifiedModelCapabilityObservation, "conversationReadinessFailure"> {
+  return fields.conversationReady === false && failure === "transient"
+    ? { conversationReadinessFailure: failure }
+    : {};
+}
+
 function gatewayCapabilityRecorder(
   observations: Map<string, VerifiedModelCapabilityObservation>,
   generation: () => number,
@@ -2113,9 +2127,9 @@ function gatewayCapabilityRecorder(
     observedGeneration,
     conversationCheckedAt,
     citationObservation,
-    conversationReadinessFailure,
-    correlationId,
+    evidence,
   ): void => {
+    const conversationReadinessFailure = evidence?.conversationReadinessFailure;
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
     if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
@@ -2127,15 +2141,13 @@ function gatewayCapabilityRecorder(
         ? {}
         : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
-      ...(fields.conversationReady === false && conversationReadinessFailure === "transient"
-        ? { conversationReadinessFailure }
-        : {}),
+      ...transientChatFailure(fields, conversationReadinessFailure),
       ...boundedCitationObservation(
         citationObservation ?? observations.get(modelId),
         currentGeneration,
       ),
     });
-    changed(correlationId);
+    changed(evidence?.correlationId);
   };
 }
 
