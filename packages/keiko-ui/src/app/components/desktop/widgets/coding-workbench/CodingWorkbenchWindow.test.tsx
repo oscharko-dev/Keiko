@@ -5900,16 +5900,6 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       },
     ],
     ["cancelled", { status: "idle", kind: null, requestId: null, error: null, cancelled: true }],
-    [
-      "refused and superseded by the next read in the same render",
-      {
-        status: "idle",
-        kind: null,
-        requestId: null,
-        error: null,
-        supersededFailure: { kind: "start", code: "active-run" },
-      },
-    ],
   ] as const)(
     "does not pin another window's run that became visible while this window's start was pending and then %s",
     (_name, ended) => {
@@ -5952,6 +5942,41 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       expect(onPinRepository).not.toHaveBeenCalled();
     },
   );
+
+  // A refusal and the re-read that supersedes it can land in one render: the mutation settles idle
+  // with the refusal kept while the read already shows the run another window started.
+  it("does not pin another window's run that the read superseding this window's refused start shows", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "start", requestId: "req-mine", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+        mutation: {
+          status: "idle",
+          kind: null,
+          requestId: null,
+          error: null,
+          supersededFailure: { kind: "start", code: "active-run" },
+        },
+      },
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).not.toHaveBeenCalled();
+  });
 
   // The runtime follows one run for every window: a window that never started it must not take the
   // repository of another window's run as its own.

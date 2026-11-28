@@ -1157,7 +1157,10 @@ function useRunRepositoryPin(
   runResource: CodingWorkbenchRuntimeState["run"],
   selectedRoot: string | undefined,
   repositoryRoot: string | null,
-  mutation: Pick<CodingWorkbenchRuntimeState["mutation"], "status" | "kind" | "cancelled">,
+  mutation: Pick<
+    CodingWorkbenchRuntimeState["mutation"],
+    "status" | "kind" | "cancelled" | "supersededFailure"
+  >,
   onPinRepository: ((root: string) => void) | undefined,
 ): void {
   // The run this window's own start or continuation was acknowledged with. A run another window
