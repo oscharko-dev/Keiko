@@ -230,24 +230,45 @@ describe("coalescedFetch bounded lifetime", () => {
     const fetchMock = mockFetchWith(hung, replacement);
     const options = { joinable: true };
     void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    // The bound has passed without the read settling, and the timer has not run yet.
+    vi.setSystemTime(Date.now() + INFLIGHT_READ_MAX_MS);
     const joiners = [1, 2].map(() => coalescedFetch("/api/x", { cache: "no-store" }, options));
     endInflightReads();
     await vi.advanceTimersByTimeAsync(0);
-    // One replacement read between the joiners, and no timer is left to wait for.
+    // One replacement read between the joiners.
     expect(fetchMock).toHaveBeenCalledTimes(2);
     replacement.respond({ ok: true });
     for (const joiner of joiners) {
       await expect((await joiner).json()).resolves.toEqual({ ok: true });
     }
+  });
+
+  it("keeps the joiners of a healthy read across the end of the join windows", async () => {
+    vi.useFakeTimers();
+    const healthy = deferredResponse();
+    const fetchMock = mockFetchWith(healthy);
+    const options = { joinable: true };
+    const first = coalescedFetch("/api/x", { cache: "no-store" }, options);
+    const joiners = [1, 2].map(() => coalescedFetch("/api/x", { cache: "no-store" }, options));
     endInflightReads();
+    await vi.advanceTimersByTimeAsync(0);
+    endInflightReads();
+    await vi.advanceTimersByTimeAsync(0);
+    // No duplicate GET at either end of a write: the joiners wait for the read they joined.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    healthy.respond({ ok: true });
+    for (const read of [first, ...joiners]) {
+      await expect((await read).json()).resolves.toEqual({ ok: true });
+    }
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("leaves no lifetime timer running once the join windows end", () => {
+  it("leaves no lifetime timer running once a hung read's join windows end", () => {
     vi.useFakeTimers();
     mockFetchWith(deferredResponse());
     void coalescedFetch("/api/x", { cache: "no-store" }, { joinable: true });
     expect(vi.getTimerCount()).toBe(1);
+    vi.setSystemTime(Date.now() + INFLIGHT_READ_MAX_MS);
     endInflightReads();
     expect(vi.getTimerCount()).toBe(0);
   });

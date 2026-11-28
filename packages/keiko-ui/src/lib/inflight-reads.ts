@@ -53,16 +53,18 @@ function copyOf(response: Response): Response {
 }
 
 /**
- * Ends every join window; a request that may change server state calls it before and after. Each
- * lifetime timer is released with its window, and the expiry it would have fired is resolved at
- * once: a joiner still waiting on a read that never settles must not be left without the timer that
- * would have freed it. It starts one replacement read between them, which also begins after the
- * write that ended the window, so it can never receive a response that predates it.
+ * Ends every join window; a request that may change server state calls it before and after. A
+ * healthy read still in flight keeps its joiners and its lifetime timer: it settles on its own,
+ * and its joiners must not each send a duplicate GET at every write (nor a replacement that could
+ * race the write and return data that predates it). Only a read that has already outlived
+ * `INFLIGHT_READ_MAX_MS` (truly hung) is evicted now, so its joiners are freed at once and share one
+ * replacement read, which begins after the write.
  */
 export function endInflightReads(): void {
   const ended = [...sharedReads.values()];
   sharedReads.clear();
   for (const entry of ended) {
+    if (Date.now() - entry.startedAt < INFLIGHT_READ_MAX_MS) continue;
     clearTimeout(entry.timer);
     entry.evict();
   }
@@ -84,6 +86,8 @@ interface SharedRead {
   readonly response: Promise<Response>;
   readonly expired: Promise<void>;
   readonly timer: ReturnType<typeof setTimeout>;
+  /** When the read began; a read older than `INFLIGHT_READ_MAX_MS` is hung. */
+  readonly startedAt: number;
   /** Resolves `expired` now, ahead of the timer. */
   readonly evict: () => void;
 }
@@ -96,7 +100,7 @@ function share(key: string, read: Promise<Response>): void {
     evict = resolve;
   });
   const timer = setTimeout(evict, INFLIGHT_READ_MAX_MS);
-  const entry: SharedRead = { response: read, expired, timer, evict };
+  const entry: SharedRead = { response: read, expired, timer, evict, startedAt: Date.now() };
   sharedReads.set(key, entry);
   const release = (): void => {
     clearTimeout(timer);
