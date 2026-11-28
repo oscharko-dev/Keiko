@@ -11474,6 +11474,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "task-submitted",
           "observation-streamed",
           "native-retry-changed",
+          "native-subagents-changed",
+          "native-agent-models-refused",
           "permission-requested",
           "diff-summarized",
           "verification-summarized",
