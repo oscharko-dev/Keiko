@@ -126,7 +126,7 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
     "packages/keiko-workspace/src/gitIndexTransaction.ts:attempt":
       "A lock or directory check that threw is treated as an unreleased lock in the cleanup report the caller's log port receives (git.index-transaction.cleanup-incomplete); the check cannot change the settled result (#4491).",
     "packages/keiko-workspace/src/gitIndexTransaction.ts:deliverCleanupReport":
-      "A report port that throws cannot replace the settled transaction result; the failure surfaces as the closed Node process warning KEIKO_GIT_CLEANUP_UNREPORTED, and the port's own owner records its failures (#4491).",
+      "A report port that throws cannot replace the settled transaction result; the failure surfaces only as the closed Node process warning KEIKO_GIT_CLEANUP_UNREPORTED. No product code forwards process warnings to the Activity Log today, so a throwing or absent port is a known observability gap: the port the server wires (logGitIndexCleanupIncomplete) is a plain log write that does not throw, and the gap is accepted rather than hidden (#4491).",
     "packages/keiko-server/src/coding-runtime/opencodeTurnIndex.ts:readAt":
       "A throwing index read inside a governed transaction becomes the closed state `failed`; readGovernedTransitions reports it as the closed reason `index-read-failed` and RuntimeGitService.mutateIndex writes it as `indexUnproven` on the registered git.runtime-action line of the mutation's correlation id, after which the Undo owns nothing the read could not prove. The I/O error class is intentionally not recorded, because every class leaves the same unproven state (#4491).",
     "packages/keiko-server/src/editor/windowsStepSupervisor.ts:realDrivePath":

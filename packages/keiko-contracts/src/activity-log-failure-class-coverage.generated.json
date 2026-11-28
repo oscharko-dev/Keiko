@@ -36258,10 +36258,18 @@
         "start": [],
         "state": [],
         "end": [],
-        "failure": ["git.delivery.mutation.failed", "git.index-transaction.cleanup-incomplete"],
+        "failure": [
+          "git.delivery.commit-refused",
+          "git.delivery.mutation.failed",
+          "git.index-transaction.cleanup-incomplete"
+        ],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "git.delivery.commit-refused",
+          "mode": "correlation"
+        },
         {
           "op": "git.delivery.mutation.failed",
           "mode": "correlation"
@@ -36275,6 +36283,54 @@
       "resourceSignals": [],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "git.delivery.commit-refused",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["git.delivery.commit-refused.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "git.delivery.mutation.failed",
           "owner": "keiko-server",
@@ -36350,6 +36406,12 @@
               "required": true
             },
             {
+              "name": "descriptorFailures",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "directoryFailures",
               "type": "integer",
               "dataClass": "count",
@@ -36372,6 +36434,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "stateFileFailures",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "temporaryIndexLeft",

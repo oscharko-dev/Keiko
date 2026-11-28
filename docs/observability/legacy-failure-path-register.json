@@ -6765,12 +6765,6 @@
     },
     {
       "path": "packages/keiko-tools/src/git-mutation-node.ts",
-      "owner": "execCommit",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-tools/src/git-mutation-node.ts",
       "owner": "execPlan",
       "kind": "unregistered-catch",
       "count": 1

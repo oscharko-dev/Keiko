@@ -85,6 +85,8 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
       "-c",
       "alias.commit=",
       "-c",
+      "commit.cleanup=whitespace",
+      "-c",
       "gpg.program=gpg",
       "-c",
       "gpg.ssh.program=ssh-keygen",

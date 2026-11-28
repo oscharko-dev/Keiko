@@ -4,7 +4,12 @@ import type { GitIndexCleanupReport } from "@oscharko-dev/keiko-workspace/intern
 // The transaction is replaced by one that finishes with a cleanup it could not complete, so the test
 // proves the port reaches the owning transaction for both staging entry points and that the
 // settled result is returned unchanged.
-const REPORT: GitIndexCleanupReport = { quarantines: 1, temporaryIndex: false, lock: true };
+const REPORT: GitIndexCleanupReport = {
+  quarantines: 1,
+  temporaryIndex: false,
+  lock: true,
+  descriptor: false,
+};
 vi.mock("@oscharko-dev/keiko-workspace/internal/git-index", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("@oscharko-dev/keiko-workspace/internal/git-index")>();

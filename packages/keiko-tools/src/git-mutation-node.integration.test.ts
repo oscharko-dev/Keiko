@@ -11,6 +11,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  readdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -29,6 +30,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createGitReadSession,
   createNodeGitMutationAdapter,
+  type GitCleanupIncompleteReport,
   readGitStageSupport,
   type GitStageSupport,
 } from "./git-mutation-node.js";
@@ -44,6 +46,8 @@ import {
 } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { createInMemoryGitMutationJournal, runGitMutation } from "./git-mutation-orchestrator.js";
+
+type GitDeliveryExecutionResultLike = Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>;
 
 let root: string;
 let signingRoot: string;
@@ -355,6 +359,273 @@ describe("node git mutation adapter — an interactive commit stays on the branc
 
     expect(committed.outcome).toBe("succeeded");
     expect(git(["log", "--oneline"])).toContain("lands");
+  });
+});
+
+describe("node git mutation adapter — the bound commit leaves the repository as git commit does", () => {
+  const SCENARIO_ENV = { PATH: process.env.PATH ?? "" };
+  const tempRepos: string[] = [];
+
+  afterEach(() => {
+    for (const repo of tempRepos.splice(0)) rmSync(repo, { recursive: true, force: true });
+  });
+
+  function gitIn(repo: string, args: readonly string[]): string {
+    return execFileSync("git", [...args], { cwd: repo, encoding: "utf8" });
+  }
+
+  function newRepo(): string {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-bound-")));
+    tempRepos.push(repo);
+    gitIn(repo, ["init", "-q", "-b", "main"]);
+    gitIn(repo, ["config", "user.email", "test@keiko.example"]);
+    gitIn(repo, ["config", "user.name", "Keiko Test"]);
+    gitIn(repo, ["config", "commit.gpgsign", "false"]);
+    return repo;
+  }
+
+  function adapterFor(
+    repo: string,
+    bound: boolean,
+    extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
+  ): GitLocalMutationAdapter {
+    return createNodeGitMutationAdapter({
+      workspace: workspaceInfo(repo),
+      processEnv: SCENARIO_ENV,
+      now: () => Date.now(),
+      ...(bound ? { preparedCheckout: { branchName: "main" } } : {}),
+      ...extra,
+    });
+  }
+
+  function seedBase(repo: string): void {
+    writeFileSync(join(repo, "base.txt"), "base\n", "utf8");
+    gitIn(repo, ["add", "base.txt"]);
+    gitIn(repo, ["commit", "-q", "-m", "base"]);
+  }
+
+  async function commitOn(
+    repo: string,
+    bound: boolean,
+    message: string,
+    extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
+  ): Promise<GitDeliveryExecutionResultLike> {
+    const ad = adapterFor(repo, bound, extra);
+    writeFileSync(join(repo, "a.txt"), `${String(message.length)}\n`, "utf8");
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    return ad.commit({ message, allowEmpty: false });
+  }
+
+  function reflogs(repo: string): { branch: string[]; head: string[] } {
+    const lines = (ref: string): string[] =>
+      gitIn(repo, ["reflog", "--format=%gs", ref]).trim().split("\n");
+    return { branch: lines("refs/heads/main"), head: lines("HEAD") };
+  }
+
+  it.each([
+    ["a normal commit", true, "subject  \n\nbody"],
+    ["a normal commit with a multi-line first paragraph", true, "first\nsecond\n\nbody"],
+    ["the root commit of an unborn branch", false, "root subject\n"],
+    ["a message with leading blank lines", true, "\n\n  lead\nbody\n"],
+  ])("writes the reflog git commit writes for %s", async (_name, born, message) => {
+    const plainRepo = newRepo();
+    const boundRepo = newRepo();
+    if (born) {
+      seedBase(plainRepo);
+      seedBase(boundRepo);
+    }
+
+    expect((await commitOn(plainRepo, false, message)).outcome).toBe("succeeded");
+    expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
+
+    expect(reflogs(boundRepo)).toEqual(reflogs(plainRepo));
+    expect(reflogs(boundRepo).branch[0]).toMatch(/^commit( \(initial\))?: \S/u);
+  });
+
+  it("leaves the same merge state files as git commit after a squash merge", async () => {
+    async function squashAndCommit(bound: boolean): Promise<string[]> {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["checkout", "-q", "-b", "side"]);
+      writeFileSync(join(repo, "side.txt"), "side\n", "utf8");
+      gitIn(repo, ["add", "side.txt"]);
+      gitIn(repo, ["commit", "-q", "-m", "side"]);
+      gitIn(repo, ["checkout", "-q", "main"]);
+      gitIn(repo, ["merge", "--squash", "side"]);
+      writeFileSync(join(repo, ".git", "MERGE_MSG"), "stale\n", "utf8");
+      writeFileSync(join(repo, ".git", "MERGE_MODE"), "", "utf8");
+      expect(existsSync(join(repo, ".git", "SQUASH_MSG"))).toBe(true);
+      const ad = adapterFor(repo, bound);
+      expect((await ad.commit({ message: "squashed", allowEmpty: false })).outcome).toBe(
+        "succeeded",
+      );
+      return readdirSync(join(repo, ".git")).filter((name) => /^(MERGE_|SQUASH_)/u.test(name));
+    }
+
+    const plain = await squashAndCommit(false);
+    expect(plain).toEqual([]);
+    expect(await squashAndCommit(true)).toEqual(plain);
+  });
+
+  it("reports a merge state file that cannot be removed without replacing the success", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    writeFileSync(join(repo, ".git", "SQUASH_MSG"), "squash\n", "utf8");
+    const reports: GitCleanupIncompleteReport[] = [];
+
+    const committed = await commitOn(repo, true, "lands", {
+      onCleanupIncomplete: (report) => reports.push(report),
+      removePath: () => {
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      },
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(reports).toEqual([
+      {
+        caller: "commit-state",
+        quarantines: 0,
+        temporaryIndex: false,
+        lock: false,
+        descriptors: 0,
+        refLocks: 0,
+        directories: 0,
+        stateFiles: 1,
+      },
+    ]);
+  });
+
+  it("follows git for a repository whose commit.cleanup would strip comment lines", async () => {
+    const message = "# heading\nbody\n";
+    const plainRepo = newRepo();
+    const boundRepo = newRepo();
+    for (const repo of [plainRepo, boundRepo]) {
+      seedBase(repo);
+      gitIn(repo, ["config", "commit.cleanup", "strip"]);
+    }
+    expect((await commitOn(plainRepo, false, message)).outcome).toBe("succeeded");
+    expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
+
+    const body = (repo: string): string => gitIn(repo, ["log", "-1", "--format=%B"]);
+    expect(body(boundRepo)).toBe(body(plainRepo));
+  });
+
+  it("commits a message of 60 KiB through stdin, byte for byte as git cleans it", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const message = `subject\n\n${"x".repeat(60_000)}`;
+
+    expect((await commitOn(repo, true, message)).outcome).toBe("succeeded");
+
+    expect(gitIn(repo, ["cat-file", "commit", "HEAD"]).endsWith(`\n\n${message}\n`)).toBe(true);
+  });
+
+  describe("refusals carry their own cause and code", () => {
+    interface Refusal {
+      readonly result: GitDeliveryExecutionResultLike;
+      readonly causes: string[];
+    }
+
+    async function refused(
+      repo: string,
+      message: string,
+      allowEmpty: boolean,
+      extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
+    ): Promise<Refusal> {
+      const causes: string[] = [];
+      const ad = adapterFor(repo, true, {
+        onCommitRefused: (report) => causes.push(report.cause),
+        ...extra,
+      });
+      return { result: await ad.commit({ message, allowEmpty }), causes };
+    }
+
+    it("names a checkout that is not on the prepared branch", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["checkout", "-q", "-b", "elsewhere"]);
+      const { result, causes } = await refused(repo, "m", true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["not-on-prepared-branch"]);
+    });
+
+    it("names a sequencer operation in progress", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      writeFileSync(join(repo, ".git", "MERGE_HEAD"), "x\n", "utf8");
+      const { result, causes } = await refused(repo, "m", true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["sequencer-in-progress"]);
+    });
+
+    it("names an unreadable sequencer state and keeps the cause", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const reports: { cause: string; error?: unknown }[] = [];
+      const { result } = await refused(repo, "m", true, {
+        metadataFs: {
+          ...nodeWorkspaceFs,
+          exists: () => {
+            throw new Error("EIO");
+          },
+        },
+        onCommitRefused: (report) => reports.push(report),
+      });
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(reports.map((report) => report.cause)).toEqual(["sequencer-unreadable"]);
+      expect(reports[0]?.error).toBeInstanceOf(Error);
+    });
+
+    it("names an empty message", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result, causes } = await refused(repo, " \n\t\n", true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["empty-message"]);
+    });
+
+    it("names a commit that would change nothing", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result, causes } = await refused(repo, "m", false);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["nothing-to-commit"]);
+    });
+
+    it("names a message too large for the bounded input", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result, causes } = await refused(repo, "x".repeat(70_000), true);
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["message-too-large"]);
+    });
+
+    it("answers `conflict` and writes nothing when the prepared branch moves before the ref update", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const before = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+      let authorizations = 0;
+      let racer = "";
+      const { result, causes } = await refused(repo, "mine", true, {
+        // The second authorization runs after the commit object exists and right before the ref
+        // update: the branch itself moves exactly there.
+        beforeCommitRefUpdate: (): boolean => {
+          authorizations += 1;
+          if (authorizations === 2) {
+            gitIn(repo, ["commit", "-q", "--allow-empty", "-m", "racer"]);
+            racer = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+          }
+          return true;
+        },
+      });
+
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("conflict");
+      expect(causes).toEqual(["ref-moved"]);
+      expect(racer).not.toBe(before);
+      expect(gitIn(repo, ["rev-parse", "refs/heads/main"]).trim()).toBe(racer);
+      expect(gitIn(repo, ["log", "-1", "--format=%s", "refs/heads/main"]).trim()).toBe("racer");
+    });
   });
 });
 

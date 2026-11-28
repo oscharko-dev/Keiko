@@ -52,6 +52,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import { invalidateGitSummaryCache } from "../gitRepositoryReads.js";
 import { correlationIdOrUnknown } from "../correlation.js";
+import { logGitCommitRefused } from "./commitRefusalLog.js";
 import { logGitIndexCleanupIncomplete } from "./indexCleanupLog.js";
 import { logWorkspaceLifecycleFailure } from "../task-workspace/activity-log.js";
 import { asRepositoryUnreachable, TaskWorkspaceError } from "../task-workspace/errors.js";
@@ -1042,6 +1043,10 @@ function adapterFor(
         report,
         correlationId,
       );
+    },
+    // A refused or failed interactive commit: one closed cause per refusal (body-free).
+    onCommitRefused: (report): void => {
+      logGitCommitRefused(seams.activityLog ?? processServerLogSink(), report, correlationId);
     },
     // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
     // out or is aborted must leave its Windows tree-kill disposition in the activity log, tagged

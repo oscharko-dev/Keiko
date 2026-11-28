@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  closeSync,
+  renameSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -27,6 +29,7 @@ import {
   observeGitIndexTransactions,
   isGitStageLargeFile,
   readGitStageFile,
+  repointSymbolicHead,
   streamGitStageFile,
   withGitBranchRefLocks,
   withGitIndexTransaction,
@@ -619,7 +622,9 @@ describe("the object quarantine of an index transaction", () => {
       onCleanupFailure: (report) => reports.push(report),
     });
     expect(refused).toBe(false);
-    expect(reports).toEqual([{ quarantines: 1, temporaryIndex: false, lock: false }]);
+    expect(reports).toEqual([
+      { quarantines: 1, temporaryIndex: false, lock: false, descriptor: false },
+    ]);
     expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
     await laterTransactionSucceeds();
   });
@@ -636,7 +641,9 @@ describe("the object quarantine of an index transaction", () => {
       },
     );
     expect(accepted).toBe(false);
-    expect(reports).toEqual([{ quarantines: 0, temporaryIndex: true, lock: false }]);
+    expect(reports).toEqual([
+      { quarantines: 0, temporaryIndex: true, lock: false, descriptor: false },
+    ]);
     expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
     await laterTransactionSucceeds();
   });
@@ -653,7 +660,9 @@ describe("the object quarantine of an index transaction", () => {
       },
     );
     expect(accepted).toBe(false);
-    expect(reports).toEqual([{ quarantines: 0, temporaryIndex: false, lock: true }]);
+    expect(reports).toEqual([
+      { quarantines: 0, temporaryIndex: false, lock: true, descriptor: false },
+    ]);
     expect(readdirSync(join(root, ".git")).some((n) => n.startsWith(".keiko-index-"))).toBe(false);
     // The leftover is a real lock: it blocks the next transaction until it is removed.
     await expect(
@@ -701,7 +710,7 @@ describe("the object quarantine of an index transaction", () => {
       },
     );
     expect(answer).toBe("settled");
-    expect(reports).toEqual([{ refLocks: 0, directories: 1 }]);
+    expect(reports).toEqual([{ refLocks: 0, descriptors: 0, directories: 1 }]);
     expect(existsSync(join(root, ".git", "refs", "heads", "second.lock"))).toBe(false);
     expect(existsSync(join(root, ".git", "refs", "heads", "feature", "first.lock"))).toBe(false);
   });
@@ -718,7 +727,7 @@ describe("the object quarantine of an index transaction", () => {
       },
     );
     expect(answer).toBe("settled");
-    expect(reports).toEqual([{ refLocks: 1, directories: 0 }]);
+    expect(reports).toEqual([{ refLocks: 1, descriptors: 0, directories: 0 }]);
     expect(existsSync(join(root, ".git", "refs", "heads", "alpha.lock"))).toBe(false);
     expect(existsSync(join(root, ".git", "refs", "heads", "beta.lock"))).toBe(true);
   });
@@ -735,7 +744,144 @@ describe("the object quarantine of an index transaction", () => {
   });
 });
 
+describe("repointSymbolicHead cleanup", () => {
+  const headLock = (): string => join(root, ".git", "HEAD.lock");
+  const branch = (): string => git(["symbolic-ref", "HEAD"]);
+  function failingClose(): { close: (fd: number) => void; calls: number[] } {
+    const calls: number[] = [];
+    return {
+      calls,
+      close: (fd: number): void => {
+        calls.push(fd);
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      },
+    };
+  }
+
+  it("closes the descriptor once, removes HEAD.lock and keeps HEAD when the close throws", async () => {
+    const reports: GitRefLockCleanupReport[] = [];
+    const close = failingClose();
+    await expect(
+      repointSymbolicHead(root, "dev", "next", nodeWorkspaceFs, {
+        closeDescriptor: close.close,
+        onCleanupFailure: (report) => reports.push(report),
+      }),
+    ).rejects.toThrow();
+    expect(close.calls).toHaveLength(1);
+    expect(existsSync(headLock())).toBe(false);
+    expect(branch()).toBe("refs/heads/dev");
+    expect(reports).toEqual([{ refLocks: 0, descriptors: 1, directories: 0 }]);
+  });
+
+  it("reports a HEAD.lock that cannot be removed and keeps the failure that ended the write", async () => {
+    const reports: GitRefLockCleanupReport[] = [];
+    await expect(
+      repointSymbolicHead(root, "other", "next", nodeWorkspaceFs, {
+        removePath: () => {
+          throw Object.assign(new Error("busy"), { code: "EBUSY" });
+        },
+        onCleanupFailure: (report) => reports.push(report),
+      }),
+    ).rejects.toThrow("git-head-changed");
+    expect(reports).toEqual([{ refLocks: 1, descriptors: 0, directories: 0 }]);
+    rmSync(headLock());
+  });
+
+  it("publishes and leaves no lock on the normal path", async () => {
+    await repointSymbolicHead(root, "dev", "next");
+    expect(existsSync(headLock())).toBe(false);
+    expect(branch()).toBe("refs/heads/next");
+  });
+});
+
+describe("cleanup ownership and distinct facts", () => {
+  it("never removes a ref lock whose ownership cannot be proved, and counts it", async () => {
+    const reports: GitRefLockCleanupReport[] = [];
+    await withGitBranchRefLocks(
+      root,
+      ["alpha"],
+      () => Promise.resolve("settled"),
+      nodeWorkspaceFs,
+      {
+        ownsLock: () => {
+          throw new Error("EIO");
+        },
+        onCleanupFailure: (report) => reports.push(report),
+      },
+    );
+    expect(existsSync(join(root, ".git", "refs", "heads", "alpha.lock"))).toBe(true);
+    expect(reports).toEqual([{ refLocks: 1, descriptors: 0, directories: 0 }]);
+    rmSync(join(root, ".git", "refs", "heads", "alpha.lock"));
+  });
+
+  it("reports a descriptor that cannot be closed as a descriptor, not as a lock", async () => {
+    const reports: GitIndexCleanupReport[] = [];
+    await withGitIndexTransaction(
+      root,
+      () => Promise.resolve(false),
+      (value) => value,
+      nodeWorkspaceFs,
+      {
+        closeDescriptor: (fd) => {
+          closeSync(fd);
+          throw new Error("EBUSY");
+        },
+        onCleanupFailure: (report) => reports.push(report),
+      },
+    );
+    expect(reports).toEqual([
+      { quarantines: 0, temporaryIndex: false, lock: false, descriptor: true },
+    ]);
+    expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
+  });
+
+  it("counts a ref lock descriptor that cannot be closed separately", async () => {
+    const reports: GitRefLockCleanupReport[] = [];
+    await withGitBranchRefLocks(root, ["alpha"], () => Promise.resolve(1), nodeWorkspaceFs, {
+      closeDescriptor: (fd) => {
+        closeSync(fd);
+        throw new Error("EBUSY");
+      },
+      onCleanupFailure: (report) => reports.push(report),
+    });
+    expect(reports).toEqual([{ refLocks: 0, descriptors: 1, directories: 0 }]);
+  });
+
+  it("counts a private index that stays because the gitdir is no longer the locked one", async () => {
+    const reports: GitIndexCleanupReport[] = [];
+    await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        const moved = `${root}-moved`;
+        renameSync(join(root, ".git"), moved);
+        mkdirSync(join(root, ".git"));
+        // The private index lives in the moved directory; the replaced one is another directory.
+        expect(existsSync(transaction.temporaryIndexPath)).toBe(false);
+        return Promise.resolve(false);
+      },
+      (value) => value,
+      nodeWorkspaceFs,
+      { onCleanupFailure: (report) => reports.push(report) },
+    ).catch(() => undefined);
+    rmSync(`${root}-moved`, { recursive: true, force: true });
+    expect(reports.some((r) => r.temporaryIndex || r.lock)).toBe(true);
+  });
+});
+
 describe("gitSequencerOperationInProgress", () => {
+  it("reads the sequencer files through the injected port and fails closed when it throws", async () => {
+    const existsFails = {
+      ...nodeWorkspaceFs,
+      exists: (path: string): boolean => {
+        if (path.endsWith("MERGE_HEAD")) throw new Error("EIO");
+        return nodeWorkspaceFs.exists(path);
+      },
+    };
+    await expect(gitSequencerOperationInProgress(root, existsFails)).rejects.toThrow(
+      GIT_SEQUENCER_STATE_UNAVAILABLE,
+    );
+  });
+
   it.each(["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])(
     "reports %s as an operation in progress, whatever it holds",
     async (name) => {

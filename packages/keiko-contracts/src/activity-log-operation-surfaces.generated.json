@@ -414,6 +414,7 @@
   "git.delivery.authority.admitted": "editor-delivery",
   "git.delivery.authority.denied": "editor-delivery",
   "git.delivery.buffers.checked": "editor-delivery",
+  "git.delivery.commit-refused": "editor-delivery",
   "git.delivery.commit.approval.minted": "editor-delivery",
   "git.delivery.commit.approval.required": "editor-delivery",
   "git.delivery.dispatch.no-spawn": "editor-delivery",

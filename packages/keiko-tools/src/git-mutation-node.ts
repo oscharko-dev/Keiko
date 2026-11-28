@@ -93,13 +93,19 @@ import {
 // The size-proportional deadline of one large-file hash, so the outer catalog budget of a staging
 // call is proven against the step it must not cut short.
 export { largeHashTimeoutMs } from "./git-stage-node.js";
-import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import type {
+  GitCleanupOptions,
+  GitObjectQuarantine,
+  GitRefLockCleanupReport,
+  RemovePath,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
   GIT_REF_LOCK_HELD,
   GIT_HEAD_CHANGED,
   gitSequencerOperationInProgress,
   repointSymbolicHead,
+  removeGitCommitState,
   GIT_REF_LOCK_UNAVAILABLE,
   withGitBranchRefLocks,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -117,12 +123,44 @@ export interface GitCommitSigningReadFailureReport {
  * branch creation.
  */
 export interface GitCleanupIncompleteReport {
-  readonly caller: "stage" | "unstage" | "branch-ref-lock";
+  readonly caller: "stage" | "unstage" | "branch-ref-lock" | "commit-state";
   readonly quarantines: number;
   readonly temporaryIndex: boolean;
   readonly lock: boolean;
+  /** Lock descriptors that could not be closed (never a statement about the lock file). */
+  readonly descriptors: number;
   readonly refLocks: number;
   readonly directories: number;
+  /** Merge or squash state files a successful commit could not remove. */
+  readonly stateFiles: number;
+}
+
+/**
+ * The closed reasons a bound interactive commit writes nothing or fails: each is one distinct
+ * statement about the repository or the request, never a free string.
+ */
+export const GIT_COMMIT_REFUSAL_CAUSES = [
+  "not-on-prepared-branch",
+  "authority-lapsed",
+  "sequencer-in-progress",
+  "sequencer-unreadable",
+  "empty-message",
+  "message-invalid",
+  "message-too-large",
+  "nothing-to-commit",
+  "ref-moved",
+  "checkout-unreadable",
+  "revision-unreadable",
+  "git-command-failed",
+  "interrupted",
+  "unexpected-error",
+] as const;
+export type GitCommitRefusalCause = (typeof GIT_COMMIT_REFUSAL_CAUSES)[number];
+
+/** One refused or failed interactive commit: the closed cause and, when a throw ended it, the error. */
+export interface GitCommitRefusedReport {
+  readonly cause: GitCommitRefusalCause;
+  readonly error?: unknown;
 }
 
 export interface NodeGitMutationAdapterDeps {
@@ -137,6 +175,10 @@ export interface NodeGitMutationAdapterDeps {
   readonly onSigningReadFailure?: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
   /** Injected log port for a cleanup the index transaction or the ref locks could not finish. */
   readonly onCleanupIncomplete?: ((report: GitCleanupIncompleteReport) => void) | undefined;
+  /** Injected log port for an interactive commit that was refused or failed, with its closed cause. */
+  readonly onCommitRefused?: ((report: GitCommitRefusedReport) => void) | undefined;
+  /** A test seam: removes one path of a cleanup (default: the workspace owner's own removal). */
+  readonly removePath?: RemovePath | undefined;
   /** Re-proves live server authority immediately before the sole ref-changing effect. */
   readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
   readonly beforeIndexUpdate?: (() => boolean) | undefined;
@@ -266,6 +308,8 @@ interface RunContext {
   readonly signingRequiredByBranchProtection: (() => Promise<boolean | "unavailable">) | undefined;
   readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
   readonly onCleanupIncomplete: ((report: GitCleanupIncompleteReport) => void) | undefined;
+  readonly onCommitRefused: ((report: GitCommitRefusedReport) => void) | undefined;
+  readonly removePath: RemovePath | undefined;
 }
 
 const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
@@ -281,6 +325,11 @@ const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
   "pager.commit=false",
   "-c",
   "alias.commit=",
+  // The cleanup of a commit message is pinned, so a repository's `commit.cleanup` (`strip` would
+  // drop a `#` line of a model-written message, `scissors` would cut it) can never make the plain
+  // `git commit` lane differ from the bound lane, which cleans exactly like `whitespace`.
+  "-c",
+  "commit.cleanup=whitespace",
   "-c",
   "gpg.program=gpg",
   "-c",
@@ -516,7 +565,11 @@ function verifiedIndexEffect(
         caller: stagedLineEndings === undefined ? "unstage" : "stage",
         refLocks: 0,
         directories: 0,
-        ...report,
+        stateFiles: 0,
+        quarantines: report.quarantines,
+        temporaryIndex: report.temporaryIndex,
+        lock: report.lock,
+        descriptors: report.descriptor ? 1 : 0,
       }),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
     signal: ctx.signal,
@@ -603,15 +656,30 @@ async function execInteractiveCommit(
   const branch = ctx.preparedCheckout?.branchName;
   if (branch !== undefined) return execBoundCommit(ctx, request, sign, branch);
   const prepared = await checkoutStillPrepared(ctx).catch((error: unknown) => error);
-  if (prepared !== true)
-    return prepared === false ? failureFromExit(0, 0) : failureFromThrow(prepared, 0, 0);
+  if (prepared === false) return reportCommitRefusal(ctx, "not-on-prepared-branch");
+  if (prepared !== true) {
+    reportCommitRefusal(ctx, "checkout-unreadable", prepared);
+    return failureFromThrow(prepared, 0, 0);
+  }
   const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
   if (result.outcome !== "succeeded") return result;
   try {
     return { ...result, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
   } catch (error) {
+    reportCommitRefusal(ctx, "revision-unreadable", error);
     return failureFromThrow(error, result.durationMs, 1);
   }
+}
+
+// A refusal writes nothing: it is one closed cause on the adapter's log port and a closed result.
+function reportCommitRefusal(
+  ctx: RunContext,
+  cause: GitCommitRefusalCause,
+  error?: unknown,
+  errorCode: GitDeliveryExecutionErrorCode = "precondition-failed",
+): GitDeliveryExecutionResult {
+  ctx.onCommitRefused?.(error === undefined ? { cause } : { cause, error });
+  return failureFromExit(0, 0, errorCode);
 }
 
 // The interactive commit on a prepared branch, written with Git's own plumbing: the staged tree, one
@@ -628,27 +696,64 @@ async function execBoundCommit(
 ): Promise<GitDeliveryExecutionResult> {
   let refAttempted = false;
   try {
-    const head = await boundCommitHead(ctx, branch);
-    if (head === undefined) return failureFromExit(0, 0);
-    const message = cleanedCommitMessage(request.message);
-    if (message === "") return failureFromExit(0, 0);
-    const tree = await checkedObjectCommand(ctx, ["write-tree"]);
-    if (!request.allowEmpty && (await commitsNothing(ctx, head, tree)))
-      return failureFromExit(0, 0);
-    const commit = await checkedObjectCommand(ctx, [
-      "commit-tree",
-      tree,
-      ...(sign ? ["-S"] : []),
-      ...(head.kind === "born" ? ["-p", head.sha] : []),
-      "-m",
-      message,
-    ]);
-    if (!(await checkoutOnBranch(ctx, branch))) return failureFromExit(0, 0);
+    const prepared = await prepareBoundCommit(ctx, request, branch);
+    if ("outcome" in prepared) return prepared;
+    const { head, message, tree } = prepared;
+    const commit = await checkedObjectCommand(
+      ctx,
+      [
+        "commit-tree",
+        tree,
+        ...(sign ? ["-S"] : []),
+        ...(head.kind === "born" ? ["-p", head.sha] : []),
+        "-F",
+        "-",
+      ],
+      Buffer.from(`${message}\n`, "utf8"),
+    );
+    const moved = await boundCheckoutRefusal(ctx, branch);
+    if (moved !== undefined) return reportCommitRefusal(ctx, moved);
     refAttempted = true;
-    return await updateBoundCommitRef(ctx, branch, head, commit);
+    return await updateBoundCommitRef(ctx, branch, head, commit, message);
   } catch (error) {
+    reportCommitRefusal(ctx, boundFailureCause(error), error);
     return failureFromVerifiedCommitError(error, refAttempted);
   }
+}
+
+function boundFailureCause(error: unknown): GitCommitRefusalCause {
+  if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
+    return "interrupted";
+  return error instanceof GitObjectCommandFailure ? "git-command-failed" : "unexpected-error";
+}
+
+// The input of the bound commit's own object write is bounded by the spawn boundary.
+const BOUND_COMMIT_MESSAGE_MAX_BYTES = 65_535;
+
+interface PreparedBoundCommit {
+  readonly head: GitHeadState;
+  readonly message: string;
+  readonly tree: string;
+}
+
+// Everything that can refuse the commit before an object is written, each with its own cause; the
+// result is the refusal, or the facts the commit is built from.
+async function prepareBoundCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  branch: string,
+): Promise<PreparedBoundCommit | GitDeliveryExecutionResult> {
+  const bound = await boundCommitHead(ctx, branch);
+  if ("outcome" in bound) return bound;
+  const message = cleanedCommitMessage(request.message);
+  if (message === "") return reportCommitRefusal(ctx, "empty-message");
+  if (message.includes("\0")) return reportCommitRefusal(ctx, "message-invalid");
+  if (Buffer.byteLength(message, "utf8") > BOUND_COMMIT_MESSAGE_MAX_BYTES)
+    return reportCommitRefusal(ctx, "message-too-large");
+  const tree = await checkedObjectCommand(ctx, ["write-tree"]);
+  if (!request.allowEmpty && (await commitsNothing(ctx, bound.head, tree)))
+    return reportCommitRefusal(ctx, "nothing-to-commit");
+  return { head: bound.head, message, tree };
 }
 
 // The message `git commit --message` records: Git's default `whitespace` cleanup (as `git
@@ -669,22 +774,36 @@ function trimTrailingBlanks(line: string): string {
   return line.slice(0, end);
 }
 
-// The HEAD a bound commit builds on; undefined when it cannot be bound to the prepared branch.
-async function boundCommitHead(ctx: RunContext, branch: string): Promise<GitHeadState | undefined> {
-  if (!(await checkoutOnBranch(ctx, branch))) return undefined;
-  // A merge, cherry-pick or revert in progress has state this commit does not bind; a state that
-  // cannot be read is refused like one that is there.
-  const sequencing = await gitSequencerOperationInProgress(
-    ctx.runDeps.workspace.root,
-    ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
-  ).catch(() => true);
-  return sequencing ? undefined : readGitHeadState(commitReadDeps(ctx));
+// The HEAD a bound commit builds on, or the refusal (already reported with its one closed cause) when
+// it cannot be bound to the prepared branch. A state that cannot be read is refused like one that is
+// there, and keeps its error.
+async function boundCommitHead(
+  ctx: RunContext,
+  branch: string,
+): Promise<{ readonly head: GitHeadState } | GitDeliveryExecutionResult> {
+  const moved = await boundCheckoutRefusal(ctx, branch);
+  if (moved !== undefined) return reportCommitRefusal(ctx, moved);
+  // A merge, cherry-pick or revert in progress has state this commit does not bind.
+  let sequencing: boolean;
+  try {
+    sequencing = await gitSequencerOperationInProgress(
+      ctx.runDeps.workspace.root,
+      ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+    );
+  } catch (error) {
+    return reportCommitRefusal(ctx, "sequencer-unreadable", error);
+  }
+  if (sequencing) return reportCommitRefusal(ctx, "sequencer-in-progress");
+  return { head: await readGitHeadState(commitReadDeps(ctx)) };
 }
 
-async function checkoutOnBranch(ctx: RunContext, branch: string): Promise<boolean> {
-  return (
-    (await readGitCheckoutBranch(commitReadDeps(ctx))) === branch && commitEffectAuthorized(ctx)
-  );
+async function boundCheckoutRefusal(
+  ctx: RunContext,
+  branch: string,
+): Promise<GitCommitRefusalCause | undefined> {
+  if ((await readGitCheckoutBranch(commitReadDeps(ctx))) !== branch)
+    return "not-on-prepared-branch";
+  return commitEffectAuthorized(ctx) ? undefined : "authority-lapsed";
 }
 
 async function commitsNothing(ctx: RunContext, head: GitHeadState, tree: string): Promise<boolean> {
@@ -699,20 +818,62 @@ async function commitsNothing(ctx: RunContext, head: GitHeadState, tree: string)
   return (await readGitTreeDigest(deps, tree)) === current;
 }
 
+// The reflog entry `git commit` writes: its subject is the first line of the cleaned message, and
+// the root commit of an unborn branch says so. Capped so the argument stays far below the
+// command-line limit of the smallest platform; a first line that long is not a subject.
+const REFLOG_SUBJECT_MAX_CHARS = 1_024;
+
+function commitReflogMessage(head: GitHeadState, message: string): string {
+  const subject = (message.split("\n")[0] ?? "").slice(0, REFLOG_SUBJECT_MAX_CHARS);
+  return `commit${head.kind === "born" ? "" : " (initial)"}: ${subject}`;
+}
+
 async function updateBoundCommitRef(
   ctx: RunContext,
   branch: string,
   head: GitHeadState,
   commit: string,
+  message: string,
 ): Promise<GitDeliveryExecutionResult> {
   const oldValue = head.kind === "born" ? head.sha : gitZeroObjectId(head.objectIdLength);
   const result = await runOne(
     ctx,
-    ["update-ref", "--stdin"],
+    ["update-ref", "-m", commitReflogMessage(head, message), "--stdin"],
     `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
   );
-  if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
+  // The compare-and-swap on the HEAD this commit was built on failed: the branch moved meanwhile.
+  if (result.exitCode !== 0) return reportCommitRefusal(ctx, "ref-moved", undefined, "conflict");
+  await removeCommitState(ctx);
   return executionResult("succeeded", result.durationMs, { externalId: commit });
+}
+
+// A successful `git commit` removes the merge and squash message state it consumed. A failure to
+// remove it never replaces the success: it is reported through the cleanup port.
+async function removeCommitState(ctx: RunContext): Promise<void> {
+  try {
+    const stayed = await removeGitCommitState(
+      ctx.runDeps.workspace.root,
+      ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+      ctx.removePath,
+    );
+    if (stayed > 0) reportCommitStateLeft(ctx, stayed);
+  } catch {
+    // The state of the repository could not even be examined: one unit stayed unproven.
+    reportCommitStateLeft(ctx, 1);
+  }
+}
+
+function reportCommitStateLeft(ctx: RunContext, stateFiles: number): void {
+  ctx.onCleanupIncomplete?.({
+    caller: "commit-state",
+    quarantines: 0,
+    temporaryIndex: false,
+    lock: false,
+    descriptors: 0,
+    refLocks: 0,
+    directories: 0,
+    stateFiles,
+  });
 }
 
 // The decisions that commit exactly as Git would, with neither `--gpg-sign` nor `--no-gpg-sign`.
@@ -892,7 +1053,7 @@ async function headBranchName(deps: NodeGitWorktreeReaderDeps): Promise<string> 
 async function checkedObjectCommand(
   ctx: RunContext,
   argv: readonly string[],
-  stdin?: string,
+  stdin?: string | Uint8Array,
 ): Promise<string> {
   const result = await runOne(ctx, argv, stdin);
   const objectId = result.stdout.trim();
@@ -1061,20 +1222,27 @@ async function execUnbornBranch(
         return await repointUnbornHead(ctx, fromBranch, req);
       },
       workspaceFsOf(ctx.runDeps),
-      {
-        onCleanupFailure: (report) =>
-          ctx.onCleanupIncomplete?.({
-            caller: "branch-ref-lock",
-            quarantines: 0,
-            temporaryIndex: false,
-            lock: false,
-            ...report,
-          }),
-      },
+      branchLockCleanupOptions(ctx),
     );
   } catch (error) {
     return failureFromUnbornBranchThrow(error);
   }
+}
+
+// The cleanup of the branch ref locks and of HEAD.lock reaches the adapter's cleanup port.
+function branchLockCleanupOptions(ctx: RunContext): GitCleanupOptions<GitRefLockCleanupReport> {
+  return {
+    ...(ctx.removePath === undefined ? {} : { removePath: ctx.removePath }),
+    onCleanupFailure: (report) =>
+      ctx.onCleanupIncomplete?.({
+        caller: "branch-ref-lock",
+        quarantines: 0,
+        temporaryIndex: false,
+        lock: false,
+        stateFiles: 0,
+        ...report,
+      }),
+  };
 }
 
 // HEAD is re-pointed under Git's own HEAD.lock with the expected old symbolic value checked while
@@ -1094,6 +1262,7 @@ async function repointUnbornHead(
     fromBranch,
     req.branchName,
     workspaceFsOf(ctx.runDeps),
+    branchLockCleanupOptions(ctx),
   );
   return executionResult("succeeded", ctx.runDeps.now() - startedAtMs);
 }
@@ -1181,6 +1350,8 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     signingRequiredByBranchProtection: deps.signingRequiredByBranchProtection,
     onSigningReadFailure: deps.onSigningReadFailure,
     onCleanupIncomplete: deps.onCleanupIncomplete,
+    onCommitRefused: deps.onCommitRefused,
+    removePath: deps.removePath,
   };
 }
 

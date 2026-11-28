@@ -55,12 +55,19 @@ export type RemovePath = (path: string, kind: "file" | "directory" | "tree") => 
 export interface GitIndexCleanupReport {
   readonly quarantines: number;
   readonly temporaryIndex: boolean;
+  /** The lock file stayed, or it could not be proved to be this transaction's own. */
   readonly lock: boolean;
+  /** The lock's descriptor could not be closed (distinct from a leftover lock file). */
+  readonly descriptor: boolean;
 }
 export interface GitCleanupOptions<R> {
   /** Receives the report only when something stayed; a port that throws never changes the result. */
   readonly onCleanupFailure?: ((report: R) => void) | undefined;
   readonly removePath?: RemovePath | undefined;
+  /** A test seam: closes a lock descriptor (default: `closeSync`). */
+  readonly closeDescriptor?: ((descriptor: number) => void) | undefined;
+  /** A test seam: proves a lock file is this holder's own (default: path and descriptor identity). */
+  readonly ownsLock?: ((path: string, descriptor: number) => boolean) | undefined;
 }
 export interface GitIndexTransaction {
   readonly temporaryIndexPath: string;
@@ -190,8 +197,8 @@ function releaseTransaction(
   options: GitCleanupOptions<GitIndexCleanupReport>,
 ): void {
   const remove = options.removePath ?? defaultRemovePath;
-  const report = cleanupIndexTransaction(held, quarantines, remove);
-  if (report.quarantines > 0 || report.temporaryIndex || report.lock)
+  const report = cleanupIndexTransaction(held, quarantines, remove, options);
+  if (report.quarantines > 0 || report.temporaryIndex || report.lock || report.descriptor)
     deliverCleanupReport(report, options.onCleanupFailure);
 }
 // A step that threw is a failed step: it is counted by the caller and never rethrown.
@@ -401,12 +408,37 @@ export async function gitSequencerOperationInProgress(
   try {
     const base = await resolveGitdir(fs, workspaceRoot);
     if (base === undefined) throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE);
-    return SEQUENCER_HEAD_FILES.some(
-      (name) => lstatSync(join(base.path, name), { throwIfNoEntry: false }) !== undefined,
-    );
+    return SEQUENCER_HEAD_FILES.some((name) => fs.exists(join(base.path, name)));
   } catch (error) {
     throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE, { cause: error });
   }
+}
+
+const COMMIT_MESSAGE_STATE_FILES = ["MERGE_MSG", "MERGE_MODE", "SQUASH_MSG"] as const;
+
+/**
+ * Removes the merge and squash message state a successful commit consumes (`MERGE_MSG`,
+ * `MERGE_MODE`, `SQUASH_MSG` in this worktree's own gitdir), as Git does. Every file is its own
+ * guarded step, so one that cannot be examined or removed never skips another; the number of files
+ * that stayed is returned and nothing is thrown for them. A repository whose gitdir cannot be
+ * resolved throws, and the caller reports it without replacing the commit it follows.
+ */
+export async function removeGitCommitState(
+  workspaceRoot: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  removePath: RemovePath = defaultRemovePath,
+): Promise<number> {
+  const base = await resolveGitdir(fs, workspaceRoot);
+  if (base === undefined) throw new Error("git-index-metadata-unavailable");
+  let stayed = 0;
+  for (const name of COMMIT_MESSAGE_STATE_FILES) {
+    const path = join(base.path, name);
+    const failed = stepFailed(() => {
+      if (fs.exists(path)) removePath(path, "file");
+    });
+    if (failed) stayed += 1;
+  }
+  return stayed;
 }
 
 /** The message of the failure thrown when HEAD no longer names the branch it was proved to name. */
@@ -427,6 +459,7 @@ export async function repointSymbolicHead(
   expectedBranch: string,
   targetBranch: string,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  options: GitCleanupOptions<GitRefLockCleanupReport> = {},
 ): Promise<void> {
   if (!SAFE_HEAD_BRANCH.test(expectedBranch) || !SAFE_HEAD_BRANCH.test(targetBranch))
     throw new Error(GIT_REF_LOCK_UNAVAILABLE);
@@ -434,20 +467,58 @@ export async function repointSymbolicHead(
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
   const head = join(base.path, "HEAD");
   const lock = `${head}.lock`;
-  const descriptor = openRefLock(lock);
+  const held = {
+    path: lock,
+    descriptor: openRefLock(lock),
+    closeAttempted: false,
+    closeFailed: false,
+  };
+  const close = options.closeDescriptor ?? closeSync;
   let published = false;
   try {
     if (readFileSync(head, "utf8") !== `ref: refs/heads/${expectedBranch}\n`)
       throw new Error(GIT_HEAD_CHANGED);
-    writeSync(descriptor, `ref: refs/heads/${targetBranch}\n`);
-    closeSync(descriptor);
-    published = true;
+    writeSync(held.descriptor, `ref: refs/heads/${targetBranch}\n`);
+    held.closeAttempted = true;
+    held.closeFailed = stepFailed(() => {
+      close(held.descriptor);
+    });
+    if (held.closeFailed) throw new Error(GIT_REF_LOCK_UNAVAILABLE);
     renameSync(lock, head);
-  } catch (error) {
-    if (!published) closeSync(descriptor);
-    rmSync(lock, { force: true });
-    throw error;
+    published = true;
+  } finally {
+    if (!published) releaseUnpublishedHeadLock(held, options);
   }
+}
+
+// Every path that did not publish removes its own HEAD.lock and closes the descriptor exactly once
+// (never a second close after a failed one); what stayed is reported through the cleanup port and
+// never replaces the failure that ended the write.
+function releaseUnpublishedHeadLock(
+  held: {
+    readonly path: string;
+    readonly descriptor: number;
+    readonly closeAttempted: boolean;
+    readonly closeFailed: boolean;
+  },
+  options: GitCleanupOptions<GitRefLockCleanupReport>,
+): void {
+  const remove = options.removePath ?? defaultRemovePath;
+  const close = options.closeDescriptor ?? closeSync;
+  const descriptorFailed =
+    held.closeFailed ||
+    (!held.closeAttempted &&
+      stepFailed(() => {
+        close(held.descriptor);
+      }));
+  const lockFailed = stepFailed(() => {
+    remove(held.path, "file");
+  });
+  if (descriptorFailed || lockFailed)
+    deliverCleanupReport(
+      { refLocks: lockFailed ? 1 : 0, descriptors: descriptorFailed ? 1 : 0, directories: 0 },
+      options.onCleanupFailure,
+    );
 }
 
 function branchLockPath(heads: string, branch: string): string | undefined {
@@ -506,7 +577,10 @@ function* newestFirst<T>(entries: readonly T[]): Generator<T> {
  * another writer having filled or removed them. A leftover lock blocks every later update of its ref.
  */
 export interface GitRefLockCleanupReport {
+  /** Lock files that stayed, or whose ownership could not be proved. */
   readonly refLocks: number;
+  /** Lock descriptors that could not be closed. */
+  readonly descriptors: number;
   readonly directories: number;
 }
 // Each release and each directory removal is its own guarded step, so a failure never skips the
@@ -518,7 +592,12 @@ function releaseBranchRefLocks(
 ): void {
   const remove = options.removePath ?? defaultRemovePath;
   let refLocks = 0;
-  for (const lock of newestFirst(held)) if (releaseRefLock(lock, remove)) refLocks += 1;
+  let descriptors = 0;
+  for (const lock of newestFirst(held)) {
+    const released = releaseRefLock(lock, remove, options);
+    if (released.lock) refLocks += 1;
+    if (released.descriptor) descriptors += 1;
+  }
   let directories = 0;
   for (const directory of newestFirst(created))
     if (
@@ -527,8 +606,8 @@ function releaseBranchRefLocks(
       })
     )
       directories += 1;
-  if (refLocks > 0 || directories > 0)
-    deliverCleanupReport({ refLocks, directories }, options.onCleanupFailure);
+  if (refLocks > 0 || descriptors > 0 || directories > 0)
+    deliverCleanupReport({ refLocks, descriptors, directories }, options.onCleanupFailure);
 }
 
 // Walks from `refs/heads` down to the lock's directory: every existing component must be a plain
@@ -583,21 +662,31 @@ function openRefLock(path: string): number {
   }
 }
 
-// True when the lock or its descriptor stayed. The descriptor is closed whatever the removal did.
+interface RefLockRelease {
+  readonly lock: boolean;
+  readonly descriptor: boolean;
+}
+// The lock file is removed only when it is proved to be this holder's own: a lock whose ownership
+// cannot be established may be another writer's and is left alone and counted. The descriptor is
+// closed whatever the removal did, and its failure is reported on its own.
 function releaseRefLock(
-  lock: { readonly path: string; readonly descriptor: number },
+  held: { readonly path: string; readonly descriptor: number },
   remove: RemovePath,
-): boolean {
-  const owned = attempt(() => sameLock(lock.path, lock.descriptor));
-  const removeFailed =
-    owned !== false &&
-    stepFailed(() => {
-      remove(lock.path, "file");
-    });
-  const closeFailed = stepFailed(() => {
-    closeSync(lock.descriptor);
+  options: GitCleanupOptions<GitRefLockCleanupReport>,
+): RefLockRelease {
+  const owns = options.ownsLock ?? sameLock;
+  const owned = attempt(() => owns(held.path, held.descriptor));
+  const lock =
+    owned === undefined ||
+    (owned &&
+      stepFailed(() => {
+        remove(held.path, "file");
+      }));
+  const close = options.closeDescriptor ?? closeSync;
+  const descriptor = stepFailed(() => {
+    close(held.descriptor);
   });
-  return removeFailed || closeFailed;
+  return { lock, descriptor };
 }
 
 interface HeldIndexTransaction {
@@ -612,19 +701,22 @@ function cleanupIndexTransaction(
   held: HeldIndexTransaction,
   quarantines: readonly GitObjectQuarantine[],
   remove: RemovePath,
+  options: GitCleanupOptions<GitIndexCleanupReport>,
 ): GitIndexCleanupReport {
   const { base, directory, lock, descriptor, temporaryIndexPath, temporary } = held;
   const quarantineFailures = removeQuarantines(quarantines, remove);
   // The private index and the lock are removed only while the gitdir is the directory that was
-  // locked; a directory that cannot be inspected counts as an unreleased lock.
+  // locked; a directory that cannot be inspected counts as an unreleased lock, and a private index
+  // that could not be removed for that reason is a leftover too.
   const sameBase = attempt(() => sameDirectory(base, directory));
   const temporaryIndex =
-    sameBase === true &&
     temporary.owned &&
-    stepFailed(() => {
-      remove(temporaryIndexPath, "file");
-    });
-  const ownLock = sameBase === true ? attempt(() => sameLock(lock, descriptor)) : false;
+    (sameBase !== true ||
+      stepFailed(() => {
+        remove(temporaryIndexPath, "file");
+      }));
+  const owns = options.ownsLock ?? sameLock;
+  const ownLock = sameBase === true ? attempt(() => owns(lock, descriptor)) : false;
   const lockFailed =
     sameBase === undefined ||
     ownLock === undefined ||
@@ -632,11 +724,17 @@ function cleanupIndexTransaction(
       stepFailed(() => {
         remove(lock, "file");
       }));
-  // The descriptor is closed whatever happened before.
-  const closeFailed = stepFailed(() => {
-    closeSync(descriptor);
+  // The descriptor is closed whatever happened before; its failure is its own fact.
+  const close = options.closeDescriptor ?? closeSync;
+  const descriptorFailed = stepFailed(() => {
+    close(descriptor);
   });
-  return { quarantines: quarantineFailures, temporaryIndex, lock: lockFailed || closeFailed };
+  return {
+    quarantines: quarantineFailures,
+    temporaryIndex,
+    lock: lockFailed,
+    descriptor: descriptorFailed,
+  };
 }
 // `undefined` when the check itself threw.
 function attempt(check: () => boolean): boolean | undefined {

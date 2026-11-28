@@ -14,6 +14,7 @@ export const GIT_INDEX_CLEANUP_CALLERS = [
   "unstage",
   "branch-ref-lock",
   "turn-index-restore",
+  "commit-state",
 ] as const;
 export type GitIndexCleanupCaller = (typeof GIT_INDEX_CLEANUP_CALLERS)[number];
 
@@ -24,6 +25,10 @@ export interface GitIndexCleanupIncompleteFacts {
   readonly lock: boolean;
   readonly refLocks: number;
   readonly directories: number;
+  /** Lock descriptors that could not be closed; absent for a caller that holds none. */
+  readonly descriptors?: number;
+  /** Merge or squash state files a successful commit could not remove. */
+  readonly stateFiles?: number;
 }
 
 const CLEANUP_INCOMPLETE_OPERATION = defineActivityLogOperation({
@@ -45,6 +50,8 @@ const CLEANUP_INCOMPLETE_OPERATION = defineActivityLogOperation({
     lockLeft: { type: "boolean", dataClass: "closed-enum", required: true },
     refLockFailures: { type: "integer", dataClass: "count", required: true },
     directoryFailures: { type: "integer", dataClass: "count", required: true },
+    descriptorFailures: { type: "integer", dataClass: "count", required: false },
+    stateFileFailures: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -75,6 +82,8 @@ export function logGitIndexCleanupIncomplete(
         lockLeft: facts.lock,
         refLockFailures: facts.refLocks,
         directoryFailures: facts.directories,
+        descriptorFailures: facts.descriptors ?? 0,
+        stateFileFailures: facts.stateFiles ?? 0,
       },
     ),
   );

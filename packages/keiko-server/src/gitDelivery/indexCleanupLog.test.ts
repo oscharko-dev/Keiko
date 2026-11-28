@@ -43,6 +43,30 @@ describe("git index transaction cleanup line", () => {
     expect(persisted).toMatchObject({ caller: "stage", lockLeft: true });
   });
 
+  it("records a descriptor and a merge state file that stayed as their own counts", () => {
+    const activity = captureActivityLog();
+    logGitIndexCleanupIncomplete(
+      activity.sink,
+      {
+        ...FACTS,
+        caller: "commit-state",
+        lock: false,
+        quarantines: 0,
+        descriptors: 1,
+        stateFiles: 2,
+      },
+      "c",
+    );
+    expect(activity.events[0]).toMatchObject({
+      extra: {
+        caller: "commit-state",
+        lockLeft: false,
+        descriptorFailures: 1,
+        stateFileFailures: 2,
+      },
+    });
+  });
+
   it("falls back to the unknown correlation only when a caller has none", () => {
     const activity = captureActivityLog();
     logGitIndexCleanupIncomplete(

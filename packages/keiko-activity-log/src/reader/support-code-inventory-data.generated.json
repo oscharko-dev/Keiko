@@ -2112,6 +2112,7 @@
     "keiko-server/gitDelivery/ciReadinessSnapshot",
     "keiko-server/gitDelivery/commitDraftQuality",
     "keiko-server/gitDelivery/commitPolicySettings",
+    "keiko-server/gitDelivery/commitRefusalLog",
     "keiko-server/gitDelivery/commitRoutes",
     "keiko-server/gitDelivery/defaultPolicyPacks",
     "keiko-server/gitDelivery/draftDeliveryChecks",
