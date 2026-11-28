@@ -362,37 +362,42 @@ describe("answeredWithoutTools", () => {
   }
 
   const succeeded = snapshot({ state: "succeeded", agent: "build" });
+  // The feed is read after the run settled unless a test says otherwise.
+  const settledNoTools = (
+    state: CodingWorkbenchRuntimeState,
+    activity: Parameters<typeof answeredWithoutTools>[1],
+  ): boolean => answeredWithoutTools(state, activity, true);
+
+  it("is false while the feed was not read after the run settled, however empty it is", () => {
+    expect(answeredWithoutTools(stateOf(succeeded), feed([[]]), false)).toBe(false);
+    expect(answeredWithoutTools(stateOf(succeeded), feed([[]]), true)).toBe(true);
+  });
 
   it("is true for a succeeded Build run whose whole feed holds no tool", () => {
-    expect(answeredWithoutTools(stateOf(succeeded), feed([[], []]))).toBe(true);
+    expect(settledNoTools(stateOf(succeeded), feed([[], []]))).toBe(true);
   });
 
   it("follows the run's agent, not the picker, in both directions", () => {
-    expect(answeredWithoutTools(stateOf(succeeded, "plan"), feed([[]]))).toBe(true);
+    expect(settledNoTools(stateOf(succeeded, "plan"), feed([[]]))).toBe(true);
     const planRun = snapshot({ state: "succeeded", agent: "plan" });
-    expect(answeredWithoutTools(stateOf(planRun, "build"), feed([[]]))).toBe(false);
+    expect(settledNoTools(stateOf(planRun, "build"), feed([[]]))).toBe(false);
   });
 
   it("is false for a custom agent and for a run that reports no agent", () => {
     expect(
-      answeredWithoutTools(
-        stateOf(snapshot({ state: "succeeded", agent: "reviewer" })),
-        feed([[]]),
-      ),
+      settledNoTools(stateOf(snapshot({ state: "succeeded", agent: "reviewer" })), feed([[]])),
     ).toBe(false);
-    expect(answeredWithoutTools(stateOf(snapshot({ state: "succeeded" })), feed([[]]))).toBe(false);
+    expect(settledNoTools(stateOf(snapshot({ state: "succeeded" })), feed([[]]))).toBe(false);
   });
 
   it("is false once any turn used a tool, whatever the tool did", () => {
-    expect(
-      answeredWithoutTools(stateOf(succeeded), feed([[], [tool("keiko_read", "failed")]])),
-    ).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), feed([[], [tool("keiko_read", "failed")]]))).toBe(
+      false,
+    );
   });
 
   it("is false when signals were dropped, whose tools would be missing from the feed", () => {
-    expect(answeredWithoutTools(stateOf(succeeded), { ...feed([[]]), droppedEventCount: 2 })).toBe(
-      false,
-    );
+    expect(settledNoTools(stateOf(succeeded), { ...feed([[]]), droppedEventCount: 2 })).toBe(false);
   });
 
   it("is false when the run planned, because a plan tool becomes a plan and not a tool", () => {
@@ -406,27 +411,23 @@ describe("answeredWithoutTools", () => {
         truncated: false,
       },
     } as AvailableCodingSafeActivityFeed;
-    expect(answeredWithoutTools(stateOf(succeeded), planned)).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), planned)).toBe(false);
   });
 
   it.each(["running", "failed", "cancelled", "paused"] as const)(
     "is false for a run in state %s",
     (state) => {
-      expect(answeredWithoutTools(stateOf(snapshot({ state, agent: "build" })), feed([[]]))).toBe(
-        false,
-      );
+      expect(settledNoTools(stateOf(snapshot({ state, agent: "build" })), feed([[]]))).toBe(false);
     },
   );
 
   it("is false without a feed of this run, without a turn, or with a feed that lost turns", () => {
-    expect(answeredWithoutTools(stateOf(succeeded), null)).toBe(false);
-    expect(answeredWithoutTools(stateOf(succeeded), feed([[]], "run-other"))).toBe(false);
-    expect(answeredWithoutTools(stateOf(succeeded), feed([]))).toBe(false);
-    expect(answeredWithoutTools(stateOf(succeeded), { ...feed([[]]), truncated: true })).toBe(
-      false,
-    );
+    expect(settledNoTools(stateOf(succeeded), null)).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), feed([[]], "run-other"))).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), feed([]))).toBe(false);
+    expect(settledNoTools(stateOf(succeeded), { ...feed([[]]), truncated: true })).toBe(false);
     expect(
-      answeredWithoutTools(stateOf(succeeded), {
+      settledNoTools(stateOf(succeeded), {
         schemaVersion: "1",
         availability: "unavailable",
       } as never),

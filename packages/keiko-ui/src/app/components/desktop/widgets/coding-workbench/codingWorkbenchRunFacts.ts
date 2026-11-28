@@ -120,13 +120,17 @@ export function activeSubagentCount(
  * run's own, never the picker for the next turn, and an unreported agent counts as not Build. A
  * Plan or custom agent is excluded: answering without edits is what a planning turn does. A feed
  * that lost turns or dropped signals proves nothing, and a plan tool becomes a plan, not a tool.
+ * The runtime status and the activity feed arrive separately, so a feed still held from before the
+ * settlement can predate a tool call: only a feed read after the run settled (`finalConfirmed`)
+ * proves the absence.
  */
 export function answeredWithoutTools(
   state: CodingWorkbenchRuntimeState,
   feed: CodingSafeActivityFeed | null,
+  finalConfirmed: boolean,
 ): boolean {
   const run = state.run.value;
-  if (run?.state !== "succeeded" || run.agent !== "build") return false;
+  if (!finalConfirmed || run?.state !== "succeeded" || run.agent !== "build") return false;
   if (feed?.availability !== "available" || feed.runId !== run.runId) return false;
   return feedProvesNoTools(feed);
 }

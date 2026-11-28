@@ -66,6 +66,12 @@ export interface CodingWorkbenchSafeActivityState {
   readonly status: CodingWorkbenchSafeActivityStatus;
   readonly feed: AvailableCodingSafeActivityFeed | null;
   readonly errorCode: string | null;
+  /**
+   * True only when `feed` was read after its run had settled, so no later tool call can be missing
+   * from it. A feed held from the live stream is relabelled `ended` when the run settles but stays
+   * unconfirmed until it is read again.
+   */
+  readonly finalConfirmed?: true;
 }
 
 export interface UseCodingWorkbenchSafeActivityInput {
@@ -115,6 +121,7 @@ export function useCodingWorkbenchSafeActivity(
     runStateRef.current = runState;
     setState((current) => stateForLifecycle(current, runState));
   }, [runState]);
+  useSettledActivityConfirmation({ runId, runState, state, retry });
   const earlierFeeds = useCodingWorkbenchEarlierRunFeeds({
     runId,
     runState,
@@ -138,7 +145,7 @@ export function useCodingWorkbenchSafeActivity(
 }
 
 interface SnapshotBatch {
-  readonly enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void;
+  readonly enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void;
   readonly flush: () => void;
   readonly cancel: () => void;
 }
@@ -149,24 +156,29 @@ function useSnapshotBatch(
   setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>,
 ): SnapshotBatch {
   const pendingRef = useRef<CodingAppSessionChannelSnapshot | null>(null);
+  const finalRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cancel = useCallback((): void => {
     if (timerRef.current !== undefined) clearTimeout(timerRef.current);
     timerRef.current = undefined;
     pendingRef.current = null;
+    finalRef.current = false;
   }, []);
   const flush = useCallback((): void => {
     if (timerRef.current !== undefined) clearTimeout(timerRef.current);
     timerRef.current = undefined;
     const pending = pendingRef.current;
+    const final = finalRef.current;
     pendingRef.current = null;
+    finalRef.current = false;
     if (pending !== null && runId !== undefined) {
-      setState(stateFromSnapshot(pending, runId, runStateRef.current));
+      setState(stateFromSnapshot(pending, runId, runStateRef.current, final));
     }
   }, [runId, runStateRef, setState]);
   const enqueue = useCallback(
-    (snapshot: CodingAppSessionChannelSnapshot): void => {
+    (snapshot: CodingAppSessionChannelSnapshot, final = false): void => {
       pendingRef.current = snapshot;
+      finalRef.current = final;
       timerRef.current ??= setTimeout(flush, STREAM_BATCH_MS);
     },
     [flush],
@@ -203,12 +215,12 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       feed: current.feed?.runId === runId ? current.feed : null,
       errorCode: null,
     }));
-    const publish = (snapshot: CodingAppSessionChannelSnapshot): void => {
+    const publish = (snapshot: CodingAppSessionChannelSnapshot, final?: boolean): void => {
       if (controller.signal.aborted) return;
       // Deltas are appended as they arrive: the batch below keeps only the newest snapshot.
       const content = snapshot.content;
       if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
-      enqueue(snapshot);
+      enqueue(snapshot, final);
     };
     void connectActivity(controller, publish, runStateRef)
       .then(() => {
@@ -230,13 +242,14 @@ function useActivityConnection(input: ActivityConnectionInput): void {
 
 async function connectActivity(
   controller: AbortController,
-  enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void,
+  enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void,
   runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>,
 ): Promise<void> {
   await codingAppSessionPairingSettled();
   if (controller.signal.aborted) return;
   const endedBeforeRead = terminalRunState(runStateRef.current);
-  enqueue(await getCodingAppSessionChannelSnapshot(controller.signal));
+  // A read made once the run had settled is the run's last word on its activity.
+  enqueue(await getCodingAppSessionChannelSnapshot(controller.signal), endedBeforeRead);
   // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
   // subscription here turns a later server restart into an error on an already finished task.
   if (controller.signal.aborted || endedBeforeRead) return;
@@ -244,7 +257,7 @@ async function connectActivity(
   try {
     await streamCodingAppSessionChannelSnapshots({
       signal: controller.signal,
-      onSnapshot: enqueue,
+      onSnapshot: (snapshot) => enqueue(snapshot),
     });
   } finally {
     release();
@@ -294,6 +307,7 @@ function stateFromSnapshot(
   snapshot: CodingAppSessionChannelSnapshot,
   runId: string,
   runState: CodingWorkbenchRuntimeStateName | undefined,
+  final: boolean,
 ): CodingWorkbenchSafeActivityState {
   const content = snapshot.content;
   if (
@@ -303,7 +317,12 @@ function stateFromSnapshot(
   ) {
     return missingProjectionState(runState);
   }
-  return { status: lifecycleStatus(runState), feed: content.feed, errorCode: null };
+  return {
+    status: lifecycleStatus(runState),
+    feed: content.feed,
+    errorCode: null,
+    ...(final && terminalRunState(runState) ? { finalConfirmed: true as const } : {}),
+  };
 }
 
 // #3610 (W17): no projection for this run. While the run lives that is a lost connection worth a
@@ -352,7 +371,32 @@ function stateForLifecycle(
   }
   // A held feed that is still being re-read is not confirmed live (or paused, or ended) yet.
   if (failureStatus(current.status) || current.status === "loading") return current;
-  return { ...current, status: lifecycleStatus(runState) };
+  const { finalConfirmed, ...rest } = current;
+  return {
+    ...rest,
+    status: lifecycleStatus(runState),
+    ...(finalConfirmed === true && terminalRunState(runState) ? { finalConfirmed } : {}),
+  };
+}
+
+// A feed held from the live stream is only relabelled `ended` when its run settles. Read it once
+// more then, so a tool call that landed between the last frame and the settlement is not missing.
+function useSettledActivityConfirmation(input: {
+  readonly runId: string | undefined;
+  readonly runState: CodingWorkbenchRuntimeStateName | undefined;
+  readonly state: CodingWorkbenchSafeActivityState;
+  readonly retry: () => void;
+}): void {
+  const { retry, runId, runState, state } = input;
+  const unconfirmed =
+    runId !== undefined &&
+    terminalRunState(runState) &&
+    state.status === "ended" &&
+    state.feed !== null &&
+    state.finalConfirmed !== true;
+  useEffect(() => {
+    if (unconfirmed) retry();
+  }, [unconfirmed, retry]);
 }
 
 function lifecycleStatus(

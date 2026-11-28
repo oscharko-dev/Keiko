@@ -2325,7 +2325,11 @@ function WorkbenchColumns(
       })}
       failedCommandCount={failedCommandCount(activity.feed)}
       awaitingApproval={editorBridge.pendingReview !== null}
-      answeredWithoutTools={answeredWithoutTools(state, activity.feed)}
+      answeredWithoutTools={answeredWithoutTools(
+        state,
+        activity.feed,
+        activity.finalConfirmed === true,
+      )}
     />
   );
   const showWelcome = welcomeEligible(history, state, {

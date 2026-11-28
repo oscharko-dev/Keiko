@@ -1186,3 +1186,44 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(getSnapshotMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("useCodingWorkbenchSafeActivity final activity confirmation", () => {
+  beforeEach(() => {
+    getSnapshotMock.mockReset();
+    streamSnapshotsMock.mockReset();
+    getSnapshotMock.mockResolvedValue(snapshot());
+    holdStreamUntilAbort();
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("confirms the feed of a run that was already settled when it was read", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "succeeded",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("ended"));
+    expect(view.result.current.finalConfirmed).toBe(true);
+  });
+
+  it("does not call a feed read while the run was live final, and re-reads it once the run settles", async () => {
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+
+    getSnapshotMock.mockResolvedValue(repliedSnapshot());
+    view.rerender({ runState: "succeeded" });
+    // The held feed predates the settlement: it is never confirmed final until it is read again.
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+    await waitFor(() => expect(view.result.current.finalConfirmed).toBe(true));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(view.result.current.feed?.turns).toHaveLength(1);
+  });
+});

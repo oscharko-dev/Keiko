@@ -1444,12 +1444,8 @@ function ModelReasoning({
     own ? texts.reasoning.get(messageId) : undefined,
     !own,
   );
-  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
-    if (event.currentTarget.open) {
-      texts.openReasoning.add(openKey);
-      if (own) texts.readReasoning(messageId);
-    } else texts.openReasoning.delete(openKey);
-  };
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void =>
+    toggleReasoning(texts, event.currentTarget.open, openKey, own ? messageId : undefined);
   return (
     <details
       className={styles.cmpReasoning}
@@ -1473,6 +1469,21 @@ function ModelReasoning({
       </p>
     </details>
   );
+}
+
+// The open state is remembered per run and message; only the shown run's reasoning is read.
+function toggleReasoning(
+  texts: ModelTextsView,
+  open: boolean,
+  openKey: string,
+  readMessageId: string | undefined,
+): void {
+  if (!open) {
+    texts.openReasoning.delete(openKey);
+    return;
+  }
+  texts.openReasoning.add(openKey);
+  if (readMessageId !== undefined) texts.readReasoning(readMessageId);
 }
 
 // "Thinking…" while the model still thinks: its message is live and no answer text arrived yet;
