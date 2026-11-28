@@ -50,6 +50,22 @@ function stillWanted(
   return additions === "allowed" || before.has(key);
 }
 
+/** Files one model's plan into the record being built; true when it saved a new entry. */
+function collectPlanned(
+  key: string,
+  planned: { entry?: StoredActivation; binding?: Binding; saved: boolean; withheld?: true },
+  into: {
+    readonly next: Map<string, StoredActivation>;
+    readonly bindings: Map<string, Binding>;
+    readonly withheld: Set<string>;
+  },
+): boolean {
+  if (planned.withheld) into.withheld.add(key);
+  if (planned.entry !== undefined) into.next.set(key, planned.entry);
+  if (planned.binding !== undefined) into.bindings.set(key, planned.binding);
+  return planned.saved;
+}
+
 export const ACTIVATION_DISCARD_REASONS = [
   "first-start",
   "unreadable",
@@ -540,10 +556,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
         continue;
       }
       const planned = this.planModel(key, model, additions, held);
-      if (planned.withheld) withheld.add(key);
-      if (planned.entry !== undefined) next.set(key, planned.entry);
-      if (planned.binding !== undefined) bindings.set(key, planned.binding);
-      if (planned.saved) saved += 1;
+      if (collectPlanned(key, planned, { next, bindings, withheld })) saved += 1;
       // A withheld sync drops an addition it never saw before, but keeps what was already wanted.
       if (planned.entry !== undefined || stillWanted(additions, before, key)) kept.push(model);
     }

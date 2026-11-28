@@ -111,7 +111,7 @@ export function noteGovernedIndexTransitions(
  */
 export function noteGovernedIndexUnproven(runId: string, pathspecs: readonly string[]): void {
   const held = takeHeld(runId);
-  for (const path of [...held.written.keys()]) {
+  for (const path of held.written.keys()) {
     if (!isGovernedIndexPath(path, pathspecs)) continue;
     held.written.delete(path);
     held.previous.delete(path);
