@@ -1706,6 +1706,32 @@ describe("SettingsPanel manual model activation", () => {
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshed);
   });
 
+  it("keeps Deactivate available after a refused record update and retries it", async () => {
+    primeFetches([{ ...chatCapability("test-chat-1"), conversationReady: true }]);
+    deactivateChatModelMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Keiko could not update its record of activated models."), {
+          code: "RECORD_FAILED",
+          status: 500,
+        }),
+      )
+      .mockResolvedValueOnce({ modelId: "test-chat-1", outcome: "not-activated" });
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deactivate" }));
+    await waitFor(() => {
+      expect(deactivateChatModelMock).toHaveBeenCalledTimes(1);
+    });
+    // The row still offers the control that retries the record.
+    primeFetches([chatCapability("test-chat-1")]);
+    fireEvent.click(await screen.findByRole("button", { name: "Deactivate" }));
+    await waitFor(() => {
+      expect(deactivateChatModelMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Deactivate" })).toBeNull();
+    });
+  });
+
   it("keeps the model activated and shows the failure when deactivation fails", async () => {
     primeFetches([{ ...chatCapability("test-chat-1"), conversationReady: true }]);
     deactivateChatModelMock.mockRejectedValue(new Error("network down"));

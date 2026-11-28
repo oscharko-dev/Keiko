@@ -227,7 +227,12 @@ type ReadinessRunState =
       readonly previous?: ReadinessResultState | undefined;
     }
   | { readonly status: "done"; readonly report: GatewayReadinessReport }
-  | { readonly status: "error"; readonly message: string };
+  | {
+      readonly status: "error";
+      readonly message: string;
+      /** The server deactivated the model but could not update its record: Deactivate retries it. */
+      readonly deactivationPending?: true;
+    };
 
 type ReadinessResultState = Extract<ReadinessRunState, { readonly status: "done" | "error" }>;
 
@@ -455,6 +460,10 @@ function invalidateServerReadinessObservations(
   return models.map((model) =>
     model.conversationReady === undefined ? model : { ...model, conversationReady: undefined },
   );
+}
+
+function isDeactivationPending(readiness: ReadinessRunState | undefined): boolean {
+  return readiness?.status === "error" && readiness.deactivationPending === true;
 }
 
 function isRecordFailure(error: unknown): boolean {
@@ -1059,7 +1068,7 @@ function ModelRowActions({
       >
         {t("settings.models.deepProbes")}
       </button>
-      {activated ? (
+      {activated || isDeactivationPending(readiness) ? (
         <button
           type="button"
           className="ml-check secondary"
@@ -2158,15 +2167,17 @@ export function SettingsPanel({
     try {
       await deactivateChatModel(modelId);
     } catch (error) {
+      // A refused record update (500 RECORD_FAILED) still deactivated the model in the process, so
+      // the picker and the rows refresh, and Deactivate stays available to retry the record.
+      const recordFailed = isRecordFailure(error);
       setReadinessLedger((ledger) =>
         recordReadinessRun(ledger, generation, modelId, {
           status: "error",
           message: readinessErrorMessage(error, t),
+          ...(recordFailed ? { deactivationPending: true as const } : {}),
         }),
       );
-      // A refused record update (500 RECORD_FAILED) still deactivated the model in the process, so
-      // the picker and the rows refresh to what the server now holds.
-      if (isRecordFailure(error)) notifyGatewayModelReadinessUpdated();
+      if (recordFailed) notifyGatewayModelReadinessUpdated();
       return;
     }
     setReadinessLedger((ledger) => clearReadinessRun(ledger, generation, modelId));
