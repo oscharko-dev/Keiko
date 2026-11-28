@@ -246,6 +246,8 @@ const HeldForTrustContext = createContext(false);
 // The complete model texts read beside the bounded feed reach each message row the same way, with
 // the reasoning blocks the person opened, so a row the virtual list remounts keeps its state.
 interface ModelTextsView {
+  /** The run the texts were read for: a row of any other run never borrows them. */
+  readonly runId: string | undefined;
   readonly answers: CodingWorkbenchAnswers;
   readonly reasoning: CodingWorkbenchAnswers;
   readonly readReasoning: (messageId: string) => void;
@@ -255,6 +257,7 @@ interface ModelTextsView {
 
 const NO_ANSWERS: CodingWorkbenchAnswers = new Map();
 const NO_MODEL_TEXTS: ModelTextsView = {
+  runId: undefined,
   answers: NO_ANSWERS,
   reasoning: NO_ANSWERS,
   readReasoning: () => undefined,
@@ -266,15 +269,17 @@ const ModelTextsContext = createContext<ModelTextsView>(NO_MODEL_TEXTS);
 function useModelTextsView(activity: UseCodingWorkbenchSafeActivityResult): ModelTextsView {
   const openReasoning = useRef(new Set<string>()).current;
   const { answers, reasoning, readReasoning, retryText } = activity;
+  const runId = activity.feed?.runId;
   return useMemo(
     () => ({
+      runId,
       answers: answers ?? NO_ANSWERS,
       reasoning: reasoning ?? NO_ANSWERS,
       readReasoning: readReasoning ?? NO_MODEL_TEXTS.readReasoning,
       retryText: retryText ?? NO_MODEL_TEXTS.retryText,
       openReasoning,
     }),
-    [answers, reasoning, readReasoning, retryText, openReasoning],
+    [runId, answers, reasoning, readReasoning, retryText, openReasoning],
   );
 }
 
@@ -637,7 +642,7 @@ function timelineItems(
   );
   return feed?.plan === undefined
     ? compacted
-    : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
+    : insertPlan(compacted, feed.plan, feed.runId, order, activeRunId !== undefined);
 }
 
 // #4491: a call still open on a run that is no longer active never reported its end. The server
@@ -676,6 +681,7 @@ function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
 function insertPlan(
   items: readonly TimelineItem[],
   plan: CodingSafeActivityPlan,
+  runId: string,
   order: number,
   open: boolean,
 ): readonly TimelineItem[] {
@@ -684,14 +690,17 @@ function insertPlan(
   // had open) on each update.
   const planItem: TimelineItem = {
     kind: "plan",
-    id: `plan:${plan.anchorMessageId}`,
+    id: `plan:${runId}:${plan.anchorMessageId}`,
     occurredAt: plan.updatedAt,
     order,
     plan,
     open,
   };
   const anchor = items.findIndex(
-    (item) => item.kind === "message" && item.message.messageId === plan.anchorMessageId,
+    (item) =>
+      item.kind === "message" &&
+      item.runId === runId &&
+      item.message.messageId === plan.anchorMessageId,
   );
   if (anchor < 0) return [...items, planItem].sort(compareTimelineItems);
   return [...items.slice(0, anchor + 1), planItem, ...items.slice(anchor + 1)];
@@ -1364,7 +1373,7 @@ function MessageRow({
           </p>
           {item.message.reasoning === undefined &&
           item.message.fullReasoning === undefined ? null : (
-            <ModelReasoning message={item.message} live={item.live} t={t} />
+            <ModelReasoning message={item.message} runId={item.runId} live={item.live} t={t} />
           )}
           <div className={styles.messageText}>
             <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
@@ -1414,32 +1423,38 @@ function KeikoNote({
 // it whole, and the part the feed does not carry is read only once the reader opens it.
 function ModelReasoning({
   message,
+  runId,
   live,
   t,
 }: {
   readonly message: CodingSafeActivityMessage;
+  readonly runId: string;
   readonly live: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const texts = useContext(ModelTextsContext);
   const { messageId } = message;
+  // The texts belong to the shown run; an earlier run's row keeps its retained excerpt, settled.
+  const own = texts.runId === runId;
+  const openKey = `${runId}\u0000${messageId}`;
   const shown = shownText(
     message.reasoning?.text ?? "",
     message.reasoning?.truncated === true,
     message.fullReasoning,
-    texts.reasoning.get(messageId),
+    own ? texts.reasoning.get(messageId) : undefined,
+    !own,
   );
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
     if (event.currentTarget.open) {
-      texts.openReasoning.add(messageId);
-      texts.readReasoning(messageId);
-    } else texts.openReasoning.delete(messageId);
+      texts.openReasoning.add(openKey);
+      if (own) texts.readReasoning(messageId);
+    } else texts.openReasoning.delete(openKey);
   };
   return (
     <details
       className={styles.cmpReasoning}
       aria-live="off"
-      open={texts.openReasoning.has(messageId)}
+      open={texts.openReasoning.has(openKey)}
       onToggle={onToggle}
     >
       <summary
@@ -1513,35 +1528,40 @@ function shownText(
   carriedCut: boolean,
   full: CodingSafeActivityMessage["fullAnswer"],
   held: CodingWorkbenchAnswerText | undefined,
+  settled: boolean,
 ): ShownAnswer {
   if (full === undefined) return { source: carried, state: carriedCut ? "cut" : "whole" };
   if (held === undefined) {
-    return { source: carried, state: wholeOrCut(carried, full, false) };
+    return { source: carried, state: wholeOrCut(carried, full, false, settled) };
   }
   const source = held.text.length >= carried.length ? held.text : carried;
   if (held.failed) return { source, state: "failed" };
   // A newer page can report the cut before the next feed update does: either source marks it.
-  return { source, state: wholeOrCut(source, full, held.truncated) };
+  return { source, state: wholeOrCut(source, full, held.truncated, settled) };
 }
 
 function wholeOrCut(
   source: string,
   full: NonNullable<CodingSafeActivityMessage["fullAnswer"]>,
   heldCut: boolean,
+  settled: boolean,
 ): ShownAnswer["state"] {
-  if (source.length < full.length) return "loading";
+  // A row whose full text is no longer read (an earlier run's) never waits for it: it is marked cut.
+  if (source.length < full.length) return settled ? "cut" : "loading";
   return full.truncated || heldCut ? "cut" : "whole";
 }
 
 function shownAnswer(
   message: CodingSafeActivityMessage,
   answer: CodingWorkbenchAnswerText | undefined,
+  settled: boolean,
 ): ShownAnswer {
   return shownText(
     message.segments.map((segment) => segment.text).join(""),
     message.truncated || message.segments.some((segment) => segment.truncated),
     message.fullAnswer,
     answer,
+    settled,
   );
 }
 
@@ -1557,7 +1577,8 @@ function AssistantAnswer({
   readonly live: boolean;
 }): ReactNode {
   const texts = useContext(ModelTextsContext);
-  const shown = shownAnswer(message, texts.answers.get(message.messageId));
+  const own = texts.runId === runId;
+  const shown = shownAnswer(message, own ? texts.answers.get(message.messageId) : undefined, !own);
   // A streaming answer re-renders as a whole on every delta. Parsing is linear (about 18 ms per
   // 100 KB), but a long answer's deltas can arrive faster than it renders: the deferred source lets
   // React skip the stale ones and keep the window responsive, and always settles on the newest.
