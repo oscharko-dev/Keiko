@@ -691,6 +691,28 @@ describe("gitDeliveryMutationResponse — content-free projection of every outco
       ).status,
     ).toBe("succeeded");
   });
+  it("succeeded carries the closed note of a late Git error, and only then", () => {
+    const withNote = gitDeliveryMutationResponse(
+      lifecycle({
+        status: "succeeded",
+        executionResult: {
+          ...exec,
+          outcome: "succeeded",
+          errorCode: undefined,
+          completionNote: "recorded-despite-late-error",
+        },
+      }),
+    );
+    expect(withNote.executionNote).toBe("recorded-despite-late-error");
+    expect(
+      gitDeliveryMutationResponse(
+        lifecycle({
+          status: "succeeded",
+          executionResult: { ...exec, outcome: "succeeded", errorCode: undefined },
+        }),
+      ),
+    ).not.toHaveProperty("executionNote");
+  });
   it("approval-required carries the required approvers", () => {
     const body = gitDeliveryMutationResponse(
       lifecycle({ status: "approval-required", requiredApprovers: ["lead"] }),

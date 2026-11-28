@@ -1622,6 +1622,8 @@ export interface GitDeliveryMutationResponseBody {
   readonly preflightFindingCodes?: readonly string[];
   readonly requiredApprovers?: readonly string[];
   readonly executionErrorCode?: string;
+  /** A closed note on a success (a commit recorded despite a late Git error). */
+  readonly executionNote?: string;
 }
 
 export function gitDeliveryMutationResponse(
@@ -1646,5 +1648,7 @@ export function gitDeliveryMutationResponse(
   if (outcome.status === "failed" || outcome.status === "recovery-required") {
     return { ...base, executionErrorCode: outcome.executionResult.errorCode ?? "internal-error" };
   }
+  if (outcome.executionResult.completionNote !== undefined)
+    return { ...base, executionNote: outcome.executionResult.completionNote };
   return base;
 }

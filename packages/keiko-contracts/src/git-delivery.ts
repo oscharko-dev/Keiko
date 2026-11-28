@@ -504,6 +504,12 @@ export const GIT_COMMIT_SIGNING_READ_FAILURES = [
 ] as const;
 export type GitCommitSigningReadFailure = (typeof GIT_COMMIT_SIGNING_READ_FAILURES)[number];
 
+/**
+ * A closed note on a success the person should still see: `recorded-despite-late-error` means the
+ * commit is on the branch although Git reported a late error after writing the ref.
+ */
+export type GitDeliveryExecutionNote = "recorded-despite-late-error";
+
 export interface GitDeliveryExecutionResult {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
   readonly outcome: GitDeliveryExecutionOutcome;
@@ -516,6 +522,8 @@ export interface GitDeliveryExecutionResult {
   readonly signing?: GitCommitSigningDecision | undefined;
   // Set with `signing: "unknown-fail-closed"`: the closed class of the failed configuration read.
   readonly signingReadFailure?: GitCommitSigningReadFailure | undefined;
+  // Set on a success only: a closed fact the person is told about (never text).
+  readonly completionNote?: GitDeliveryExecutionNote | undefined;
 }
 
 // Content-free evidence reference. Never raw diffs, command output, or secrets. Field naming aligns

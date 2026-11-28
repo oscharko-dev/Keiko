@@ -3107,6 +3107,7 @@ export interface GitDeliveryMutationResponse {
   readonly preflightFindingCodes?: readonly string[];
   readonly requiredApprovers?: readonly string[];
   readonly executionErrorCode?: string;
+  readonly executionNote?: string;
   readonly messageViolations?: readonly GitCommitMessageViolationCode[];
 }
 

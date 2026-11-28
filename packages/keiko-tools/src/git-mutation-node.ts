@@ -776,8 +776,11 @@ async function effectiveCommitMessage(
   try {
     cleaned = await cleanedByGit(ctx, raw);
   } catch (error) {
-    reportCommitRefusal(ctx, cleanupFailureCause(error), error);
-    return failureFromThrow(error, 0, 0);
+    if (cleanupFailureCause(error) === "interrupted") {
+      reportCommitRefusal(ctx, "interrupted", error);
+      return failureFromThrow(error, 0, 0);
+    }
+    return reportCommitRefusal(ctx, "cleanup-unavailable", error);
   }
   // Verbatim keeps even a blank message, as Git does; the other modes refuse one that is empty once
   // cleaned (Git aborts such a commit).
@@ -809,17 +812,38 @@ interface CleanedMessage {
 }
 
 async function cleanedByGit(ctx: RunContext, raw: string): Promise<CleanedMessage> {
-  const mode = await readCommitCleanupMode(ctx);
-  if (mode === "verbatim") return { text: raw.endsWith("\n") ? raw : `${raw}\n`, verbatim: true };
+  const config = await readCommitCleanupConfig(ctx);
+  if (config.mode === "verbatim")
+    return { text: raw.endsWith("\n") ? raw : `${raw}\n`, verbatim: true };
   const result = await runOne(
     stripspaceContext(ctx),
-    mode === "strip" ? ["stripspace", "--strip-comments"] : ["stripspace"],
+    config.mode === "strip" ? stripCommentsArgv(config.comment, raw) : ["stripspace"],
     Buffer.from(raw, "utf8"),
   );
   // The output is the commit text itself: a run that was cut short or altered by a scrub is not it.
   if (result.exitCode !== 0 || result.truncated || result.outputRedacted === true)
     throw new GitCleanupUnavailable();
   return { text: result.stdout, verbatim: false };
+}
+
+// `git stripspace` resolves `auto` to `#`, while `git commit` picks the first of these characters
+// that starts no line of the message; every other value is handed over explicitly, so the comment
+// marker is exactly the one `git commit` would use. A multi-character marker is `core.commentString`.
+const AUTO_COMMENT_CHARACTERS = "#;@!$%^&|:";
+
+function stripCommentsArgv(comment: string, raw: string): string[] {
+  const marker = comment === "auto" ? autoCommentCharacter(raw) : comment;
+  const key = marker.length === 1 ? "core.commentChar" : "core.commentString";
+  return ["-c", `${key}=${marker}`, "stripspace", "--strip-comments"];
+}
+
+// The character `git commit` selects for `auto`; Git itself refuses a message that starts a line
+// with every candidate, and so does the lane.
+function autoCommentCharacter(raw: string): string {
+  const lines = raw.split("\n");
+  const free = Array.from(AUTO_COMMENT_CHARACTERS).find((c) => !lines.some((l) => l.startsWith(c)));
+  if (free === undefined) throw new GitCleanupUnavailable();
+  return free;
 }
 
 // This one read's stdout is the value the caller needs: only credentials are scrubbed, and nothing
@@ -838,26 +862,51 @@ function stripspaceContext(ctx: RunContext): RunContext {
   };
 }
 
-// The effective `commit.cleanup`, read through the repository's own Git (every config scope and
-// include). Unset is `default`, which cleans a message that is not edited like `whitespace`; a value
-// Git itself would reject, a failed read or a cut-short answer is unavailable, never a guess.
-async function readCommitCleanupMode(ctx: RunContext): Promise<CommitCleanupMode> {
+interface CommitCleanupConfig {
+  readonly mode: CommitCleanupMode;
+  /** The effective comment marker: `core.commentChar` or `core.commentString`, `auto` included. */
+  readonly comment: string;
+}
+
+// The effective `commit.cleanup` and comment marker, read in ONE call through the repository's own
+// Git (every config scope and include; the last entry of each wins, as Git reads them). Unset is
+// `default` (which cleans a message that is not edited like `whitespace`) and `#`; a value Git itself
+// would reject, a failed read or a cut-short or scrubbed answer is unavailable, never a guess.
+async function readCommitCleanupConfig(ctx: RunContext): Promise<CommitCleanupConfig> {
   const runDeps = { ...ctx.runDeps, commandRules: GIT_CONFIG_COMMAND_RULES };
   if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
   const result = await runCommand(
     {
       command: "git",
-      args: ["config", "--get", "commit.cleanup"],
+      args: [
+        "config",
+        "--null",
+        "--get-regexp",
+        "^(commit\\.cleanup|core\\.comment(char|string))$",
+      ],
       cwd: undefined,
       timeoutMs: ctx.timeoutMs,
       signal: ctx.signal,
     },
     runDeps,
   );
-  if (result.truncated) throw new GitCleanupUnavailable();
-  if (result.exitCode === 1) return "whitespace";
+  if (result.truncated || result.outputRedacted === true) throw new GitCleanupUnavailable();
+  if (result.exitCode === 1) return { mode: "whitespace", comment: "#" };
   if (result.exitCode !== 0) throw new GitCleanupUnavailable();
-  switch (result.stdout.trim()) {
+  let mode = "default";
+  let comment = "#";
+  for (const entry of result.stdout.split("\0").filter((e) => e !== "")) {
+    const split = entry.indexOf("\n");
+    const key = split < 0 ? entry : entry.slice(0, split);
+    const value = split < 0 ? "" : entry.slice(split + 1);
+    if (key === "commit.cleanup") mode = value;
+    else comment = value;
+  }
+  return { mode: cleanupModeOf(mode), comment: validCommentMarker(comment) };
+}
+
+function cleanupModeOf(value: string): CommitCleanupMode {
+  switch (value) {
     case "default":
     case "whitespace":
     case "scissors":
@@ -869,6 +918,12 @@ async function readCommitCleanupMode(ctx: RunContext): Promise<CommitCleanupMode
     default:
       throw new GitCleanupUnavailable();
   }
+}
+
+// Git refuses an empty marker and one with a line break; the lane never guesses at either.
+function validCommentMarker(value: string): string {
+  if (value === "" || /[\r\n\0]/u.test(value)) throw new GitCleanupUnavailable();
+  return value;
 }
 
 interface PreparedBoundCommit {
@@ -963,12 +1018,18 @@ async function updateBoundCommitRef(
     ["update-ref", "-m", commitReflogMessage(head, message), "--stdin"],
     `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
   );
+  let landedAfterFailure = false;
   if (result.exitCode !== 0) {
     const failed = await classifyRefUpdateFailure(ctx, branch, head, commit);
     if (failed !== undefined) return failed;
+    landedAfterFailure = true;
   }
   await removeCommitState(ctx);
-  return executionResult("succeeded", result.durationMs, { externalId: commit });
+  // The success carries a closed note, so a late Git error is never invisible to the person.
+  return executionResult("succeeded", result.durationMs, {
+    externalId: commit,
+    ...(landedAfterFailure ? { completionNote: "recorded-despite-late-error" as const } : {}),
+  });
 }
 
 // A non-zero `update-ref` is a conflict only when the branch really is not at the value the commit

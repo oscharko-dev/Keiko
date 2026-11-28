@@ -6266,6 +6266,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.ui.new": "New",
   "gitClientWindow.ui.recent": "Recent",
   "gitClientWindow.ui.error": "Error",
+  "gitClientWindow.ui.commitLateError":
+    "The commit was recorded, although Git reported a late error. Check the repository state before you commit again.",
   "gitClientWindow.ui.commitSigningRecovery":
     "Git could not sign this commit. Check this repository's signing key (user.signingKey) and format (gpg.format). Make sure Keiko can run the signing tool (gpg for OpenPGP or ssh-keygen for SSH). Then click Commit again.",
   "figmaJson.ui.qiSource": "QI source",

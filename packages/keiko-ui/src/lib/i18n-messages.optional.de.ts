@@ -6562,6 +6562,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.new": "Neu",
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
+  "gitClientWindow.ui.commitLateError":
+    "Der Commit wurde aufgezeichnet, obwohl Git einen späten Fehler gemeldet hat. Prüfen Sie den Repository-Zustand, bevor Sie erneut committen.",
   "gitClientWindow.ui.commitSigningRecovery":
     "Git konnte diesen Commit nicht signieren. Prüfen Sie den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stellen Sie sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicken Sie danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",

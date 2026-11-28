@@ -525,7 +525,11 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     "a\r\nb\r\n",
     "\n\nlead\nbody",
     "tail   ",
+    "a\n\n#c\n\n\nb",
+    "//s\nb",
   ];
+  // Messages that only `auto` (Git picks a character that starts no line) can commit.
+  const AUTO_ONLY_MESSAGES = ["#a\n#b", "# one\nbody\n; two", "#a\n;b\nbody"];
 
   function commitBodies(repo: string): string[] {
     return gitIn(repo, ["rev-list", "--reverse", "HEAD"])
@@ -534,16 +538,21 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       .map((sha) => gitIn(repo, ["cat-file", "commit", sha]).split("\n\n").slice(1).join("\n\n"));
   }
 
-  it.each([
+  const CLEANUP_CASES: readonly (readonly [string, readonly [string, string] | undefined])[] = [
     ["default", undefined],
     ["whitespace", undefined],
     ["scissors", undefined],
     ["strip", undefined],
-    ["strip", ";"],
+    ["strip", ["core.commentChar", ";"]],
+    ["strip", ["core.commentChar", "auto"]],
+    ["strip", ["core.commentString", "auto"]],
+    ["strip", ["core.commentString", "//"]],
     ["verbatim", undefined],
-  ])(
-    "records the message bytes of git commit -m for commit.cleanup=%s (comment character %s)",
-    async (mode, commentChar) => {
+  ];
+
+  it.each(CLEANUP_CASES)(
+    "records the message bytes of git commit -m for commit.cleanup=%s (comment marker %j)",
+    async (mode, comment) => {
       // The oracle is real `git commit -m` run directly, so the lanes cannot agree on a wrong answer.
       const gitRepo = newRepo();
       const plainRepo = newRepo();
@@ -551,9 +560,13 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       for (const repo of [gitRepo, plainRepo, boundRepo]) {
         seedBase(repo);
         gitIn(repo, ["config", "commit.cleanup", mode]);
-        if (commentChar !== undefined) gitIn(repo, ["config", "core.commentChar", commentChar]);
+        if (comment !== undefined) gitIn(repo, ["config", ...comment]);
       }
-      for (const [index, message] of CLEANUP_MESSAGES.entries()) {
+      const messages = [
+        ...CLEANUP_MESSAGES,
+        ...(comment?.[1] === "auto" ? AUTO_ONLY_MESSAGES : []),
+      ];
+      for (const [index, message] of messages.entries()) {
         writeFileSync(join(gitRepo, "a.txt"), `${String(index)}\n`, "utf8");
         gitIn(gitRepo, ["add", "a.txt"]);
         gitIn(gitRepo, ["commit", "-q", "-m", message]);
@@ -564,9 +577,37 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       expect(commitBodies(boundRepo)).toEqual(commitBodies(gitRepo));
       expect(commitBodies(plainRepo)).toEqual(commitBodies(gitRepo));
       expect(reflogs(boundRepo)).toEqual(reflogs(gitRepo));
-      expect(commitBodies(boundRepo)).toHaveLength(CLEANUP_MESSAGES.length + 1);
+      expect(commitBodies(boundRepo)).toHaveLength(messages.length + 1);
     },
   );
+
+  it("refuses like git when every candidate comment character starts a line (auto)", async () => {
+    const message = ["x", "#a", ";b", "@c", "!d", "$e", "%f", "^g", "&h", "|i", ":j", "k"].join(
+      "\n",
+    );
+    const gitRepo = newRepo();
+    const boundRepo = newRepo();
+    for (const repo of [gitRepo, boundRepo]) {
+      seedBase(repo);
+      gitIn(repo, ["config", "commit.cleanup", "strip"]);
+      gitIn(repo, ["config", "core.commentChar", "auto"]);
+    }
+    writeFileSync(join(gitRepo, "a.txt"), "x\n", "utf8");
+    gitIn(gitRepo, ["add", "a.txt"]);
+    expect(() => gitIn(gitRepo, ["commit", "-q", "-m", message])).toThrow();
+
+    const causes: string[] = [];
+    const refused = await commitOn(boundRepo, true, message, {
+      onCommitRefused: (report) => {
+        causes.push(report.cause);
+      },
+    });
+
+    expect(refused.outcome).toBe("failed");
+    expect(refused.errorCode).toBe("precondition-failed");
+    expect(causes).toEqual(["cleanup-unavailable"]);
+    expect(gitIn(boundRepo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+  });
 
   it("refuses an invalid commit.cleanup on both lanes without writing anything", async () => {
     for (const bound of [false, true]) {
@@ -578,7 +619,9 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       writeFileSync(join(repo, "a.txt"), "x\n", "utf8");
       expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
       // The bound lane reports the closed cause; the plain lane lets Git refuse it and writes nothing.
-      expect((await ad.commit({ message: "m", allowEmpty: false })).outcome).toBe("failed");
+      const refused = await ad.commit({ message: "m", allowEmpty: false });
+      expect(refused.outcome).toBe("failed");
+      expect(refused.errorCode).toBe("precondition-failed");
       expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
       if (bound) expect(causes).toEqual(["cleanup-unavailable"]);
     }
@@ -639,6 +682,8 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     });
 
     expect(committed.outcome).toBe("succeeded");
+    // The late error is not invisible: the success carries a closed note the UI shows.
+    expect(committed.completionNote).toBe("recorded-despite-late-error");
     expect(committed.externalId).toBe(gitIn(repo, ["rev-parse", "HEAD"]).trim());
     expect(gitIn(repo, ["log", "-1", "--format=%s"]).trim()).toBe("lands anyway");
     expect(causes).toEqual(["landed-after-failure"]);
