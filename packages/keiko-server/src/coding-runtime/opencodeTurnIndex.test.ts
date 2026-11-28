@@ -3,11 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GovernedIndexRecord } from "./governedIndexPaths.js";
 import {
+  awaitTurnIndexStart,
   beginTurnIndex,
+  type IndexRead,
+  type TurnIndexRecord,
   captureTurnIndex,
   reopenTurnIndex,
   restoreTurnIndex,
@@ -341,5 +344,52 @@ describe("turn index restore", () => {
     await expect(restoreTurnIndex(root, record, GOVERNED)).rejects.toThrow();
 
     expect(readFileSync(join(root, ".git", "index")).equals(before)).toBe(true);
+  });
+});
+
+describe("the wait for a turn's index start", () => {
+  function hungRecord(): TurnIndexRecord {
+    // A capture that never answers: a huge index or a hung filesystem monitor.
+    return { start: new Promise<IndexRead>(() => undefined) };
+  }
+
+  it("is cut at the bound and the undo then reports the index unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const record = hungRecord();
+      const waiting = awaitTurnIndexStart(record, new AbortController().signal, 5_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(waiting).resolves.toBe("capture-timed-out");
+      await expect(record.start).resolves.toBe("unreadable");
+      expect((record.failure as Error).message).toBe("capture-timed-out");
+      await expect(restoreTurnIndex(repository(), record, GOVERNED)).resolves.toEqual({
+        outcome: "unavailable",
+        restoredCount: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is cut at once by Stop, before the bound", async () => {
+    const record = hungRecord();
+    const stop = new AbortController();
+    const waiting = awaitTurnIndexStart(record, stop.signal, 600_000);
+    stop.abort();
+
+    await expect(waiting).resolves.toBe("capture-aborted");
+    await expect(record.start).resolves.toBe("unreadable");
+  });
+
+  it("leaves a capture that answered in time untouched", async () => {
+    const root = repository();
+    const record = beginTurnIndex(root);
+
+    await expect(awaitTurnIndexStart(record, new AbortController().signal)).resolves.toBe(
+      undefined,
+    );
+    await expect(record.start).resolves.toMatchObject({ staged: new Map() });
+    expect(record.failure).toBeUndefined();
   });
 });

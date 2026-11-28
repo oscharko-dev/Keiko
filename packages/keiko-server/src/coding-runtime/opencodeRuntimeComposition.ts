@@ -198,7 +198,7 @@ import {
   type OpenCodeRevertRunPort,
   type OpenCodeStagedRevert,
 } from "./opencodeRevert.js";
-import { reopenTurnIndex } from "./opencodeTurnIndex.js";
+import { awaitTurnIndexStart, reopenTurnIndex } from "./opencodeTurnIndex.js";
 import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
@@ -1003,6 +1003,8 @@ interface PreparedRun {
   turnImage?: OpenCodeRevertRun["turnImage"];
   /** The Git index as the newest human turn started and settled (`beginOpenCodeTurnImages`). */
   turnIndex?: OpenCodeRevertRun["turnIndex"];
+  /** Cuts the wait for the turn's index start when Stop arrives (`armAndPostTurn`). */
+  turnStartStop?: AbortController | undefined;
   /** What the newest turn's own native edits wrote (`recordOpenCodeEditSettled`). */
   agentImages?: OpenCodeAgentImages | undefined;
   /** Admitted plan-note edits awaiting their settlement (`noteAdmittedEditEvidence`). */
@@ -1441,10 +1443,23 @@ async function armAndPostTurn(
   // continuation of the human's request keeps that request's images: its undo reaches back to it.
   if (origin === undefined) {
     beginOpenCodeTurnImages(run);
-    // The index start is read before the model can stage anything.
-    await run.turnIndex?.start;
+    // The index start is read before the model can stage anything, within a bound Stop can cut.
+    if (run.turnIndex !== undefined) await awaitIndexStart(run, run.turnIndex);
   }
   return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+}
+
+async function awaitIndexStart(
+  run: ReadyRun,
+  record: NonNullable<ReadyRun["turnIndex"]>,
+): Promise<void> {
+  const stop = new AbortController();
+  run.turnStartStop = stop;
+  try {
+    await awaitTurnIndexStart(record, stop.signal);
+  } finally {
+    if (run.turnStartStop === stop) run.turnStartStop = undefined;
+  }
 }
 
 /**
@@ -1880,6 +1895,7 @@ function createAbortTask(
     if (run === undefined) return false;
     // Odd while the interrupt runs: a state read it overtakes is not a failure (`revertState`).
     run.interruptSeq += 1;
+    run.turnStartStop?.abort();
     try {
       // The whole native session tree: a background child keeps running when only the parent is
       // interrupted, and its end would start another turn of the parent (`interruptNativeTree`).

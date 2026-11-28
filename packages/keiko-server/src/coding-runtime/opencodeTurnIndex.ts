@@ -42,7 +42,7 @@ export interface TurnIndexRecord {
    * `undefined` inside the promise when there is no index to read (not a repository, no commit);
    * `unreadable` when there is one that cannot be proven (a conflict, an intent-to-add entry).
    */
-  readonly start: Promise<IndexRead>;
+  start: Promise<IndexRead>;
   /** Cleared when a continuation step begins: the image of an earlier step is stale from then on. */
   settled?: Promise<IndexRead> | undefined;
   /** The first error a read of this turn's index ended on, for the undo to put on the log. */
@@ -183,6 +183,56 @@ function captureInto(root: string, record: { failure?: unknown }): Promise<Index
 export function beginTurnIndex(root: string): TurnIndexRecord {
   const record: TurnIndexRecord = { start: Promise.resolve(undefined) };
   return Object.assign(record, { start: captureInto(root, record) });
+}
+
+/** How long a human turn waits for its index start before it is posted without a proven one. */
+export const TURN_INDEX_START_WAIT_MS = 5_000;
+
+/** Why the wait for a turn's index start ended without an image (a closed vocabulary). */
+export type TurnIndexStartBound = "capture-timed-out" | "capture-aborted";
+
+/** The error the undo logs when the index start was cut short; its message is the closed value. */
+class TurnIndexStartBoundError extends Error {
+  constructor(bound: TurnIndexStartBound) {
+    super(bound);
+    this.name = "TurnIndexStartBoundError";
+  }
+}
+
+/**
+ * Waits for the turn's index start, but never longer than `timeoutMs` and never past `signal`
+ * (Stop). When the wait is cut short the start becomes `unreadable` for good, since a read that
+ * lands after the model began to stage would describe the wrong moment: the undo then reports the
+ * index `unavailable` instead of pretending a clean one. Returns the bound that cut it, if any.
+ */
+export async function awaitTurnIndexStart(
+  record: TurnIndexRecord,
+  signal: AbortSignal,
+  timeoutMs: number = TURN_INDEX_START_WAIT_MS,
+): Promise<TurnIndexStartBound | undefined> {
+  const pending = record.start;
+  let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  const bound = new Promise<TurnIndexStartBound>((resolve) => {
+    timer = setTimeout(() => {
+      resolve("capture-timed-out");
+    }, timeoutMs);
+    onAbort = (): void => {
+      resolve("capture-aborted");
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const winner = await Promise.race([pending.then(() => undefined), bound]);
+    if (winner === undefined) return undefined;
+    record.start = Promise.resolve("unreadable");
+    record.failure ??= new TurnIndexStartBoundError(winner);
+    return winner;
+  } finally {
+    clearTimeout(timer);
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 /** A continuation step begins: the image the turn settled on before it no longer describes it. */
