@@ -34,20 +34,23 @@ function fields(value: unknown): Fields | undefined {
     : undefined;
 }
 
+function hasUnsafeObjectKeys(node: ts.ObjectLiteralExpression): boolean {
+  const names = new Set<string>();
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isStringLiteral(property.name)) continue;
+    const name = property.name.text;
+    if (name === "__proto__" || names.has(name)) return true;
+    names.add(name);
+  }
+  return false;
+}
+
 function hasUnsafeKeys(root: ts.JsonSourceFile): boolean {
   const pending: ts.Node[] = [root];
   while (pending.length > 0) {
     const node = pending.pop();
     if (node === undefined) return false;
-    if (ts.isObjectLiteralExpression(node)) {
-      const names = new Set<string>();
-      for (const property of node.properties) {
-        if (!ts.isPropertyAssignment(property) || !ts.isStringLiteral(property.name)) continue;
-        const name = property.name.text;
-        if (name === "__proto__" || names.has(name)) return true;
-        names.add(name);
-      }
-    }
+    if (ts.isObjectLiteralExpression(node) && hasUnsafeObjectKeys(node)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });

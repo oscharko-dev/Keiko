@@ -11,6 +11,9 @@ import {
   type McpSettingsUpdate,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { bffFetchJson, isDeniedError } from "@/lib/http";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import {
   codingAppSessionPairingSettled,
   useCodingAppSessionRedemptions,
@@ -272,6 +275,10 @@ export async function perform(model: Model, work: () => Promise<void>): Promise<
   try {
     await work();
   } catch (error: unknown) {
+    reportClientDiagnostic(`MCP settings request failed (${clientErrorSummary(error)})`, {
+      correlationId: correlationIdOf(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
     model.patch({ error: true, needsPairing: isDeniedError(error) });
   } finally {
     model.lock.current = false;
@@ -393,6 +400,13 @@ async function checkSavedConnection(model: Model, name: string): Promise<void> {
   try {
     await connect(model, name);
   } catch (error) {
+    reportClientDiagnostic(
+      `MCP connection check after save failed (${clientErrorSummary(error)})`,
+      {
+        correlationId: correlationIdOf(error),
+        errorEvidence: clientErrorEvidence(error),
+      },
+    );
     model.patch({
       error: true,
       needsPairing: isDeniedError(error),

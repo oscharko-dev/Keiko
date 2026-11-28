@@ -10,8 +10,7 @@ import {
 import { ApiError } from "@/lib/api";
 import { bffFetchJson } from "@/lib/http";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { Icons } from "../../Icons";
-import { useSettingsTranslate, type SettingsMessageKey } from "./settings-i18n";
+import { useSettingsTranslate as useTranslate, type SettingsMessageKey } from "./settings-i18n";
 import styles from "./McpSettingsPanel.module.css";
 
 const EXAMPLE = JSON.stringify(
@@ -90,7 +89,8 @@ function useImportDraft({ path, perform, onSaved }: ImportProps): {
   issue: Issue | undefined;
   putText: (value: string) => void;
   readFile: (input: HTMLInputElement) => void;
-  review: (save: boolean) => void;
+  review: () => void;
+  edit: () => void;
 } {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<Preview>();
@@ -117,23 +117,27 @@ function useImportDraft({ path, perform, onSaved }: ImportProps): {
     perform(() => readImportFile(file, putText, setIssue));
   }
 
-  function review(save: boolean): void {
-    if (save && preview === undefined) return;
+  function review(): void {
     setIssue(undefined);
-    setPreview(undefined);
     perform(async () => {
-      const result = await requestImport(path, text, save ? preview?.revision : undefined);
+      const result = await requestImport(path, text, preview?.revision);
       if (result.kind === "saved") onSaved(result.snapshot, preview?.servers.length ?? 0);
       else if (result.kind === "preview") setPreview(result);
-      else setIssue(result);
+      else {
+        setPreview(undefined);
+        setIssue(result);
+      }
     });
   }
-
-  return { text, preview, issue, putText, readFile, review };
+  function edit(): void {
+    setPreview(undefined);
+    setIssue(undefined);
+  }
+  return { text, preview, issue, putText, readFile, review, edit };
 }
 
 function ImportError({ issue, id }: { readonly issue: Issue; readonly id: string }): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   if (issue.kind === "conflict")
     return (
       <p id={id} role="alert">
@@ -162,7 +166,7 @@ function ImportError({ issue, id }: { readonly issue: Issue; readonly id: string
 }
 
 function ImportPreview({ preview }: { readonly preview: Preview }): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => heading.current?.focus(), []);
   return (
@@ -184,7 +188,7 @@ function ImportPreview({ preview }: { readonly preview: Preview }): ReactNode {
 }
 
 export function McpSettingsImport(props: ImportProps): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   const draft = useImportDraft(props);
   const id = useId();
   return (
@@ -192,17 +196,16 @@ export function McpSettingsImport(props: ImportProps): ReactNode {
       className={styles.cmpFormCard}
       onSubmit={(event) => {
         event.preventDefault();
-        draft.review(draft.preview !== undefined);
+        draft.review();
       }}
     >
       <fieldset disabled={props.busy} className={styles.cmpForm}>
         <legend>{t("settings.mcp.importTitle")}</legend>
-        <p id={`${id}-help`}>{t("settings.mcp.importHelp")}</p>
-        <ImportTextInput {...draft} id={id} />
-        {draft.issue !== undefined && <ImportError issue={draft.issue} id={`${id}-issue`} />}
-        <div aria-live="polite">
-          {draft.preview !== undefined && <ImportPreview preview={draft.preview} />}
-        </div>
+        {draft.preview === undefined ? (
+          <ImportEditor draft={draft} id={id} />
+        ) : (
+          <ImportPreview preview={draft.preview} />
+        )}
         <div className={styles.cmpActions}>
           <button
             className={styles.cmpPrimary}
@@ -216,12 +219,34 @@ export function McpSettingsImport(props: ImportProps): ReactNode {
               draft.preview === undefined ? "settings.mcp.importCheck" : "settings.mcp.importSave",
             )}
           </button>
+          {draft.preview !== undefined && (
+            <button type="button" onClick={draft.edit}>
+              {t("settings.mcp.importEdit")}
+            </button>
+          )}
           <button type="button" onClick={props.onCancel}>
             {t("settings.mcp.cancel")}
           </button>
         </div>
       </fieldset>
     </form>
+  );
+}
+
+function ImportEditor({
+  draft,
+  id,
+}: {
+  readonly draft: ReturnType<typeof useImportDraft>;
+  readonly id: string;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      <p id={`${id}-help`}>{t("settings.mcp.importHelp")}</p>
+      <ImportTextInput {...draft} id={id} />
+      {draft.issue !== undefined && <ImportError issue={draft.issue} id={`${id}-issue`} />}
+    </>
   );
 }
 
@@ -232,7 +257,7 @@ function ImportTextInput({
   putText,
   readFile,
 }: ReturnType<typeof useImportDraft> & { readonly id: string }): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   const input = useRef<HTMLTextAreaElement>(null);
   useEffect(() => input.current?.focus(), []);
   return (
@@ -277,7 +302,7 @@ function ImportFile({
   readonly id: string;
   readonly readFile: (input: HTMLInputElement) => void;
 }): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   return (
     <>
       <label title={t("settings.mcp.importFileHelp")}>

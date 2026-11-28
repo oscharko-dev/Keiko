@@ -66,6 +66,7 @@ it("previews before saving and puts focus back on the opener after saving", asyn
   review();
   const heading = await screen.findByRole("heading", { name: "Servers to add" });
   expect(heading).toHaveFocus();
+  expect(screen.queryByRole("textbox", { name: "JSON configuration" })).toBeNull();
   expect(api.mock.calls[1]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ text }) });
   add();
   expect(await screen.findByText(/Servers added: 1/u)).toBeVisible();
@@ -88,7 +89,9 @@ it("retains the draft and requires a new preview after a conflict", async () => 
   await screen.findByRole("heading", { name: "Servers to add" });
   add();
   expect(await screen.findByRole("alert")).toHaveTextContent("changed since the review");
-  expect(json).toHaveValue(text);
+  const editor = screen.getByRole("textbox", { name: "JSON configuration" });
+  expect(editor).toHaveValue(text);
+  expect(editor).toHaveFocus();
   expect(screen.queryByRole("button", { name: "Add servers" })).toBeNull();
   expect(screen.getByRole("button", { name: "Review servers" })).toBeEnabled();
 });
@@ -112,13 +115,17 @@ it("keeps the draft but invalidates confirmation when a replacement file cannot 
   fireEvent.change(json, { target: { value: text } });
   review();
   await screen.findByRole("heading", { name: "Servers to add" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit JSON" }));
+  const editor = screen.getByRole("textbox", { name: "JSON configuration" });
+  expect(editor).toHaveValue(text);
+  expect(editor).toHaveFocus();
   const file = new File(["{}"], "settings.json");
   Object.defineProperty(file, "text", {
     value: () => Promise.reject(new Error("File unavailable")),
   });
   fireEvent.change(screen.getByLabelText("Choose JSON file"), { target: { files: [file] } });
   expect(await screen.findByRole("alert")).toHaveTextContent("could not read the file");
-  expect(json).toHaveValue(text);
+  expect(editor).toHaveValue(text);
   expect(screen.queryByRole("button", { name: "Add servers" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Import JSON" })).toHaveFocus());

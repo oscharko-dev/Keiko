@@ -111,8 +111,9 @@ test("German MCP setup checks a JSONC batch and confirms with the keyboard @smok
     ),
   });
   await panel.getByRole("button", { name: "Server prüfen" }).press("Enter");
-  const preview = panel.getByRole("region", { name: "Server zum Hinzufügen" });
+  const preview = panel.getByRole("region", { name: "Server in der Vorschau" });
   await expect(preview.getByRole("heading")).toBeFocused();
+  await expect(json).toHaveCount(0);
   await expect(preview.getByRole("listitem")).toHaveCount(2);
   await panel.screenshot({ path: testInfo.outputPath("mcp-json-preview.png") });
   await page.keyboard.press("Tab");

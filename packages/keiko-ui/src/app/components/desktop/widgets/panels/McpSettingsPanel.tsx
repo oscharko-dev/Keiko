@@ -301,9 +301,9 @@ export function McpSettingsPanel(): ReactNode {
       <SetupActions model={model} t={t} />
       <McpSettingsError model={model} t={t} />
       {imported !== undefined && (
-        <p className={styles.cmpImportSuccess} role="status">
+        <output className={styles.cmpImportSuccess}>
           {t("settings.mcp.importSuccess", { count: imported })}
-        </p>
+        </output>
       )}
       {formOpen &&
         (importOpen === true ? (

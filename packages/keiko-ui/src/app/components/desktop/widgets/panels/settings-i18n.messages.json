@@ -1695,6 +1695,10 @@
     "en": "Insert example",
     "de": "Beispiel einfügen"
   },
+  "settings.mcp.importEdit": {
+    "en": "Edit JSON",
+    "de": "JSON bearbeiten"
+  },
   "settings.mcp.importCheck": {
     "en": "Review servers",
     "de": "Server prüfen"
@@ -1705,7 +1709,7 @@
   },
   "settings.mcp.importReview": {
     "en": "Servers to add",
-    "de": "Server zum Hinzufügen"
+    "de": "Server in der Vorschau"
   },
   "settings.mcp.importPaused": {
     "en": "Keiko adds these servers disabled. Check that you trust the provider before enabling a server. Local servers can run programs on this computer.",

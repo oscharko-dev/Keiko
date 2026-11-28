@@ -425,6 +425,7 @@
 }
 
 .cmpPanel .cmpImportSuccess {
+  display: block;
   border: 1px solid var(--border-default);
   background: var(--surface-elevated);
   border-radius: 8px;
