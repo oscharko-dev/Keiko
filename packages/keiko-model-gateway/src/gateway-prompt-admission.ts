@@ -292,7 +292,7 @@ export class GatewayPromptAdmission {
     if (mark === undefined) return;
     const outcome = this.options.calibration?.record(mark, providerPromptTokens);
     if (outcome !== "implausibly-low" && outcome !== "implausibly-high") return;
-    // Counts and a digest only: the provider's figure is too small to calibrate from (#4491).
+    // Counts and a digest only: the provider's figure is outside the plausible band (#4491).
     this.log.write(
       activityLogEvent(
         USAGE_REJECTED,
