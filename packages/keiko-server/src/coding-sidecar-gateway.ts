@@ -62,6 +62,8 @@ import {
   routePromptEstimateOf,
 } from "./coding-sidecar-prompt-estimate.js";
 import {
+  calibrationLayout,
+  calibrationPromptTokens,
   promptCalibrationKey,
   type PromptCalibrationMark,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-calibration";
@@ -238,6 +240,24 @@ function observedPromptSettlement(
   return unverified;
 }
 
+function observeReportedPromptUsage(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+  usage: NormalizedResponse["usage"] | undefined,
+  promptTokens: number,
+): void {
+  // An ambiguous cache layout cannot say whether the figure is the prompt's size or only its
+  // uncached part, so it is never offered to the ledger (the shared gateway's rule).
+  if (usage !== undefined && calibrationLayout(usage) === "known")
+    recordRoutePromptUsage(reservation.calibrationMark, promptTokens);
+  runtimeCapabilityAuthenticator(deps)?.observeProviderPromptTokens?.(
+    reservation.capability,
+    promptTokens,
+    reservation.conversation,
+    reservation.modelCallId,
+  );
+}
+
 /**
  * Settles an admitted model call. `actualPromptTokens` is the provider's real reported
  * usage when known; when the outcome is uncertain (dispatched but no usage was ever observed — a
@@ -249,21 +269,18 @@ function observedPromptSettlement(
 function settlePromptTokenReservation(
   deps: UiHandlerDeps,
   reservation: PromptTokenReservation,
-  actualPromptTokens?: number,
+  reportedUsage?: NormalizedResponse["usage"],
   discardedPromptTokens = 0,
 ): PromptTokenSettlement {
+  // The shared gateway's normalized count: the whole prompt, cache tokens the provider reports
+  // beside `prompt_tokens` included, so a cache-exclusive provider cannot under-calibrate.
+  const actualPromptTokens =
+    reportedUsage === undefined ? undefined : calibrationPromptTokens(reportedUsage);
   const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
   // The run's context usage reads the prompt size the provider reported for this call: the one
   // fact every native run sends through this gateway, whatever events its runtime emits (#4359).
-  if (providerReported && !reservation.settled) {
-    recordRoutePromptUsage(reservation.calibrationMark, actualPromptTokens);
-    runtimeCapabilityAuthenticator(deps)?.observeProviderPromptTokens?.(
-      reservation.capability,
-      actualPromptTokens,
-      reservation.conversation,
-      reservation.modelCallId,
-    );
-  }
+  if (providerReported && !reservation.settled)
+    observeReportedPromptUsage(deps, reservation, reportedUsage, actualPromptTokens);
   return applyPromptTokenSettlement(deps, reservation, {
     promptTokens:
       (providerReported ? actualPromptTokens : reservation.reservedPromptTokens) +
@@ -4217,7 +4234,7 @@ async function executeBufferedGatewayChat(
   const promptSettlement = settlePromptTokenReservation(
     deps,
     promptTokenReservation,
-    response.usage.promptTokens,
+    response.usage,
     discardedPromptTokens(response),
   );
   const output = outputMetrics(response);
@@ -4866,7 +4883,7 @@ async function streamGatewayResponse(
   const promptSettlement = settlePromptTokenReservation(
     session.deps,
     promptTokenReservation,
-    response.usage.promptTokens,
+    response.usage,
     discardedPromptTokens(response),
   );
   settleStreamCompletionUsage(session, response, outcome, promptSettlement);

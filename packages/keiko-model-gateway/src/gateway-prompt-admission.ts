@@ -22,6 +22,8 @@ import {
 } from "./prompt-token-accounting.js";
 import { admitGatewayPrompt, contentPartCount } from "./prompt-admission.js";
 import {
+  calibrationLayout,
+  calibrationPromptTokens,
   promptCalibrationKey,
   promptCalibrationMark,
   type PromptCalibrationLedger,
@@ -186,16 +188,6 @@ interface AdmissionOptions {
   /** Provider-reported usage of earlier prompts of this gateway; absent keeps the local estimate. */
   readonly calibration?: PromptCalibrationLedger | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
-}
-
-/** The prompt size to calibrate from: the reported count including cache tokens it leaves out. */
-export function calibrationPromptTokens(usage: UsageMetadata): number {
-  return usage.totalPromptTokens ?? usage.promptTokens;
-}
-
-/** Whether the usage's cache layout allows the figure above to be trusted as the prompt's size. */
-export function calibrationLayout(usage: UsageMetadata): "known" | "ambiguous" {
-  return usage.promptCacheLayoutAmbiguous === true ? "ambiguous" : "known";
 }
 
 /** One logical call, including corrective retries. Retains the measured floor if counting degrades. */

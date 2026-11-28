@@ -1,6 +1,6 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { GatewayPromptTokenInput } from "./prompt-token-accounting.js";
-import type { ModelProviderConfig } from "./types.js";
+import type { ModelProviderConfig, UsageMetadata } from "./types.js";
 
 /**
  * The share of a new prompt's locally estimated growth that is added on top of the provider's
@@ -78,6 +78,16 @@ export function promptCalibrationKey(
       deployment: provider.deploymentIdentitySha256 ?? null,
     }),
   );
+}
+
+/** The prompt size to calibrate from: the reported count including cache tokens it leaves out. */
+export function calibrationPromptTokens(usage: UsageMetadata): number {
+  return usage.totalPromptTokens ?? usage.promptTokens;
+}
+
+/** Whether the usage's cache layout allows the figure above to be trusted as the prompt's size. */
+export function calibrationLayout(usage: UsageMetadata): "known" | "ambiguous" {
+  return usage.promptCacheLayoutAmbiguous === true ? "ambiguous" : "known";
 }
 
 export type PromptCalibrationInput = Pick<GatewayPromptTokenInput, "messages" | "tools">;

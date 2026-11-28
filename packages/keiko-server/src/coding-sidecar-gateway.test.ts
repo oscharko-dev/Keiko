@@ -12655,6 +12655,71 @@ describe("coding-sidecar gateway route prompt calibration", () => {
       sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
     ).toMatchObject({ reason: "prompt-tokens-exceeded", promptEstimateSource: "usage-calibrated" });
   });
+
+  // A cache-exclusive provider reports only the uncached part as prompt_tokens; the adapter puts the
+  // whole footprint in totalPromptTokens. Calibration, the run's context size and the settlement
+  // read that normalized total in the buffered AND the streamed path, and an ambiguous cache layout
+  // is never calibrated from.
+  describe.each([
+    { label: "buffered JSON", stream: false },
+    { label: "streamed SSE", stream: true },
+  ])("cache-exclusive usage, $label", ({ stream }) => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      resetGatewayInstanceCacheForTests();
+    });
+
+    async function turn(
+      messages: Message[],
+      usage: Partial<NormalizedResponse["usage"]>,
+      observed: number[] = [],
+    ): Promise<unknown> {
+      resetGatewayInstanceCacheForTests();
+      const reply = {
+        ...assistantResponse("azure-coding-model"),
+        usage: { ...assistantResponse("x").usage, ...usage },
+      };
+      vi.spyOn(Gateway.prototype, "chat").mockImplementation(() => Promise.resolve(reply));
+      vi.spyOn(Gateway.prototype, "chatStream").mockImplementation(() => streamedResponse(reply));
+      const deps = depsValue(configValue(provider(), capability()));
+      return handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "azure-coding-model", stream, messages, tools: [] }),
+        {
+          ...deps,
+          runtimeCapabilityAuthenticator: {
+            ...deps.runtimeCapabilityAuthenticator,
+            observeProviderPromptTokens: (_capability: string, tokens: number): void => {
+              observed.push(tokens);
+            },
+          } as NonNullable<UiHandlerDeps["runtimeCapabilityAuthenticator"]>,
+        },
+      );
+    }
+
+    it("calibrates and observes the total prompt count, not the uncached part", async () => {
+      const sink = captureServerLog("info");
+      const observed: number[] = [];
+      const first = firstTurn();
+      await turn(first, { promptTokens: 5_000, totalPromptTokens: 60_250 }, observed);
+      expect(observed).toEqual([60_250]);
+      await turn(extend(first, 30_000), { promptTokens: 5_000, totalPromptTokens: 61_000 });
+      const validated = sink.events.filter(
+        (event) => event.op === "coding-sidecar.gateway.request-validated",
+      );
+      expect(validated.at(-1)?.extra).toMatchObject({ promptEstimateSource: "usage-calibrated" });
+    });
+
+    it("never calibrates from a report whose cache layout is ambiguous", async () => {
+      const sink = captureServerLog("info");
+      const first = firstTurn();
+      await turn(first, { promptTokens: 60_250, promptCacheLayoutAmbiguous: true });
+      const second = await turn(extend(first, 30_000), { promptTokens: 61_000 });
+      expect(second).toMatchObject({ status: 400 });
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+      ).toMatchObject({ promptEstimateSource: "local" });
+    });
+  });
 });
 
 // Live defect M-1: a model that ends its turn with a tool call written as TEXT (`<shell .../>`,
