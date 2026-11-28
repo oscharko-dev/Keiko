@@ -1421,6 +1421,9 @@ function createSubmitTask(
     const run = readyRun(runId);
     // A delivery joins the turn in flight (`deliverPrompt`); it never starts or arms one.
     if (run === undefined || inputs?.delivery !== undefined) return false;
+    // A Stop that begins or ends after this point moves `interruptSeq`; one already running (odd) refuses.
+    const stopEpoch = run.interruptSeq;
+    if (stopEpoch % 2 === 1) return false;
     // A staged undo is finalized by the runtime on the next prompt, which rewrites the history the
     // reconciliation reads append-only; the human restores the undo or stops the run first.
     if (openCodeRevertBlocksTurn(run)) {
@@ -1434,7 +1437,7 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     await refreshedInstructions(run, sinks.refreshInstructions);
-    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin);
+    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin, stopEpoch);
   };
 }
 
@@ -1445,6 +1448,7 @@ async function armAndPostTurn(
   inputs: AdmittedPromptInputs | undefined,
   sinks: Parameters<typeof postTurnPrompt>[4],
   origin: CodingRuntimeTurnOrigin | undefined,
+  stopEpoch: number,
 ): Promise<boolean> {
   if (!run.runtimeAdapter.armTurn()) return false;
   // A step that continues the turn makes the image the turn last settled on stale.
@@ -1462,13 +1466,18 @@ async function armAndPostTurn(
       // Stop (the operator's or the lifecycle's) ended the wait, or the run went away meanwhile: no
       // prompt or slash command may reach the runtime. Only an index read that merely ran out of
       // time continues, with the start reported unavailable.
-      if (cut === "capture-aborted" || !run.ready) {
-        run.runtimeAdapter.cancelTurn();
-        return false;
-      }
+      if (cut === "capture-aborted") return cancelStoppedTurn(run);
     }
   }
+  // A Stop during any earlier await (agent switch, baseline, instructions, index start) leaves the
+  // epoch moved or the run not ready; nothing may reach the runtime then.
+  if (run.interruptSeq !== stopEpoch || !run.ready) return cancelStoppedTurn(run);
   return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+}
+
+function cancelStoppedTurn(run: ReadyRun): false {
+  run.runtimeAdapter.cancelTurn();
+  return false;
 }
 
 async function awaitIndexStart(

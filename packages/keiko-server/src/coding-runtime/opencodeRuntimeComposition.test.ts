@@ -3343,6 +3343,26 @@ describe("private OpenCode run control", () => {
     });
   });
 
+  it("never posts a prompt when Stop lands before the wait for the index start begins", async () => {
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}, {}, {}, {}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    try {
+      // The submit is still in its earlier awaits (agent, baseline, instructions) when Stop runs.
+      const submitted = fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "must not be sent");
+      const stopping = fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID);
+
+      await expect(submitted).resolves.toBe(false);
+      expect(runControl.promptBodies).toEqual([]);
+      await Promise.allSettled([stopping]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("records a body-free diagnostic when the interrupt of a stopping task throws", async () => {
     const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
     const runControl = {
