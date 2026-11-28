@@ -53,8 +53,12 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > stays `failed / signing-failed`. A configuration value that cannot be read or is malformed fails
 > closed toward signing, and the closed class of the read failure is logged with its frames and
 > cause chain. The decision is logged as the closed `signing` field (`configured`,
-> `required-by-branch-protection`, `not-configured`, `unknown-fail-closed`) on `git.verified-commit`
-> and `git.delivery.mutation.completed`.
+> `required-by-branch-protection`, `not-configured`, `not-configured-protection-unavailable`,
+> `unknown-fail-closed`) on `git.verified-commit` and `git.delivery.mutation.completed`; the
+> fourth value records that the branch-protection read could not answer, so an unsigned commit that
+> a protected branch later rejects at push is explained from the log. The 2026-09-15 amendment's
+> "must not suppress signing" is read through this clarification: Keiko follows the repository's own
+> Git configuration like plain Git and never adds `--no-gpg-sign`.
 
 ## Context
 

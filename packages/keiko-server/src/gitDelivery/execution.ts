@@ -315,6 +315,7 @@ const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
         "configured",
         "required-by-branch-protection",
         "not-configured",
+        "not-configured-protection-unavailable",
         "unknown-fail-closed",
       ],
     },
@@ -929,14 +930,35 @@ async function signatureRequirementAt(
   seams: GitDeliveryExecutionSeams,
   correlationId: string | undefined,
 ): Promise<GitDeliverySignatureRequirement> {
+  return (await signatureAnswerAt(workspace, branchName, remoteAliases, seams, correlationId))
+    .requirement;
+}
+
+/** The verdict, and whether the branch-protection reader was asked at all (it needs a branch and a remote). */
+interface SignatureAnswer {
+  readonly requirement: GitDeliverySignatureRequirement;
+  readonly asked: boolean;
+}
+
+async function signatureAnswerAt(
+  workspace: WorkspaceInfo,
+  branchName: string | undefined,
+  remoteAliases: readonly string[],
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): Promise<SignatureAnswer> {
   const remoteAlias = preferredRemoteAlias(remoteAliases);
-  if (branchName === undefined || remoteAlias === undefined) return "unavailable";
+  if (branchName === undefined || remoteAlias === undefined)
+    return { requirement: "unavailable", asked: false };
   const reader =
     seams.branchProtectionReader ??
     createTrustedGitDeliveryBranchProtectionReader(
       gitDeliveryTerminationHandler(seams, correlationId),
     );
-  return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
+  return {
+    requirement: signatureRequirementOf(await reader(workspace, remoteAlias, branchName)),
+    asked: true,
+  };
 }
 
 /**
@@ -958,8 +980,8 @@ async function signatureRequirementOfVerifiedBranch(
   branchName: string | undefined,
   seams: GitDeliveryExecutionSeams,
   correlationId: string | undefined,
-): Promise<GitDeliverySignatureRequirement> {
-  if (branchName === undefined) return "unavailable";
+): Promise<SignatureAnswer> {
+  if (branchName === undefined) return { requirement: "unavailable", asked: false };
   const aliases = await readGitRemoteAliases({
     workspace,
     processEnv: process.env,
@@ -967,7 +989,7 @@ async function signatureRequirementOfVerifiedBranch(
     onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
     ...(seams.readSession === undefined ? {} : { readSession: seams.readSession }),
   });
-  return signatureRequirementAt(workspace, branchName, aliases, seams, correlationId);
+  return signatureAnswerAt(workspace, branchName, aliases, seams, correlationId);
 }
 
 function adapterFor(
@@ -989,13 +1011,17 @@ function adapterFor(
     // The trusted branch-protection verdict, read at execution time on the server (never from the
     // request): a branch that requires signatures makes the commit sign even without
     // `commit.gpgsign` (ADR-0006).
-    signingRequiredByBranchProtection: async (): Promise<boolean> =>
-      (await signatureRequirementOfVerifiedBranch(
+    signingRequiredByBranchProtection: async (): Promise<boolean | "unavailable"> => {
+      const answer = await signatureRequirementOfVerifiedBranch(
         workspace,
         verifiedBranchName,
         seams,
         correlationId,
-      )) === "required",
+      );
+      // A repository with no remote asks nothing, so there is no missing verdict to record.
+      if (answer.requirement === "unavailable" && answer.asked) return "unavailable";
+      return answer.requirement === "required";
+    },
     onSigningReadFailure: (report): void => {
       logGitDeliverySigningReadFailure(
         seams.activityLog ?? processServerLogSink(),

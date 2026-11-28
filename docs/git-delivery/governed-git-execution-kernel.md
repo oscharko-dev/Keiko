@@ -157,7 +157,7 @@ signer cannot produce a verifiable commit, execution fails closed with `signatur
 leaves no unsigned commit behind. A `commit.gpgsign` read that fails or is malformed attempts to
 sign, and the closed class of the failure is logged. The decision is recorded as the closed
 `signing` field (`configured`, `required-by-branch-protection`, `not-configured`,
-`unknown-fail-closed`).
+`not-configured-protection-unavailable`, `unknown-fail-closed`).
 
 ## 8. What this kernel does not do
 

@@ -479,12 +479,15 @@ export interface GitDeliveryPartialDetail {
 // log vocabularies. `configured` signs because Git's effective `commit.gpgsign` is true;
 // `required-by-branch-protection` signs because the trusted branch-protection read says the target
 // branch requires signatures although `commit.gpgsign` is not true; `not-configured` commits as Git
-// itself would, unsigned; `unknown-fail-closed` could not read a trustworthy value and therefore
+// itself would, unsigned; `not-configured-protection-unavailable` is the same unsigned commit made
+// while the branch-protection read could not answer (unknown is never "required", but the log says
+// the verdict was missing); `unknown-fail-closed` could not read a trustworthy value and therefore
 // attempts to sign.
 export const GIT_COMMIT_SIGNING_DECISIONS = [
   "configured",
   "required-by-branch-protection",
   "not-configured",
+  "not-configured-protection-unavailable",
   "unknown-fail-closed",
 ] as const;
 export type GitCommitSigningDecision = (typeof GIT_COMMIT_SIGNING_DECISIONS)[number];

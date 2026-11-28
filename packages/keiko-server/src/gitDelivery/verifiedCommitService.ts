@@ -1,5 +1,5 @@
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
-import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   readGitRawWorktreeSnapshotAtHead,
@@ -257,6 +257,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
         "configured",
         "required-by-branch-protection",
         "not-configured",
+        "not-configured-protection-unavailable",
         "unknown-fail-closed",
       ],
     },

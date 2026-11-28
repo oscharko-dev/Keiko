@@ -419,6 +419,16 @@ describe("node git mutation adapter — signing read failures and branch protect
     expect(seen.result.signing).toBe("not-configured");
   });
 
+  it("commits unsigned and records that the branch-protection read was unavailable", async () => {
+    const seen = await observe(answer("", 1), {
+      signingRequiredByBranchProtection: () => Promise.resolve("unavailable"),
+    });
+
+    expect(seen.argv).not.toContain("--gpg-sign");
+    expect(seen.argv).not.toContain("--no-gpg-sign");
+    expect(seen.result.signing).toBe("not-configured-protection-unavailable");
+  });
+
   it("does not consult branch protection when commit.gpgsign already signs", async () => {
     let consulted = false;
     const seen = await observe(answer("true\n", 0), {

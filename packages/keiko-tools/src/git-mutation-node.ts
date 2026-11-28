@@ -103,7 +103,7 @@ export interface NodeGitMutationAdapterDeps {
    * input; unknown, unavailable or no remote is `false`. A rejection propagates, so the commit is
    * not made on a state that could not be proved (ADR-0006).
    */
-  readonly signingRequiredByBranchProtection?: (() => Promise<boolean>) | undefined;
+  readonly signingRequiredByBranchProtection?: (() => Promise<boolean | "unavailable">) | undefined;
   /** Injected log port for a failed `commit.gpgsign` read (frames and cause chain stay with the owner). */
   readonly onSigningReadFailure?: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
   /** Re-proves live server authority immediately before the sole ref-changing effect. */
@@ -221,7 +221,7 @@ interface RunContext {
   readonly beforeCommitRefUpdate: (() => boolean) | undefined;
   readonly beforeIndexUpdate: (() => boolean) | undefined;
   readonly readSession: GitReadSession | undefined;
-  readonly signingRequiredByBranchProtection: (() => Promise<boolean>) | undefined;
+  readonly signingRequiredByBranchProtection: (() => Promise<boolean | "unavailable">) | undefined;
   readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
 }
 
@@ -502,7 +502,7 @@ async function execCommit(
     signing: read.decision,
     ...(read.failure === undefined ? {} : { signingReadFailure: read.failure.readFailure }),
   };
-  const sign = read.decision !== "not-configured";
+  const sign = !UNSIGNED_SIGNING_DECISIONS.has(read.decision);
   if (request.verified !== undefined) {
     return { ...(await execVerifiedCommit(ctx, request, sign)), ...signing };
   }
@@ -518,6 +518,12 @@ async function execCommit(
     return { ...failureFromThrow(error, result.durationMs, 1), ...signing };
   }
 }
+
+// The decisions that commit exactly as Git would, with neither `--gpg-sign` nor `--no-gpg-sign`.
+const UNSIGNED_SIGNING_DECISIONS: ReadonlySet<GitCommitSigningDecision> = new Set([
+  "not-configured",
+  "not-configured-protection-unavailable",
+]);
 
 interface CommitSigningRead {
   readonly decision: GitCommitSigningDecision;
@@ -552,8 +558,10 @@ async function readCommitSigning(ctx: RunContext): Promise<CommitSigningRead> {
   const configured = await readConfiguredCommitSigning(ctx);
   if (configured.failure !== undefined) ctx.onSigningReadFailure?.(configured.failure);
   if (configured.decision !== "not-configured") return configured;
-  return (await ctx.signingRequiredByBranchProtection?.()) === true
-    ? { decision: "required-by-branch-protection" }
+  const protection = await ctx.signingRequiredByBranchProtection?.();
+  if (protection === true) return { decision: "required-by-branch-protection" };
+  return protection === "unavailable"
+    ? { decision: "not-configured-protection-unavailable" }
     : configured;
 }
 

@@ -1496,6 +1496,22 @@ describe("verified Code-task commit service", () => {
       ),
     ).toBe(true);
   });
+  it("commits unsigned and records that the branch-protection read was unavailable", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    withProtection(() => Promise.resolve({ outcome: "unavailable" }));
+    const id = await verifiedProposal();
+    await expect(service.execute(id, await claim(id))).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    expect(git(["log", "-1", "--format=%G?"])).toBe("N");
+    expect(
+      events.some(
+        (event) =>
+          event.extra?.phase === "result" &&
+          event.extra.signing === "not-configured-protection-unavailable",
+      ),
+    ).toBe(true);
+  });
   it("signs an unset commit.gpgsign when branch protection requires signatures", async () => {
     git(["config", "--unset", "commit.gpgsign"]);
     withProtection(requiresSignatures);
