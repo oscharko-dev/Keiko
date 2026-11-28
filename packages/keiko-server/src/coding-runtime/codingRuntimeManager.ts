@@ -3370,10 +3370,9 @@ function sidecarRuntimeEvent(
     });
   }
   const shown = shownVerification(event, active);
-  if (!observeCodingToolApproval(active, event, request.actionKind, shown)) {
+  if (!observeAskWithReview(active, event, request.actionKind, shown)) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event, shown));
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
@@ -3765,19 +3764,20 @@ function withAskedCallId(
 }
 
 /**
- * Supervised workspace asks leave through `supervisedMutationEvent`, not the generic branch, so the
- * review the card is built from is remembered here too (U-27): without it a task-branch card had
- * no name and no enabled Approve. A branch ask whose name cannot be verified returns false: it
- * fails closed and says so instead of showing a card nobody can approve.
+ * The one place a pending ask is observed and its review remembered, shared by the generic and the
+ * Supervised workspace path (U-27): without the review a task-branch card has no name and no
+ * enabled Approve. A branch ask whose name cannot be verified returns false BEFORE anything is
+ * registered: it fails closed instead of showing a card nobody can approve.
  */
-function observeSupervisedAsk(
+function observeAskWithReview(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
-  actionKind: CodingWorkbenchSupervisedActionKind,
+  actionKind: CodingWorkbenchSupervisedActionKind | undefined,
+  shown?: CodingVerificationPreviewResult,
 ): boolean {
-  if (!observeCodingToolApproval(active, event, actionKind)) return false;
-  const review = approvalReviewFacts(event, undefined);
-  if (actionKind === "git-branch" && review === undefined) return false;
+  const review = approvalReviewFacts(event, shown);
+  if (event.actionKind === "git-branch" && review === undefined) return false;
+  if (!observeCodingToolApproval(active, event, actionKind, shown)) return false;
   rememberApprovalReview(active.pendingApprovalReviews, review);
   return true;
 }
@@ -3812,7 +3812,7 @@ function supervisedMutationEvent(
     operatorStopped: false,
   });
   if (decision.status === "approval-required" && decision.permissionRequest !== undefined) {
-    if (!observeSupervisedAsk(active, event, actionKind)) {
+    if (!observeAskWithReview(active, event, actionKind)) {
       return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
     }
     return runtimeEvent(active, sequence, "permission-requested", {

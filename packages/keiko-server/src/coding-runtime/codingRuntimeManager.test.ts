@@ -3567,76 +3567,86 @@ describe("coding runtime manager", () => {
     },
   );
 
-  it("fails a Supervised workspace task-branch ask that names no branch closed, without an approvable card (U-27)", async () => {
-    const fixture = createManagedFixture();
-    const harness = createSpawnHarness();
-    const events: CodingWorkbenchRuntimeEvent[] = [];
-    const codingToolApprovals = createCodingToolApprovalBridge();
-    const manager = createTestCodingRuntimeManager({
-      supervisor: testSupervisor(harness.spawn),
-      processEnv: {},
-      codingToolApprovals,
-      onRuntimeEvent: (event) => {
-        events.push(event);
-      },
-      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
-      nowIso: () => "2026-07-07T13:00:00.000Z",
-    });
-    await manager.start({
-      ...governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
-      requestedMode: "supervised-coding",
-      effectiveMode: "supervised-coding",
-    });
-    const proofId = "session:branch-call";
-    const digest = codingToolApprovalBindingDigest("run-1991", {
-      action: "git",
-      operation: "branch",
-      branchName: "feature/x",
-      actionId: proofId,
-      idempotencyKey: proofId,
-    });
-    const projected = projectOpenCodePermissionEvent(
-      {
-        id: "evt_branch",
-        type: "permission.asked",
-        properties: {
-          id: "per_branch",
-          sessionID: "ses_1",
-          permission: OPENCODE_GOVERNED_ACTION_PERMISSION,
-          patterns: ["branch"],
-          always: [],
-          metadata: {
-            kind: "command-execution",
-            actionClass: "command-execution",
-            reasonCode: "approval-required",
-            expiresAt: "2026-07-07T13:05:00.000Z",
-            actionKind: "git-branch",
-            scopeLabel: "workspace-scope",
-            risk: "medium",
-            policyReason: "approval-required",
-            commandLabel: "branch",
-            actionId: proofId,
-            idempotencyKey: proofId,
-            approvalId: proofId,
-            approvalDigest: digest,
-            targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
-            branchName: "feature/x",
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "fails a %s task-branch ask that names no branch closed, without an approvable card (U-27)",
+    async (mode) => {
+      const fixture = createManagedFixture();
+      const harness = createSpawnHarness();
+      const events: CodingWorkbenchRuntimeEvent[] = [];
+      const codingToolApprovals = createCodingToolApprovalBridge();
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        codingToolApprovals,
+        onRuntimeEvent: (event) => {
+          events.push(event);
+        },
+        now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+        nowIso: () => "2026-07-07T13:00:00.000Z",
+      });
+      await manager.start({
+        ...governedAssistRequest(
+          fixture.workspaceRoot,
+          fixture.managedRoot,
+          fixture.executablePath,
+        ),
+        requestedMode: mode,
+        effectiveMode: mode,
+      });
+      const proofId = "session:branch-call";
+      const digest = codingToolApprovalBindingDigest("run-1991", {
+        action: "git",
+        operation: "branch",
+        branchName: "feature/x",
+        actionId: proofId,
+        idempotencyKey: proofId,
+      });
+      const projected = projectOpenCodePermissionEvent(
+        {
+          id: "evt_branch",
+          type: "permission.asked",
+          properties: {
+            id: "per_branch",
+            sessionID: "ses_1",
+            permission: OPENCODE_GOVERNED_ACTION_PERMISSION,
+            patterns: ["branch"],
+            always: [],
+            metadata: {
+              kind: "command-execution",
+              actionClass: "command-execution",
+              reasonCode: "approval-required",
+              expiresAt: "2026-07-07T13:05:00.000Z",
+              actionKind: "git-branch",
+              scopeLabel: "workspace-scope",
+              risk: "medium",
+              policyReason: "approval-required",
+              commandLabel: "branch",
+              actionId: proofId,
+              idempotencyKey: proofId,
+              approvalId: proofId,
+              approvalDigest: digest,
+              targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+              branchName: "feature/x",
+            },
           },
         },
-      },
-      "ses_1",
-    );
-    if (projected === undefined) throw new Error("expected governed branch projection");
-    const { branchName: _omitted, ...nameless } = projected;
-    harness.children[0]?.stdout.write(`${JSON.stringify(nameless)}\n`);
-    await settle();
+        "ses_1",
+      );
+      if (projected === undefined) throw new Error("expected governed branch projection");
+      const { branchName: _omitted, ...nameless } = projected;
+      harness.children[0]?.stdout.write(`${JSON.stringify(nameless)}\n`);
+      await settle();
 
-    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
-    expect(events).toContainEqual(
-      expect.objectContaining({ kind: "failure-redacted", failureSummary: "approval-proof-stale" }),
-    );
-    expect(manager.pendingApprovalReview("run-1991", projected.requestId)).toBeUndefined();
-  });
+      expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          kind: "failure-redacted",
+          failureSummary: "approval-proof-stale",
+        }),
+      );
+      expect(manager.pendingApprovalReview("run-1991", projected.requestId)).toBeUndefined();
+    },
+  );
 
   // Lab 2026-11-27: in Supervised workspace the governed ask is rebuilt by the supervised policy, which
   // dropped the id of the call it holds back, so the tool row kept reading "Running" beside the card.
