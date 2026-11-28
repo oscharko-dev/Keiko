@@ -1724,6 +1724,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The workspace could not be bound. Review the repository path and target branch.",
   "codingWorkbench.alert.runRefreshFailed": "Run could not be refreshed.",
   "codingWorkbench.alert.eventStreamRefreshFailed": "Event stream could not be refreshed.",
+  "codingWorkbench.status.eventStreamWaitingForConnection":
+    "Waiting for a free connection. Another Keiko tab is using it.",
   "codingWorkbench.status.eventStreamReconnecting":
     "Live updates were interrupted. Reconnecting to the event stream…",
   "codingWorkbench.issue.resolving": "Reading linked issue…",

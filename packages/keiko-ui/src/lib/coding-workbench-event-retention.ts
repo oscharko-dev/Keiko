@@ -81,6 +81,11 @@ export interface CodingWorkbenchRuntimeStreamHandlers {
    * the stream silent, and an unreadable frame.
    */
   readonly onReconnecting?: () => void;
+  /**
+   * The stream waits for a free browser connection another Keiko tab holds (true), or no longer
+   * does (false). A status, never a failure.
+   */
+  readonly onCapacityWaiting?: (waiting: boolean) => void;
   readonly onReset: () => Promise<void>;
 }
 
@@ -324,8 +329,17 @@ export function useCodingWorkbenchRuntimeEventStream(
         handlersRef.current.onError(error);
       }
     };
-    // The stream opens only once an origin-wide connection slot admits it.
-    admission = admitDirectBrowserStream(openSession);
+    // The stream opens only once an origin-wide connection slot admits it. While this document is
+    // hidden it gives the slot to a visible tab's essential stream; it reopens (a fresh session
+    // snapshots the run) when the slot is granted again.
+    admission = admitDirectBrowserStream(openSession, {
+      yieldWhenHidden: true,
+      onYield: () => {
+        session?.close();
+        session = undefined;
+      },
+      onWaiting: (waiting) => handlersRef.current.onCapacityWaiting?.(waiting),
+    });
     return (): void => {
       session?.close();
       admission?.release();

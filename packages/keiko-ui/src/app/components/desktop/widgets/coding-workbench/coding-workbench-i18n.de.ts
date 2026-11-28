@@ -1791,6 +1791,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.runRefreshFailed": "Lauf konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.eventStreamRefreshFailed":
     "Ereignisstrom konnte nicht aktualisiert werden.",
+  "codingWorkbench.status.eventStreamWaitingForConnection":
+    "Warten auf eine freie Verbindung. Ein anderer Keiko-Tab belegt sie.",
   "codingWorkbench.status.eventStreamReconnecting":
     "Die Live-Aktualisierung wurde unterbrochen. Verbindung zum Ereignisstrom wird wiederhergestellt…",
   "codingWorkbench.issue.resolving": "Verlinktes Issue wird gelesen…",

@@ -27,12 +27,16 @@ class OpenedEventSource {
   }
 }
 
-function runStream(onError: () => void): { unmount: () => void } {
+function runStream(
+  onError: () => void,
+  onCapacityWaiting?: (waiting: boolean) => void,
+): { unmount: () => void } {
   return renderHook(() =>
     useCodingWorkbenchRuntimeEventStream("run-1", 0, {
       onOpen: vi.fn(),
       onEvents: vi.fn(),
       onError,
+      ...(onCapacityWaiting === undefined ? {} : { onCapacityWaiting }),
       onReset: vi.fn(() => Promise.resolve()),
     }),
   );
@@ -42,6 +46,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   OpenedEventSource.instances = [];
   vi.stubGlobal("EventSource", OpenedEventSource);
+  Reflect.deleteProperty(document, "visibilityState");
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: createOriginLocksFixture(),
@@ -56,23 +61,26 @@ afterEach(() => {
 });
 
 describe("the Workbench run stream under full stream occupancy", () => {
-  it("opens once an essential holder frees a slot, without an error or a remount", async () => {
+  it("says it waits for a connection, then opens once a holder frees a slot, without an error", async () => {
     const onError = vi.fn();
+    const onWaiting = vi.fn();
     const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    const view = runStream(onError);
+    const view = runStream(onError, onWaiting);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(OpenedEventSource.instances).toHaveLength(0);
+    expect(onWaiting.mock.calls).toEqual([[true]]);
     held[0]?.release();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(35_000);
     });
     // At least one: a silent stream is also reopened by the session's own stale watchdog.
     expect(OpenedEventSource.instances.length).toBeGreaterThan(0);
+    expect(onWaiting.mock.calls).toEqual([[true], [false]]);
     expect(onError).not.toHaveBeenCalled();
     view.unmount();
     held.forEach((admission) => admission.release());
@@ -92,6 +100,34 @@ describe("the Workbench run stream under full stream occupancy", () => {
     });
     expect(OpenedEventSource.instances).toHaveLength(1);
     expect(yielded).toHaveBeenCalledTimes(1);
+    view.unmount();
+    held.forEach((admission) => admission.release());
+  });
+
+  it("closes a hidden tab's run stream for a visible tab's essential stream and reopens it later", async () => {
+    const held = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
+    const view = runStream(vi.fn());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(OpenedEventSource.instances).toHaveLength(1);
+    // Another tab's run stream queues for a slot while this document goes into the background.
+    const admitted = vi.fn();
+    const otherTab = admitDirectBrowserStream(admitted);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(OpenedEventSource.instances[0]?.close).toHaveBeenCalled();
+    expect(admitted).toHaveBeenCalledOnce();
+    otherTab.release();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(OpenedEventSource.instances).toHaveLength(2);
     view.unmount();
     held.forEach((admission) => admission.release());
   });

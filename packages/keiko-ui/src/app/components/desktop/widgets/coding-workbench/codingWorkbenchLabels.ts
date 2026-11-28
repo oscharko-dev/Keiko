@@ -733,6 +733,8 @@ export function visibleStatusNotice(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
 ): string | null {
+  if (state.streamCapacityWaiting)
+    return t("codingWorkbench.status.eventStreamWaitingForConnection");
   return state.stream.status === "loading"
     ? t("codingWorkbench.status.eventStreamReconnecting")
     : null;

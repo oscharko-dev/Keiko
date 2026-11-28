@@ -253,19 +253,41 @@ async function connectActivity(
   // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
   // subscription here turns a later server restart into an error on an already finished task.
   if (controller.signal.aborted || endedBeforeRead) return;
-  const release = await admitDirectBrowserStreamAsync(controller.signal);
+  // While this document is hidden the stream gives its connection to a visible tab's essential
+  // stream; it is then reopened from a fresh snapshot once a slot is granted again.
+  let resumed = false;
+  while (await streamUntilYielded(controller, enqueue, resumed)) resumed = true;
+}
+
+// Resolves true when the stream gave its slot up and has to be opened again.
+async function streamUntilYielded(
+  controller: AbortController,
+  enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void,
+  resumed: boolean,
+): Promise<boolean> {
+  const yielded = new AbortController();
+  const release = await admitDirectBrowserStreamAsync(controller.signal, {
+    yieldWhenHidden: true,
+    onYield: () => yielded.abort(),
+  });
   if (release === null) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted) return false;
     throw new Error("Workbench activity stream capacity unavailable");
   }
   try {
+    // What happened while the stream was closed is read again, never assumed.
+    if (resumed) enqueue(await getCodingAppSessionChannelSnapshot(controller.signal));
     await streamCodingAppSessionChannelSnapshots({
-      signal: controller.signal,
-      onSnapshot: (snapshot) => enqueue(snapshot),
+      signal: AbortSignal.any([controller.signal, yielded.signal]),
+      onSnapshot: enqueue,
     });
+  } catch (error) {
+    // An abort the yield caused is the intended end of this connection, not a failure.
+    if (!yielded.signal.aborted || controller.signal.aborted) throw error;
   } finally {
     release();
   }
+  return yielded.signal.aborted && !controller.signal.aborted;
 }
 
 function markDisconnected(

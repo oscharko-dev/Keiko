@@ -7,6 +7,11 @@ import {
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { ApiError } from "./api";
+import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+} from "./browser-stream-capacity";
 import { CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT } from "./useCodingWorkbenchEarlierRunFeeds";
 import { correlationIdOf } from "./client-error-summary";
 import type { CodingAppSessionStreamInput } from "./coding-app-session-channel-api";
@@ -1301,5 +1306,65 @@ describe("useCodingWorkbenchSafeActivity final activity confirmation", () => {
     );
     expect(view.result.current.status).toBe("ended");
     expect(view.result.current.finalConfirmed).not.toBe(true);
+  });
+});
+
+describe("useCodingWorkbenchSafeActivity under origin stream capacity", () => {
+  beforeEach(() => {
+    getSnapshotMock.mockReset();
+    streamSnapshotsMock.mockReset();
+    getSnapshotMock.mockResolvedValue(snapshot());
+    holdStreamUntilAbort();
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("closes a hidden tab's stream for a visible tab's essential stream and reopens it from a fresh snapshot", async () => {
+    const held = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await advance(50);
+    expect(view.result.current.status).toBe("live");
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(1);
+    const admitted = vi.fn();
+    const otherTab = admitDirectBrowserStream(admitted);
+    await advance(0);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    await advance(10_000);
+    const first = streamSnapshotsMock.mock.calls[0]?.[0] as CodingAppSessionStreamInput;
+    expect(first.signal?.aborted).toBe(true);
+    expect(admitted).toHaveBeenCalledOnce();
+    // A yield is not a lost connection: no failure and no reconnect attempt.
+    expect(view.result.current.status).toBe("live");
+    otherTab.release();
+    await advance(5_000);
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(2);
+    expect(getSnapshotMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(view.result.current.status).toBe("live");
+    view.unmount();
+    held.forEach((admission) => admission.release());
   });
 });

@@ -8801,6 +8801,15 @@ describe("CodingWorkbenchWindow live-region and stream-status semantics", () => 
     expect(screen.queryByText("Event stream could not be refreshed.")).not.toBeInTheDocument();
   });
 
+  it("says a run stream waits for a connection another tab uses, as a polite status", () => {
+    renderWorkbench(liveState({ run: runningRun, streamCapacityWaiting: true }));
+
+    const status = screen.getByText(/Waiting for a free connection/u);
+    expect(status.tagName).toBe("OUTPUT");
+    expect(status.closest("[role='alert']")).toBeNull();
+    expect(screen.getByText(/Another Keiko tab is using it/u)).toBe(status);
+  });
+
   it("escalates to an assertive alert once the stream is reported failed", () => {
     renderWorkbench(
       liveState({

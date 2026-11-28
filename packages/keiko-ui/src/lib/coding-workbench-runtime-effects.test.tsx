@@ -31,6 +31,11 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+  STREAM_WAITING_THRESHOLD_MS,
+} from "./browser-stream-capacity";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { fetchCodingWorkbenchSidecarGatewayProfile } from "./coding-workbench-provider-api";
 
@@ -848,6 +853,56 @@ describe("useCodingWorkbenchRuntimeStream reconnect reporting", () => {
       );
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("useCodingWorkbenchRuntimeStream capacity wait reporting", () => {
+  class QuietEventSource {
+    public onopen: ((event: Event) => void) | null = null;
+    public onerror: ((event: Event) => void) | null = null;
+    public readyState = 0;
+    public readonly close = vi.fn();
+    public addEventListener = vi.fn();
+    public removeEventListener = vi.fn();
+  }
+
+  it("projects a long wait for a free connection as a status and clears it once admitted", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", QuietEventSource);
+    resetBrowserStreamCapacityForTests();
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    try {
+      const dispatch = vi.fn();
+      const stateRef = { current: createInitialCodingWorkbenchRuntimeState() };
+      renderHook(() => {
+        useCodingWorkbenchRuntimeStream({
+          runId: "run-1",
+          streamEpoch: 0,
+          stateRef,
+          refreshRun: () => Promise.resolve(),
+          dispatch,
+          setStreamEpoch: vi.fn(),
+        });
+      });
+      act(() => {
+        vi.advanceTimersByTime(STREAM_WAITING_THRESHOLD_MS);
+      });
+      expect(dispatch).toHaveBeenCalledWith({ kind: "stream-capacity-waiting", waiting: true });
+      expect(dispatch).not.toHaveBeenCalledWith({
+        kind: "stream-capacity-waiting",
+        waiting: false,
+      });
+      held[0]?.release();
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(dispatch).toHaveBeenCalledWith({ kind: "stream-capacity-waiting", waiting: false });
+    } finally {
+      held.forEach((admission) => admission.release());
+      resetBrowserStreamCapacityForTests();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
     }
   });
 });

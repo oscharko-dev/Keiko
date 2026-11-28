@@ -445,6 +445,26 @@ describe("Coding Workbench live state", () => {
   });
 });
 
+describe("a run stream that waits for a free browser connection", () => {
+  it("records the wait and clears it without touching the stream resource", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(initial.streamCapacityWaiting).toBe(false);
+    const waiting = codingWorkbenchRuntimeReducer(initial, {
+      kind: "stream-capacity-waiting",
+      waiting: true,
+    });
+    expect(waiting.streamCapacityWaiting).toBe(true);
+    expect(waiting.stream).toBe(initial.stream);
+    expect(
+      codingWorkbenchRuntimeReducer(waiting, { kind: "stream-capacity-waiting", waiting: true }),
+    ).toBe(waiting);
+    expect(
+      codingWorkbenchRuntimeReducer(waiting, { kind: "stream-capacity-waiting", waiting: false })
+        .streamCapacityWaiting,
+    ).toBe(false);
+  });
+});
+
 describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
   function startable(pairing: CodingWorkbenchPairingState | null): CodingWorkbenchRuntimeState {
     return codingWorkbenchRuntimeReducer(readyState(false, pairing), {

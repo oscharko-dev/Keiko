@@ -198,6 +198,12 @@ export interface CodingWorkbenchRuntimeState {
   readonly workspace: CodingWorkbenchResourceState<CodingWorkbenchWorkspaceProjection>;
   readonly run: CodingWorkbenchResourceState<CodingWorkbenchRuntimeSnapshot>;
   readonly stream: CodingWorkbenchResourceState<CodingWorkbenchStreamProjection>;
+  /**
+   * The run stream is still waiting for a free browser connection another Keiko tab holds. Set by
+   * the capacity admission once the wait passes its threshold and cleared when the stream is
+   * admitted; it only explains the wait and never changes what the run may do.
+   */
+  readonly streamCapacityWaiting: boolean;
   readonly mutation: CodingWorkbenchMutationState;
   /**
    * Whether the last completed source read admitted the model. A read that is merely in flight or
@@ -235,6 +241,7 @@ export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "run-set"; readonly snapshot: CodingWorkbenchRuntimeSnapshot }
   | { readonly kind: "stream-set"; readonly stream: CodingWorkbenchStreamProjection }
   | { readonly kind: "stream-reconnecting" }
+  | { readonly kind: "stream-capacity-waiting"; readonly waiting: boolean }
   | {
       readonly kind: "resource-failed";
       readonly resource: CodingWorkbenchResourceKey;
@@ -306,6 +313,7 @@ export function createInitialCodingWorkbenchRuntimeState(
     workspace: emptyResource(),
     run: emptyResource(),
     stream: emptyResource(),
+    streamCapacityWaiting: false,
     mutation: IDLE_MUTATION,
     confirmedSourceAdmitted: false,
     events: [],
@@ -834,6 +842,10 @@ const runtimeActionHandlers = {
   "stream-set": (state, action): CodingWorkbenchRuntimeState =>
     acceptStreamProjection(state, action.stream),
   "stream-reconnecting": (state): CodingWorkbenchRuntimeState => markStreamReconnecting(state),
+  "stream-capacity-waiting": (state, action): CodingWorkbenchRuntimeState =>
+    state.streamCapacityWaiting === action.waiting
+      ? state
+      : { ...state, streamCapacityWaiting: action.waiting },
   "mutation-start": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
