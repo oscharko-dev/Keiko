@@ -5236,6 +5236,21 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
+  // A stale window retries too: it gets the same named, recoverable refusal as a start, not the
+  // generic invalid intent.
+  it("refuses a retry that states no repository with the named reload reason", async () => {
+    const f = fixture();
+    const { expectedWorkspace: _stated, ...unstated } = start;
+
+    expect(
+      await f.orchestrator.retry("run-1", unstated, "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b15"),
+    ).toEqual({
+      ok: false,
+      failureCode: "expected-workspace-missing",
+    });
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+  });
+
   it("requires recovery acknowledgement before fresh retry and records a predecessor", async () => {
     const f = fixture();
     await f.orchestrator.start(start);

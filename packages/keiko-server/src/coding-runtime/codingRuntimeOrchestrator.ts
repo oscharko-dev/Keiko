@@ -2429,6 +2429,9 @@ export class CodingRuntimeOrchestrator {
 
   retry(runId: string, input: unknown, correlationId?: string): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
+      if (statesNoExpectedWorkspace(input)) {
+        return this.refuseStartScope({ gap: "expected-workspace-missing" }, correlationId);
+      }
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
       if (prior?.state !== "recovery-required" || !prior.recoveryAcknowledgedAt)
