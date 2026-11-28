@@ -924,7 +924,27 @@ export interface CodingWorkbenchRuntimeRevertState {
   readonly fileCount: number;
   readonly additions: number;
   readonly deletions: number;
+  /** What the undo did to the Git index; absent when the turn staged nothing (U-34b). */
+  readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
 }
+
+/**
+ * What an undo did to the paths the undone turn staged through Keiko's governed staging (U-34b).
+ * `restored`: they are unstaged again, back to their state when the turn began. `partial`: some
+ * could not be put back. `changed-after-turn`: the index changed after the turn, so it was left as
+ * it is. `head-moved`: the turn committed, so the index was left as it is. `unavailable`: the index
+ * could not be read or written. Everything but `restored` means staged changes may remain.
+ */
+export const CODING_WORKBENCH_RUNTIME_REVERT_INDEX_OUTCOMES = [
+  "restored",
+  "partial",
+  "changed-after-turn",
+  "head-moved",
+  "unavailable",
+] as const;
+
+export type CodingWorkbenchRuntimeRevertIndexOutcome =
+  (typeof CODING_WORKBENCH_RUNTIME_REVERT_INDEX_OUTCOMES)[number];
 
 /** Session facet of the revert channel: the status of the presented cookie only (ADR-0141). */
 export const CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES = ["active", "unpaired"] as const;
@@ -961,9 +981,18 @@ function validateRevertState(value: unknown, errors: string[]): void {
     return;
   }
   errors.push(
-    ...exactKeys(value, ["staged", "fileCount", "additions", "deletions"], "revertChannelPayload"),
+    ...exactKeys(
+      value,
+      ["staged", "fileCount", "additions", "deletions", "index"],
+      "revertChannelPayload",
+    ),
   );
   if (typeof value.staged !== "boolean") errors.push("revertChannelPayload.staged is invalid");
+  if (
+    value.index !== undefined &&
+    !isOneOf(value.index, CODING_WORKBENCH_RUNTIME_REVERT_INDEX_OUTCOMES)
+  )
+    errors.push("revertChannelPayload.index is invalid");
   for (const key of ["fileCount", "additions", "deletions"] as const) {
     if (!revertCountValid(value[key])) errors.push(`revertChannelPayload.${key} is invalid`);
   }

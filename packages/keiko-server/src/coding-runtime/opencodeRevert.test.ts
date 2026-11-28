@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,7 @@ import {
   recordRevertTurnBlocked,
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
+import { beginTurnIndex } from "./opencodeTurnIndex.js";
 import type { OpenCodeV2FileDiff } from "./opencodeV2HttpClient.js";
 
 const RUN_ID = "run-340282366920938463463374607431768211455";
@@ -783,7 +785,12 @@ describe("revert state", () => {
     });
 
     await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: false, fileCount: 1 });
-    expect(client.sessionDiff).toHaveBeenCalledWith(SESSION_ID, undefined, "msg_turn_user");
+    expect(client.sessionDiff).toHaveBeenCalledWith(
+      SESSION_ID,
+      undefined,
+      "msg_turn_user",
+      "msg_continue",
+    );
   });
 
   it("stages the undo at the human's request across Keiko's continuation", async () => {
@@ -802,7 +809,12 @@ describe("revert state", () => {
 
     await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
     expect(client.stageRevert).toHaveBeenCalledWith(SESSION_ID, "msg_turn_user");
-    expect(client.sessionDiff).toHaveBeenCalledWith(SESSION_ID, undefined, "msg_turn_user");
+    expect(client.sessionDiff).toHaveBeenCalledWith(
+      SESSION_ID,
+      undefined,
+      "msg_turn_user",
+      "msg_continue",
+    );
   });
 
   it("reports the staged counts without asking the runtime again", async () => {
@@ -995,5 +1007,178 @@ describe("registered Activity Log proofs", () => {
         formatActivityLogProofLine(line),
       ),
     ).toMatchObject({ runId: RUN_ID, operation: "undo", reason: "revert-failed" });
+  });
+});
+
+const CONTINUED_TURN: readonly Readonly<Record<string, unknown>>[] = [
+  ...TURN,
+  {
+    id: "msg_continue",
+    type: "user",
+    metadata: { keikoTurnOriginV1: "verification-continuation" },
+  },
+  { id: "msg_continue_reply", type: "assistant" },
+  { id: "msg_continue_idle", type: "idle" },
+];
+
+function gitIn(root: string, ...args: string[]): string {
+  const run = spawnSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: root,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+    },
+  });
+  if (run.status !== 0) throw new Error(`fixture git ${args[0] ?? ""} failed`);
+  return run.stdout;
+}
+
+/** A committed repository whose `a.txt` the turn then stages, as the governed staging does. */
+async function stagedTurn(): Promise<{
+  readonly root: string;
+  readonly begun: ReturnType<typeof beginTurnIndex>;
+}> {
+  const root = workspace({ "a.txt": "original\n" });
+  gitIn(root, "init", "-q");
+  gitIn(root, "add", "-A");
+  gitIn(
+    root,
+    "-c",
+    "user.name=fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    "fixture",
+  );
+  const begun = beginTurnIndex(root);
+  await begun.start;
+  writeFileSync(join(root, "a.txt"), "turn result\n");
+  gitIn(root, "add", "a.txt");
+  return { root, begun };
+}
+
+describe("a turn that continued (U-34)", () => {
+  it("reports the whole turn: its range runs through Keiko's continuation, and the log counts the steps", async () => {
+    const { port, client, log } = subject({ messages: CONTINUED_TURN });
+
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: false });
+    expect(client.sessionDiff).toHaveBeenCalledWith(
+      SESSION_ID,
+      undefined,
+      "msg_turn_user",
+      "msg_continue",
+    );
+    await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
+
+    expect(client.stageRevert).toHaveBeenCalledExactlyOnceWith(SESSION_ID, "msg_turn_user");
+    expect(log.events).toMatchObject([
+      { op: "coding-runtime.revert.applied", extra: { action: "undo", stepCount: 2 } },
+    ]);
+  });
+
+  it("reads a single-step turn from its own request alone", async () => {
+    const { port, client, log } = subject();
+
+    await port.revertState(RUN_ID);
+    await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
+
+    expect(client.sessionDiff).toHaveBeenCalledWith(SESSION_ID, undefined, "msg_turn_user");
+    expect(log.events).toMatchObject([{ extra: { stepCount: 1 } }]);
+  });
+
+  it("offers nothing to undo for a turn that changed no file", async () => {
+    const { port } = subject({ files: [], messages: CONTINUED_TURN });
+
+    await expect(port.revertState(RUN_ID)).resolves.toEqual({
+      staged: false,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+    });
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "nothing-to-undo",
+    });
+  });
+});
+
+describe("undo and the Git index (U-34b)", () => {
+  it("unstages what the turn staged and says so on the state and the log", async () => {
+    const { root, begun } = await stagedTurn();
+    const { port, run, log } = subject({ root });
+    run.turnIndex = begun;
+    recordOpenCodeTurnImage(run, log);
+    await run.turnImage;
+    await agentWrote(run, ["a.txt"]);
+
+    await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({
+      staged: true,
+      index: "restored",
+    });
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.revert.applied",
+        extra: { action: "undo", indexOutcome: "restored", indexPathCount: 1 },
+      },
+    ]);
+    expect(JSON.stringify(log.events)).not.toContain("a.txt");
+  });
+
+  it("does not claim the index restored when it changed after the turn", async () => {
+    const { root, begun } = await stagedTurn();
+    const { port, run, log } = subject({ root });
+    run.turnIndex = begun;
+    recordOpenCodeTurnImage(run, log);
+    await run.turnImage;
+    await begun.settled;
+    // A person stages other content for the same path after the turn settled.
+    writeFileSync(join(root, "a.txt"), "edited after the turn\n");
+    gitIn(root, "add", "a.txt");
+    await agentWrote(run, ["a.txt"]);
+    run.turnImage = Promise.resolve(new Map([["a.txt", "unverifiable"]]));
+
+    await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({
+      index: "changed-after-turn",
+    });
+  });
+
+  it("reports the index unavailable and logs why when Git's index lock is held", async () => {
+    const { root, begun } = await stagedTurn();
+    const { port, run, log } = subject({ root });
+    run.turnIndex = begun;
+    recordOpenCodeTurnImage(run, log);
+    await run.turnImage;
+    await begun.settled;
+    writeFileSync(join(root, ".git", "index.lock"), "");
+    await agentWrote(run, ["a.txt"]);
+
+    await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "unavailable" });
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.revert.refused",
+        extra: { operation: "undo", reason: "revert-failed" },
+      },
+      { op: "coding-runtime.revert.applied", extra: { indexOutcome: "unavailable" } },
+    ]);
   });
 });

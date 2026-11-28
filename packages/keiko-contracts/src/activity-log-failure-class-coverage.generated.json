@@ -17332,6 +17332,18 @@
               "required": true
             },
             {
+              "name": "indexOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "indexPathCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "interrupted",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -17342,6 +17354,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "stepCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": [

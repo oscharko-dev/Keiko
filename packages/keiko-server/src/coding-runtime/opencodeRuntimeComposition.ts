@@ -999,6 +999,8 @@ interface PreparedRun {
   revert?: OpenCodeStagedRevert | undefined;
   /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
   turnImage?: OpenCodeRevertRun["turnImage"];
+  /** The Git index as the newest human turn started and settled (`beginOpenCodeTurnImages`). */
+  turnIndex?: OpenCodeRevertRun["turnIndex"];
   /** What the newest turn's own native edits wrote (`recordOpenCodeEditSettled`). */
   agentImages?: OpenCodeAgentImages | undefined;
   /** Admitted plan-note edits awaiting their settlement (`noteAdmittedEditEvidence`). */

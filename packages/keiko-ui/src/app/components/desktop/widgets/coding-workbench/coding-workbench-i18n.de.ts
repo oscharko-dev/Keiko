@@ -1846,6 +1846,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.revert.restore.confirmAction": "Wiederherstellung bestätigen",
   "codingWorkbench.revert.cancel": "Abbrechen",
   "codingWorkbench.revert.busy": "Wird angewendet…",
+  "codingWorkbench.revert.index.restored":
+    "Was dieser Durchgang vorgemerkt hat, ist wieder nicht vorgemerkt, wie vor dem Durchgang.",
+  "codingWorkbench.revert.index.partial":
+    "Einiges, was dieser Durchgang vorgemerkt hat, ließ sich nicht zurücknehmen. Prüfe das Git-Fenster, bevor du committest.",
+  "codingWorkbench.revert.index.changed-after-turn":
+    "Die vorgemerkten Änderungen blieben unverändert, weil sich der Git-Index nach dem Durchgang geändert hat. Prüfe das Git-Fenster, bevor du committest: Dateien können noch vorgemerkt sein.",
+  "codingWorkbench.revert.index.head-moved":
+    "Die vorgemerkten Änderungen blieben unverändert, weil der Durchgang committet hat. Prüfe das Git-Fenster, bevor du pushst.",
+  "codingWorkbench.revert.index.unavailable":
+    "Der Git-Index ließ sich nicht lesen oder ändern, Dateien können daher noch vorgemerkt sein. Prüfe das Git-Fenster, bevor du committest.",
   "codingWorkbench.inbox.region": "Nachrichten, die auf diese Aufgabe warten",
   "codingWorkbench.inbox.summary": "{count} Nachrichten warten auf die laufende Aufgabe.",
   "codingWorkbench.inbox.summary.one": "1 Nachricht wartet auf die laufende Aufgabe.",

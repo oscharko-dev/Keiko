@@ -12,7 +12,10 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchRuntimeRevertAction,
+  CodingWorkbenchRuntimeRevertIndexOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -22,6 +25,12 @@ import type {
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
 } from "./codingRuntimeRevert.js";
+import {
+  beginTurnIndex,
+  restoreTurnIndex,
+  settleTurnIndex,
+  type TurnIndexRecord,
+} from "./opencodeTurnIndex.js";
 import { keikoContinuationOrigin } from "./opencodeTurnOrigin.js";
 import type { OpenCodeV2FileDiff, OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
@@ -52,6 +61,15 @@ const OPENCODE_REVERT_REFUSALS = [
 type OpenCodeRevertRefusal = (typeof OPENCODE_REVERT_REFUSALS)[number];
 type OpenCodeRevertOperation = CodingWorkbenchRuntimeRevertAction | "state" | "submit" | "commit";
 
+/** The closed index outcomes an undo reports (the contract's vocabulary). */
+const REVERT_INDEX_OUTCOMES = [
+  "restored",
+  "partial",
+  "changed-after-turn",
+  "head-moved",
+  "unavailable",
+] as const satisfies readonly CodingWorkbenchRuntimeRevertIndexOutcome[];
+
 const CODING_RUNTIME_REVERT_APPLIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -71,6 +89,16 @@ const CODING_RUNTIME_REVERT_APPLIED_OPERATION = defineActivityLogOperation({
     additions: { type: "integer", dataClass: "count", required: true },
     deletions: { type: "integer", dataClass: "count", required: true },
     interrupted: { type: "boolean", dataClass: "closed-enum", required: true },
+    // The user messages of the turn the undo reached: the human's request and Keiko's continuations.
+    stepCount: { type: "integer", dataClass: "count", required: false },
+    // What the undo did to the paths the turn staged; absent when the turn staged nothing.
+    indexOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REVERT_INDEX_OUTCOMES,
+    },
+    indexPathCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -132,6 +160,8 @@ export interface OpenCodeStagedRevert extends CodingRuntimeRevertCounts {
   readonly files: readonly string[];
   /** `undefined` until the undo recorded its witness: such a revert cannot be proven unchanged. */
   witness: OpenCodeRevertWitness | undefined;
+  /** What the undo did to the Git index of the paths the turn staged (U-34b). */
+  readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
 }
 
 /**
@@ -180,6 +210,8 @@ export interface OpenCodeRevertRun {
    */
   turnImage?: Promise<OpenCodeRevertWitness | undefined> | undefined;
   agentImages?: OpenCodeAgentImages | undefined;
+  /** The Git index as the human's turn started and settled (`beginOpenCodeTurnImages`). */
+  turnIndex?: TurnIndexRecord | undefined;
 }
 
 export interface OpenCodeRevertPorts {
@@ -261,9 +293,16 @@ async function revertTurn(
   }
 }
 
-type RevertOutcome =
-  | (CodingRuntimeRevertCounts & { readonly ok: true; readonly interrupted: boolean })
-  | { readonly ok: false; readonly reason: OpenCodeRevertRefusal };
+interface AppliedRevert extends CodingRuntimeRevertCounts {
+  readonly ok: true;
+  readonly interrupted: boolean;
+  /** The turn's user messages the revert reached (undo only). */
+  readonly steps?: number | undefined;
+  readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
+  readonly indexPathCount?: number | undefined;
+}
+
+type RevertOutcome = AppliedRevert | { readonly ok: false; readonly reason: OpenCodeRevertRefusal };
 
 async function undoLastTurn(
   ports: OpenCodeRevertPorts,
@@ -271,8 +310,9 @@ async function undoLastTurn(
 ): Promise<RevertOutcome> {
   if (run.revert !== undefined) return { ok: false, reason: "already-staged" };
   // Every check precedes the interrupt: a request that cannot succeed never ends a working turn.
-  const boundary = newestTurnBoundary(await run.client.messages(run.sessionId));
-  const changed = await changedFiles(run, boundary);
+  const range = newestTurnRange(await run.client.messages(run.sessionId));
+  const boundary = range?.from;
+  const changed = await changedFiles(run, range);
   if (changed.length === 0) return { ok: false, reason: "nothing-to-undo" };
   if (boundary === undefined) return { ok: false, reason: "turn-boundary-missing" };
   const busy = Object.hasOwn(await run.client.active(), run.sessionId);
@@ -283,19 +323,74 @@ async function undoLastTurn(
     // The runtime refuses to rewind a busy session, so a turn in flight is stopped first; what it
     // changed by the time it stopped is then proven once more.
     if (!(await ports.abortTask(run.runId))) return { ok: false, reason: "interrupt-failed" };
-    if (!(await turnUnchanged(run, await changedFiles(run, boundary), true)))
+    if (!(await turnUnchanged(run, await changedFiles(run, range), true)))
       return { ok: false, reason: "workspace-changed" };
   }
+  return stageTurnRevert(ports, run, boundary, range, busy);
+}
+
+async function stageTurnRevert(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+  boundary: string,
+  range: TurnRange | undefined,
+  busy: boolean,
+): Promise<RevertOutcome> {
   const staged = await run.client.stageRevert(run.sessionId, boundary);
+  const files = staged.files.map((diff) => diff.file);
+  // The worktree is back at the turn start; the paths the turn staged leave the index with it.
+  const index = await restoreIndexOrReport(ports, run);
   const record: OpenCodeStagedRevert = {
     ...diffCounts(staged.files),
-    files: staged.files.map((diff) => diff.file),
+    files,
     witness: undefined,
+    ...(index.outcome === undefined ? {} : { index: index.outcome }),
   };
   // Recorded before the witness: the revert is in place from here on, even if proving it fails.
   run.revert = record;
   record.witness = await captureWitness(run.workspaceRoot, record.files);
-  return { ok: true, interrupted: busy, ...countsOf(record) };
+  return {
+    ok: true,
+    interrupted: busy,
+    steps: range?.steps,
+    indexPathCount: index.restoredCount,
+    ...countsOf(record),
+    ...(record.index === undefined ? {} : { index: record.index }),
+  };
+}
+
+/**
+ * Puts the paths the turn staged back in the Git index. An error (an index that cannot be locked, a
+ * Git that cannot run) never fails the undo that already restored the files: it is logged with its
+ * frames and the undo reports the index as `unavailable`.
+ */
+async function restoreIndexOrReport(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+): Promise<Awaited<ReturnType<typeof restoreTurnIndex>>> {
+  try {
+    const restored = await restoreTurnIndex(run.workspaceRoot, run.turnIndex);
+    const failure: unknown = run.turnIndex?.failure;
+    if (failure !== undefined) reportIndexFailure(ports, run, failure);
+    return restored;
+  } catch (error) {
+    reportIndexFailure(ports, run, error);
+    return { outcome: "unavailable", restoredCount: 0 };
+  }
+}
+
+function reportIndexFailure(
+  ports: OpenCodeRevertPorts,
+  run: OpenCodeRevertRun,
+  error: unknown,
+): void {
+  recordRevertRefused(ports.activityLog, {
+    runId: run.runId,
+    operation: "undo",
+    reason: "revert-failed",
+    correlationId: undefined,
+    error,
+  });
 }
 
 async function restoreUndo(run: OpenCodeRevertRun): Promise<RevertOutcome> {
@@ -317,7 +412,12 @@ async function revertState(
 ): Promise<CodingRuntimeRevertState | undefined> {
   const run = ports.readyRun(runId);
   if (run === undefined) return undefined;
-  if (run.revert !== undefined) return { staged: true, ...countsOf(run.revert) };
+  if (run.revert !== undefined)
+    return {
+      staged: true,
+      ...countsOf(run.revert),
+      ...(run.revert.index === undefined ? {} : { index: run.revert.index }),
+    };
   const interrupts = run.interruptSeq ?? 0;
   try {
     return { staged: false, ...diffCounts(await turnDiff(run)) };
@@ -349,6 +449,54 @@ function interruptOvertook(run: OpenCodeRevertRun, seen: number): boolean {
 export function newestTurnBoundary(
   messages: readonly Readonly<Record<string, unknown>>[],
 ): string | undefined {
+  return newestTurnRange(messages)?.from;
+}
+
+/** The newest turn's span: its human request and the last user message that belongs to it. */
+export interface TurnRange {
+  readonly from: string;
+  /** User messages of the turn: the human's request plus its continuations and steered prompts. */
+  readonly steps: number;
+  /** The newest user message of the turn when it is not `from` (a continuation or steered prompt). */
+  readonly to?: string;
+}
+
+/**
+ * The newest turn's whole span. The runtime's `session.diff` reports only the turn of `from`
+ * unless it is given `to`, so a turn Keiko continued (verification, delivery) would report just its
+ * first step; `to` names the newest user message so the range runs through every step (U-34).
+ */
+export function newestTurnRange(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): TurnRange | undefined {
+  const from = newestTurnStart(messages);
+  if (from === undefined) return undefined;
+  const newest = newestUserMessageId(messages);
+  const steps = userMessagesFrom(messages, from);
+  return newest === undefined || newest === from ? { from, steps } : { from, to: newest, steps };
+}
+
+function userMessagesFrom(
+  messages: readonly Readonly<Record<string, unknown>>[],
+  from: string,
+): number {
+  const start = messages.findIndex((message) => message.id === from);
+  return messages.slice(Math.max(0, start)).filter((message) => message.type === "user").length;
+}
+
+function newestUserMessageId(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.type === "user" && typeof message.id === "string") return message.id;
+  }
+  return undefined;
+}
+
+function newestTurnStart(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): string | undefined {
   let boundary: { readonly id: string; readonly continuation: boolean } | undefined;
   let inTurn = false;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -372,8 +520,8 @@ function continuesRequest(message: Readonly<Record<string, unknown>>): boolean {
 
 /** What the newest turn changed, from its human request on: Keiko's continuations included. */
 async function turnDiff(run: OpenCodeRevertRun): Promise<readonly OpenCodeV2FileDiff[]> {
-  const boundary = newestTurnBoundary(await run.client.messages(run.sessionId));
-  return run.client.sessionDiff(run.sessionId, undefined, boundary);
+  const range = newestTurnRange(await run.client.messages(run.sessionId));
+  return rangeDiff(run, range);
 }
 
 function diffCounts(files: readonly OpenCodeV2FileDiff[]): CodingRuntimeRevertCounts {
@@ -466,11 +614,19 @@ async function witnessHolds(
 
 async function changedFiles(
   run: OpenCodeRevertRun,
-  boundary: string | undefined,
+  range: TurnRange | undefined,
 ): Promise<readonly string[]> {
-  return (await run.client.sessionDiff(run.sessionId, undefined, boundary)).map(
-    (diff) => diff.file,
-  );
+  return (await rangeDiff(run, range)).map((diff) => diff.file);
+}
+
+/** The runtime's diff of the turn's whole range; `to` is sent only when the turn has several steps. */
+function rangeDiff(
+  run: OpenCodeRevertRun,
+  range: TurnRange | undefined,
+): Promise<readonly OpenCodeV2FileDiff[]> {
+  return range?.to === undefined
+    ? run.client.sessionDiff(run.sessionId, undefined, range?.from)
+    : run.client.sessionDiff(run.sessionId, undefined, range.from, range.to);
 }
 
 /**
@@ -505,6 +661,7 @@ function freshAgentImages(): OpenCodeAgentImages {
 
 /** A new turn starts: neither the last turn's settled image nor its edits prove anything now. */
 export function beginOpenCodeTurnImages(run: OpenCodeRevertRun): void {
+  run.turnIndex = beginTurnIndex(run.workspaceRoot);
   run.turnImage = undefined;
   run.agentImages = freshAgentImages();
 }
@@ -563,6 +720,7 @@ export function recordOpenCodeTurnImage(
   run: OpenCodeRevertRun,
   activityLog: ServerLogSink | undefined,
 ): void {
+  if (run.turnIndex !== undefined) settleTurnIndex(run.workspaceRoot, run.turnIndex);
   run.turnImage = turnImage(run).catch((error: unknown) => {
     recordRevertRefused(activityLog, {
       runId: run.runId,
@@ -608,7 +766,10 @@ function recordRevertApplied(
   activityLog: ServerLogSink | undefined,
   runId: string,
   action: CodingWorkbenchRuntimeRevertAction | "commit",
-  outcome: CodingRuntimeRevertCounts & { readonly interrupted: boolean },
+  outcome: CodingRuntimeRevertCounts &
+    Pick<AppliedRevert, "index" | "indexPathCount" | "steps"> & {
+      readonly interrupted: boolean;
+    },
   correlationId: string | undefined,
 ): void {
   (activityLog ?? processServerLogSink()).write(
@@ -622,6 +783,10 @@ function recordRevertApplied(
         additions: outcome.additions,
         deletions: outcome.deletions,
         interrupted: outcome.interrupted,
+        ...(outcome.steps === undefined ? {} : { stepCount: outcome.steps }),
+        ...(outcome.index === undefined
+          ? {}
+          : { indexOutcome: outcome.index, indexPathCount: outcome.indexPathCount ?? 0 }),
       },
     ),
   );

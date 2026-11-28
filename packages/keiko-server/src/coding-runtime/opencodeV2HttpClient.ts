@@ -417,12 +417,16 @@ export interface OpenCodeV2HttpClient {
   /**
    * The files the session's newest turn changed (`GET /api/session/{sessionID}/diff`, operation
    * `session.diff`), without their patch text, or, with `from`, every file changed since that user
-   * message. A step still running compares against the working copy.
+   * message. A step still running compares against the working copy. With `to` (a later user
+   * message), the range runs through that message's turn: the runtime then compares the first
+   * recorded snapshot of the range with its last, so the files of every step in between count once,
+   * each as its net change. Without it the runtime diffs the turn of `from` alone (U-34).
    */
   sessionDiff(
     sessionId: string,
     signal?: AbortSignal,
     from?: string,
+    to?: string,
   ): Promise<readonly OpenCodeV2FileDiff[]>;
   /**
    * Rewinds the session to just before a user message and restores the files its turn changed
@@ -1552,9 +1556,11 @@ export function createOpenCodeV2HttpClient(
         signal,
       );
     },
-    sessionDiff: async (sessionId, signal, from): Promise<readonly OpenCodeV2FileDiff[]> => {
+    sessionDiff: async (sessionId, signal, from, to): Promise<readonly OpenCodeV2FileDiff[]> => {
       // `context=0` asks for hunks without surrounding lines: the patch text is discarded anyway.
-      const since = from === undefined ? "" : `&from=${safeMessageId(from)}`;
+      const since =
+        (from === undefined ? "" : `&from=${safeMessageId(from)}`) +
+        (to === undefined ? "" : `&to=${safeMessageId(to)}`);
       const response = await request(
         "GET",
         `/api/session/${safeSessionId(sessionId)}/diff?context=0${since}`,

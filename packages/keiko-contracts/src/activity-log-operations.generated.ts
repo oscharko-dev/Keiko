@@ -15733,6 +15733,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      stepCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      indexOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["restored", "partial", "changed-after-turn", "head-moved", "unavailable"],
+      },
+      indexPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

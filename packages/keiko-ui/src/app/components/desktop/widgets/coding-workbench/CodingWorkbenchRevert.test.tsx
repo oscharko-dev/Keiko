@@ -109,6 +109,26 @@ describe("CodingWorkbenchRevertBar", () => {
     expect(onRevert).toHaveBeenCalledExactlyOnceWith("restore");
   });
 
+  it("says what the undo did to the staged changes, and never claims more than it did", () => {
+    const { unmount } = render(
+      <CodingWorkbenchRevertBar
+        revert={{ ...STAGED, index: "restored" }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("are unstaged again");
+    unmount();
+    render(
+      <CodingWorkbenchRevertBar
+        revert={{ ...STAGED, index: "changed-after-turn" }}
+        busy={false}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("files may still be staged");
+  });
+
   it("explains that a file edited since the undo is never overwritten", async () => {
     renderBar(STAGED);
     await userEvent.click(screen.getByRole("button", { name: "Restore changes" }));

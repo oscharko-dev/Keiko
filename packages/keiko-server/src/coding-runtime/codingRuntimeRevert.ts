@@ -1,4 +1,5 @@
 import type { CodingWorkbenchRuntimeFailureCode } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 /**
  * The turn-revert vocabulary every layer of the Workbench shares (B3, S04): the runtime port that
@@ -45,6 +46,8 @@ export interface CodingRuntimeRevertCounts {
 
 export interface CodingRuntimeRevertState extends CodingRuntimeRevertCounts {
   readonly staged: boolean;
+  /** What the undo did to the Git index of the paths the turn staged; absent when none (U-34b). */
+  readonly index?: CodingWorkbenchRuntimeRevertIndexOutcome | undefined;
 }
 
 export type CodingRuntimeRevertResult =

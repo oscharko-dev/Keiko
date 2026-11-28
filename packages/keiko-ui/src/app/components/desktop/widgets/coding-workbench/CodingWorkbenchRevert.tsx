@@ -40,12 +40,16 @@ function summaryText(
     deletions: revert.deletions,
   };
   if (revert.staged) {
-    return t(
+    const undone = t(
       revert.fileCount === 1
         ? "codingWorkbench.revert.staged.one"
         : "codingWorkbench.revert.staged",
       values,
     );
+    // What the undo did to the paths the turn staged is said right beside the undo itself.
+    return revert.index === undefined
+      ? undone
+      : `${undone} ${t(`codingWorkbench.revert.index.${revert.index}`)}`;
   }
   return t(
     revert.fileCount === 1

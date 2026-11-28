@@ -1779,6 +1779,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.revert.restore.confirmAction": "Confirm restore",
   "codingWorkbench.revert.cancel": "Cancel",
   "codingWorkbench.revert.busy": "Applying…",
+  "codingWorkbench.revert.index.restored":
+    "Changes this turn staged are unstaged again, as they were before the turn.",
+  "codingWorkbench.revert.index.partial":
+    "Some changes this turn staged could not be unstaged. Check the Git window before you commit.",
+  "codingWorkbench.revert.index.changed-after-turn":
+    "The staged changes were left as they are because the Git index changed after the turn. Check the Git window before you commit: files may still be staged.",
+  "codingWorkbench.revert.index.head-moved":
+    "The staged changes were left as they are because the turn committed. Check the Git window before you push.",
+  "codingWorkbench.revert.index.unavailable":
+    "The Git index could not be read or changed, so files may still be staged. Check the Git window before you commit.",
   "codingWorkbench.inbox.region": "Messages waiting for this task",
   "codingWorkbench.inbox.summary": "{count} messages are waiting for the running task.",
   "codingWorkbench.inbox.summary.one": "1 message is waiting for the running task.",
