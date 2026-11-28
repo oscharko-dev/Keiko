@@ -130,7 +130,20 @@ describe("runtime Git status of a born and an unborn branch", () => {
     );
     expect(isCodingRuntimeGitResult({ ...body, head: "born" })).toBe(false);
     expect(isCodingRuntimeGitResult({ ...body, head: "born", headSha: "" })).toBe(false);
-    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(40) })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, head: "other", headSha: "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "" })).toBe(false);
     expect(isCodingRuntimeGitResult(body)).toBe(false);
+  });
+  // A status persisted by 1.5.10 (history, replay) has a commit and no marker: a born branch. An
+  // unborn branch is never inferred from a missing marker, so it stays strict.
+  it("reads a status without the marker as born only when it names a commit", () => {
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(40) })).toBe(true);
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(64) })).toBe(true);
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "not-a-sha" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, head: "unborn", headSha: "b".repeat(40) })).toBe(
+      false,
+    );
   });
 });

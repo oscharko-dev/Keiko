@@ -181,11 +181,13 @@ function changes(value: unknown): boolean {
     Array.isArray(value) && value.length <= CODING_RUNTIME_GIT_MAX_PATHS && value.every(change)
   );
 }
-// A born branch names its commit; an unborn one (a fresh repository) has none and says so.
+// A born branch names its commit; an unborn one (a fresh repository) has none and says so. A status
+// persisted before the marker existed (a 1.5.10 history or replay row) carries a commit and no
+// `head`: that is a born branch. An unborn one always states itself.
 function statusHead(value: Record<string, unknown>): boolean {
   if (value.head === "unborn") return value.headSha === undefined;
   return (
-    value.head === "born" &&
+    (value.head === "born" || value.head === undefined) &&
     typeof value.headSha === "string" &&
     /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value.headSha)
   );
