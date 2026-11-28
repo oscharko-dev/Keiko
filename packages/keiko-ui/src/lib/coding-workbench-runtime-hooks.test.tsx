@@ -666,7 +666,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       kind: "run-set",
       snapshot: snapshot({ state: "starting" }),
     });
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 
   it("reports a mutation failure when the readiness gate rejects the start", async () => {
@@ -690,7 +693,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     const { mutations, dispatch, refreshRun } = renderMutations(readyRunState(snapshot()));
     await act(() => mutations.stop());
     expect(refreshRun).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-2",
+    });
   });
 
   // ADR-0141 D6: a run control from a browser whose app session was revoked is answered with the
@@ -806,7 +812,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     // .deadline.test.ts); the queue adds no second, generic note for the same timeout (#4109).
     expect(reportClientDiagnostic).not.toHaveBeenCalled();
     expect(stopCodingWorkbenchRuntime).toHaveBeenCalledTimes(2);
-    expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 
   // #4109: Stop is never queued behind a mutation that is still waiting for the server.
@@ -886,7 +895,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       expect(dispatch).not.toHaveBeenCalledWith(
         expect.objectContaining({ kind: "mutation-failed" }),
       );
-      expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "mutation-complete",
+        acknowledgedRunId: "run-1",
+      });
       // Server truth reconciles through the Stop answer, never through the preempted approval.
       expect(dispatch).toHaveBeenCalledWith({
         kind: "run-set",
@@ -1012,7 +1024,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       expect(refreshRun).toHaveBeenCalledOnce();
       // A cancel is not a success: the Window keeps the person's draft on this outcome.
       expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-cancelled" });
-      expect(dispatch).not.toHaveBeenCalledWith({ kind: "mutation-complete" });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-complete" }),
+      );
       expect(dispatch).not.toHaveBeenCalledWith(
         expect.objectContaining({ kind: "mutation-failed" }),
       );
@@ -1173,7 +1187,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       },
       expect.any(AbortSignal),
     );
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 
   it("reports a waiting-message action against a run that is not running without sending it", async () => {
@@ -1225,7 +1242,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       { requestId: "run-1", acknowledged: true },
       expect.any(AbortSignal),
     );
-    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-1",
+    });
   });
 });
 

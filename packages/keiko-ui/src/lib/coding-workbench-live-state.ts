@@ -146,6 +146,11 @@ export interface CodingWorkbenchMutationState {
    */
   readonly leftTask?: true;
   /**
+   * The run this window's own successful mutation was acknowledged with. It is the only proof that
+   * a run belongs to this window: whichever run a re-read shows afterwards may be another window's.
+   */
+  readonly acknowledgedRunId?: string;
+  /**
    * A newer snapshot superseded this failed action: the mutation is idle again without having
    * succeeded. Like `cancelled`, it must never read as "pending → idle" success, and it keeps the
    * refused kind and code, so a window that never rendered the failure (the re-read came back
@@ -241,7 +246,7 @@ export type CodingWorkbenchRuntimeStateAction =
       readonly mutation: CodingWorkbenchMutationKind;
       readonly requestId: string;
     }
-  | { readonly kind: "mutation-complete" }
+  | { readonly kind: "mutation-complete"; readonly acknowledgedRunId?: string }
   | { readonly kind: "session-renewed" }
   | { readonly kind: "refusal-dismissed" }
   | { readonly kind: "pending-start-left" }
@@ -839,8 +844,14 @@ const runtimeActionHandlers = {
         error: null,
       },
     }),
-  "mutation-complete": (state): CodingWorkbenchRuntimeState =>
-    projectReadiness({ ...state, mutation: IDLE_MUTATION }),
+  "mutation-complete": (state, action): CodingWorkbenchRuntimeState =>
+    projectReadiness({
+      ...state,
+      mutation:
+        action.acknowledgedRunId === undefined
+          ? IDLE_MUTATION
+          : { ...IDLE_MUTATION, acknowledgedRunId: action.acknowledgedRunId },
+    }),
   // A refusal belongs to the session it was given under; a new session shows the present instead.
   "session-renewed": (state): CodingWorkbenchRuntimeState => withoutMutationError(state),
   // Leaving a task ends the alert of its refused start, never the failure of a run that is still

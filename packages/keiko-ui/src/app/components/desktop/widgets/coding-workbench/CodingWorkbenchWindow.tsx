@@ -1159,7 +1159,7 @@ function useRunRepositoryPin(
   repositoryRoot: string | null,
   mutation: Pick<
     CodingWorkbenchRuntimeState["mutation"],
-    "status" | "kind" | "cancelled" | "supersededFailure"
+    "status" | "kind" | "cancelled" | "supersededFailure" | "acknowledgedRunId"
   >,
   onPinRepository: ((root: string) => void) | undefined,
 ): void {
@@ -1183,9 +1183,13 @@ function useRunRepositoryPin(
       mutation.status === "idle" &&
       mutation.cancelled !== true &&
       mutation.supersededFailure === undefined;
-    if (acknowledged && run.active) claimedRunId.current = run.runId;
+    // Only the run the response named is this window's: a re-read after a newer revision can show
+    // another window's run in the same render.
+    if (acknowledged && run.active && run.runId === mutation.acknowledgedRunId)
+      claimedRunId.current = run.runId;
   }, [
     pending,
+    mutation.acknowledgedRunId,
     mutation.status,
     mutation.cancelled,
     mutation.supersededFailure,

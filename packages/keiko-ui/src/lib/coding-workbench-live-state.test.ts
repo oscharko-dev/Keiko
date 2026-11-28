@@ -760,6 +760,16 @@ describe("mode selection, setup plans, and mutation failures", () => {
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
 
+  it("keeps the run a successful mutation was acknowledged with, and none otherwise", () => {
+    const acknowledged = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-complete",
+      acknowledgedRunId: "run-a",
+    });
+    expect(acknowledged.mutation).toMatchObject({ status: "idle", acknowledgedRunId: "run-a" });
+    const plain = codingWorkbenchRuntimeReducer(acknowledged, { kind: "mutation-complete" });
+    expect(plain.mutation).not.toHaveProperty("acknowledgedRunId");
+  });
+
   it("drops a refusal given under an earlier session, and leaves every other mutation alone", () => {
     const failed = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "mutation-failed",

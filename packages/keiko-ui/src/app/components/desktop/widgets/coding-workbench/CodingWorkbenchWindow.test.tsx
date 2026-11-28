@@ -5634,6 +5634,13 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     });
   }
 
+  const IDLE_MUTATION_FIXTURE = {
+    status: "idle",
+    kind: null,
+    requestId: null,
+    error: null,
+  } as const;
+
   /** Start a run in workspace A, then move the singleton pointer to B while it is still live. */
   async function startInAThenSwitchToB(
     liveActions: CodingWorkbenchRuntimeActions,
@@ -5858,12 +5865,44 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(onPinRepository).not.toHaveBeenCalled();
 
     runtimeHookMock.mockReturnValue({
-      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-pin" }),
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-pin" }),
+        mutation: { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-pin" },
+      },
       actions: actions(),
     });
     view.rerender(window());
 
     expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+  });
+
+  // A successful follow-up of run A whose revision moved on meanwhile re-reads the run; the read
+  // can show another window's run B in the very render the mutation settles in.
+  it("does not pin another window's run that the re-read after this window's successful follow-up shows", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "follow-up", requestId: "req-mine", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-b" }),
+        mutation: { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-a" },
+      },
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).not.toHaveBeenCalled();
   });
 
   it("does not pin a later run of another window after its own run ended", () => {
@@ -5882,7 +5921,10 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     });
     const view = render(window());
     runtimeHookMock.mockReturnValue({
-      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-own" }),
+      state: {
+        ...stateIn(WORKSPACE_A, { state: "running", runId: "run-own" }),
+        mutation: { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-own" },
+      },
       actions: actions(),
     });
     view.rerender(window());

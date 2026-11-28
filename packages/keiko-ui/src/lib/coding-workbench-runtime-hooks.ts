@@ -594,7 +594,11 @@ async function runMutation(
     if (wasPreempted(signal)) return;
     await applyMutationResult(context, command, snapshot, signal);
     if (wasPreempted(signal)) return;
-    context.dispatch({ kind: "mutation-complete" });
+    // The run the response acknowledged, whichever run the re-read above went on to show.
+    context.dispatch({
+      kind: "mutation-complete",
+      ...(snapshot.runId === undefined ? {} : { acknowledgedRunId: snapshot.runId }),
+    });
   } catch (error) {
     reportMutationFailure(error, signal);
     await failMutation(context, error, signal, requestId);
