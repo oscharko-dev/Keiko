@@ -219,16 +219,12 @@ export class GatewayPromptAdmission {
     );
     this.remainingBudget(request, budgetMs, start, "counter");
     const estimated = this.remotePayloadEstimate(projected);
-    admitGatewayPrompt(
-      projected,
-      this.options.capability,
-      this.log,
-      this.options.correlationId,
+    admitGatewayPrompt(projected, this.options.capability, this.log, this.options.correlationId, {
       measured,
-      this.retainedTokenFloor(estimated, measured),
-      this.options.provider.reasoningHistoryField,
-      this.calibratedTokens(projected, estimated),
-    );
+      retainedTokens: this.retainedTokenFloor(estimated, measured),
+      reasoningField: this.options.provider.reasoningHistoryField,
+      calibratedTokens: this.calibratedTokens(projected, estimated),
+    });
     return this.remainingBudget(request, budgetMs, start, "validation");
   }
 

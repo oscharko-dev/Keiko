@@ -98,16 +98,27 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
 
 const DISABLED_COUNTER: ProviderTokenCount = { status: "disabled" };
 
+/** What the prompt admission knows beyond the request itself; every part is optional. */
+export interface GatewayPromptAdmissionEvidence {
+  readonly measured?: ProviderTokenCount;
+  readonly retainedTokens?: number | undefined;
+  readonly reasoningField?: "reasoning_content" | "reasoning" | undefined;
+  readonly calibratedTokens?: number | undefined;
+}
+
 export function admitGatewayPrompt(
   request: GatewayCallRequest & GatewayPromptTokenInput,
   capability: ModelCapability,
   log: ModelGatewayLogSink,
   correlationId: string,
-  measured: ProviderTokenCount = DISABLED_COUNTER,
-  retainedTokens?: number,
-  reasoningField?: "reasoning_content" | "reasoning",
-  calibratedTokens?: number,
+  evidenceInput: GatewayPromptAdmissionEvidence = {},
 ): GatewayCallRequest {
+  const {
+    measured = DISABLED_COUNTER,
+    retainedTokens,
+    reasoningField,
+    calibratedTokens,
+  } = evidenceInput;
   const profile = deriveContextProfileFromCapability(capability);
   const outputBudget = outputAllocation(request.maxOutputTokens, profile.reservedOutputTokens);
   const inputBudget = deriveContextProfile({
