@@ -1358,3 +1358,10 @@ Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and s
 Coding Workbench composer reuses that store per Workbench window (`surface: "coding-workbench"`).
 Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
 browser persistence; stale revisions fail closed (ADR-0114 D1).
+
+## Browser approval
+
+`coding-app-session.browser-approval.state` with `action: inspect` is written once per distinct
+reader and again only when what that reader sees changes, never once per poll. `reader` records
+whether a session cookie was presented (`with-session`) or not (`without-session`), not whether it
+was valid: a stale tab reads `with-session` together with `outcome: unavailable`.
