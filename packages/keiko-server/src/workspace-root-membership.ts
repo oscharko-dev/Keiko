@@ -8,7 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
-import { pathIsDenied } from "./files-deny.js";
+import { pathIsDeniedAsync } from "./files-deny.js";
 import { isProjectAvailable, type Project, type UiStore } from "./store/index.js";
 import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
@@ -158,43 +158,45 @@ export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: str
 }
 
 /** Whether the Files and Git routes would read this folder; the project is listed either way. */
-export function projectReadable(project: Project): boolean {
-  return !pathIsDenied(project.path);
+export async function projectReadable(project: Project): Promise<boolean> {
+  return !(await pathIsDeniedAsync(project.path));
 }
 
-export function projectWithWorkspaceAvailability(
+export async function projectWithWorkspaceAvailability(
   store: UiStore,
   project: Project,
-): ProjectWithAvailability {
+): Promise<ProjectWithAvailability> {
   return {
     ...project,
     available: isProjectAvailable(project),
-    readable: projectReadable(project),
+    readable: await projectReadable(project),
     workspaceAvailable: hasCurrentWorkspaceRootMembership(store, project.path),
   };
 }
 
-export function projectsWithWorkspaceAvailability(
+export async function projectsWithWorkspaceAvailability(
   store: UiStore,
   projects: readonly Project[],
-): readonly ProjectWithAvailability[] {
+): Promise<readonly ProjectWithAvailability[]> {
+  // A folder whose readability cannot be settled is listed unreadable, never readable.
+  const readable = await Promise.all(projects.map((project) => projectReadable(project)));
   let snapshot: WorkspaceRootMembershipSnapshot;
   try {
     snapshot = membershipSnapshot(store);
   } catch {
-    return projects.map((project): ProjectWithAvailability => ({
+    return projects.map((project, index): ProjectWithAvailability => ({
       ...project,
       available: isProjectAvailable(project),
-      readable: projectReadable(project),
+      readable: readable[index] ?? false,
       workspaceAvailable: false,
     }));
   }
-  return projects.map((project): ProjectWithAvailability => {
+  return projects.map((project, index): ProjectWithAvailability => {
     const workspaceAvailable = hasMembershipInSnapshot(project.path, snapshot);
     return {
       ...project,
       available: isProjectAvailable(project),
-      readable: projectReadable(project),
+      readable: readable[index] ?? false,
       workspaceAvailable,
     };
   });

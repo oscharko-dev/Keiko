@@ -9,12 +9,14 @@ function project(path: string): Project {
 // #4371 F21: a project the Files and Git routes refuse stays listed; it is only marked, so the shell
 // never offers it as the starting project.
 describe("projectReadable", () => {
-  it("marks a folder inside a tool's own state area as not readable", () => {
-    expect(projectReadable(project("/work/tool/.claude/worktrees/keiko"))).toBe(false);
-    expect(projectReadable(project("/home/me/.config/repo"))).toBe(false);
+  it("marks a folder inside a tool's own state area as not readable", async () => {
+    await expect(projectReadable(project("/work/tool/.claude/worktrees/keiko"))).resolves.toBe(
+      false,
+    );
+    await expect(projectReadable(project("/home/me/.config/repo"))).resolves.toBe(false);
   });
 
-  it("keeps an ordinary folder readable", () => {
-    expect(projectReadable(project("/work/customer-repo"))).toBe(true);
+  it("keeps an ordinary folder readable", async () => {
+    await expect(projectReadable(project("/work/customer-repo"))).resolves.toBe(true);
   });
 });

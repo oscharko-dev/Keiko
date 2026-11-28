@@ -8,9 +8,12 @@ import { installationDenialCauseAsync, PROGRAM_FOLDER_LAUNCH_ENV } from "./launc
 
 // The canonical check of the asynchronous predicate must never call the blocking realpath: the
 // synchronous one is replaced by a function that fails the test when it is reached.
+const blockedCalls = vi.hoisted(() => ({ count: 0 }));
+
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const blocked = (): never => {
+    blockedCalls.count += 1;
     throw new Error("synchronous realpath reached the event loop");
   };
   return { ...actual, realpathSync: Object.assign(blocked, { native: blocked }) };
@@ -79,5 +82,27 @@ describe("the blocking predicate under the same guard", () => {
     const root = folder();
     expect(realpathSync).toBeTypeOf("function");
     expect(installationDenialCause(join(root, "project"))).toBe("unresolvable-name");
+  });
+});
+
+describe("a launch directory on an unresponsive mount", () => {
+  it("is resolved off the event loop by the asynchronous predicate", async () => {
+    vi.stubEnv(PROGRAM_FOLDER_LAUNCH_ENV, "1");
+    const before = blockedCalls.count;
+    const cause = await installationDenialCauseAsync(
+      "/Users/me/project",
+      process.env,
+      "/mnt/unresponsive-share/Keiko-launch",
+    );
+    expect(blockedCalls.count).toBe(before);
+    expect(cause).toBeUndefined();
+  });
+
+  it("is still refused when it contains the path", async () => {
+    const root = folder();
+    vi.stubEnv(PROGRAM_FOLDER_LAUNCH_ENV, "1");
+    await expect(
+      installationDenialCauseAsync(join(root, "inner"), process.env, root),
+    ).resolves.toBe("program-folder");
   });
 });

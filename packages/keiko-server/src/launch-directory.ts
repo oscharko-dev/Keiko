@@ -69,6 +69,17 @@ function launchDirectoryName(directory: string): string {
   return name;
 }
 
+// The same name for an asynchronous caller: a launch directory on an unresponsive mount is asked of a
+// worker thread, never of the event loop. A failure is not remembered, exactly as above.
+async function launchDirectoryNameAsync(directory: string): Promise<string> {
+  const known = launchDirectoryNames.get(directory);
+  if (known !== undefined) return known;
+  const resolved = await resolveSystemNameAsync(directory);
+  if (resolved.kind !== "named") return directory;
+  launchDirectoryNames.set(directory, resolved.name);
+  return resolved.name;
+}
+
 /**
  * Whether an absolute path is Keiko's own program folder or lies inside it. A launcher that
  * declares the program folder starts Keiko with that folder as its working directory, so the
@@ -105,9 +116,10 @@ function programFolderDenial(
   env: Readonly<Record<string, string | undefined>>,
   launchDirectory: string,
   name: () => SystemName,
+  folderOf: () => string = () => launchDirectoryName(launchDirectory),
 ): InstallationDenialCause | undefined {
   if (!launchedFromProgramFolder(env) || !isAbsolute(path)) return undefined;
-  const folder = launchDirectoryName(launchDirectory);
+  const folder = folderOf();
   if (containsPath(launchDirectory, path) || containsPath(folder, path)) return "program-folder";
   const resolved = name();
   if (resolved.kind === "failed") return "unresolvable-name";
@@ -208,10 +220,17 @@ export async function installationDenialCauseAsync(
     asked.name = true;
     return { kind: "missing" };
   };
+  const folder = launchedFromProgramFolder(env)
+    ? await launchDirectoryNameAsync(launchDirectory)
+    : launchDirectory;
+  const folderOf = (): string => folder;
   const first =
-    programFolderDenial(path, env, launchDirectory, lexical) ?? payloadDenial(path, lexical);
+    programFolderDenial(path, env, launchDirectory, lexical, folderOf) ??
+    payloadDenial(path, lexical);
   if (first !== undefined || !asked.name) return first;
   const resolved = await resolveSystemNameAsync(path);
   const name = (): SystemName => resolved;
-  return programFolderDenial(path, env, launchDirectory, name) ?? payloadDenial(path, name);
+  return (
+    programFolderDenial(path, env, launchDirectory, name, folderOf) ?? payloadDenial(path, name)
+  );
 }

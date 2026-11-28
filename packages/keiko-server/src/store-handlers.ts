@@ -421,7 +421,10 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 // Route 13 — GET /api/projects
 // ──────────────────────────────────────────────────────────────────────────
 
-export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export async function handleListProjects(
+  _ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   // Managed worktrees are registered so server-owned trust, manifests, and verification resolve
   // their exact root identity. They are implementation details, not folders the human selected.
   // Filter before availability projection so an unpaired catalog read never exposes their paths.
@@ -430,7 +433,7 @@ export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): Rou
     deps.managedTaskWorkspaceRoot,
   );
   const projects = putPreferredProjectFirst(
-    projectsWithWorkspaceAvailability(deps.store, visibleProjects),
+    await projectsWithWorkspaceAvailability(deps.store, visibleProjects),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -521,7 +524,7 @@ export async function handleCreateProject(
         ctx.correlationId ?? randomUUID(),
         error,
       );
-      const projectWithAvailability = projectWithWorkspaceAvailability(deps.store, project);
+      const projectWithAvailability = await projectWithWorkspaceAvailability(deps.store, project);
       // The trust write and its bounded-history prune are separate store operations. If the write
       // committed before pruning failed, re-read the governed state instead of falsely telling the
       // operator that authority stayed restricted.
@@ -542,7 +545,7 @@ export async function handleCreateProject(
     }
     return {
       status: 201,
-      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+      body: { project: await projectWithWorkspaceAvailability(deps.store, project) },
     };
   });
 }
@@ -560,14 +563,14 @@ function buildProjectPatch(body: Record<string, unknown>): UpdateProjectPatch {
   };
 }
 
-function reconnectExistingProject(
+async function reconnectExistingProject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   targetPath: string,
-): ProjectWithAvailability {
+): Promise<ProjectWithAvailability> {
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   try {
-    const project = projectWithWorkspaceAvailability(
+    const project = await projectWithWorkspaceAvailability(
       deps.store,
       deps.store.reconnectProject(targetPath),
     );
@@ -613,12 +616,15 @@ export async function handleUpdateProject(
     // existing-only paired-write owner repairs a missing single-root manifest atomically without
     // admitting an unregistered path; ordinary metadata patches stay on updateProject.
     if (Object.keys(patch).length === 0) {
-      return { status: 200, body: { project: reconnectExistingProject(ctx, deps, targetPath) } };
+      return {
+        status: 200,
+        body: { project: await reconnectExistingProject(ctx, deps, targetPath) },
+      };
     }
     const project = deps.store.updateProject(targetPath, patch);
     return {
       status: 200,
-      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+      body: { project: await projectWithWorkspaceAvailability(deps.store, project) },
     };
   });
 }

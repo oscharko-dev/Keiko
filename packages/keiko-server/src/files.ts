@@ -60,7 +60,7 @@ import {
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { recordFilesCopyRefusal, type FilesCopyRefusalStage } from "./files-copy-log.js";
-import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
+import { DENIED_MESSAGE, pathIsDenied, pathIsDeniedAsync } from "./files-deny.js";
 import { errorBody } from "./route-error.js";
 import { STREAMING } from "./route-outcome.js";
 import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
@@ -369,8 +369,8 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return store.listProjects().find((project) => project.path === projectId);
 }
 
-function rootPathIsDenied(rootPath: string): boolean {
-  return pathIsDenied(rootPath);
+function rootPathIsDenied(rootPath: string): Promise<boolean> {
+  return pathIsDeniedAsync(rootPath);
 }
 
 function assertMetadataSafe(value: string, redactor: FilesMetadataRedactor): void {
@@ -393,12 +393,12 @@ async function resolveRegisteredRoot(
   redactor: FilesMetadataRedactor,
 ): Promise<ResolvedProjectRoot> {
   assertMetadataSafe(project.path, redactor);
-  if (rootPathIsDenied(project.path)) {
+  if (await rootPathIsDenied(project.path)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(project.path);
   assertMetadataSafe(realRoot, redactor);
-  if (rootPathIsDenied(realRoot)) {
+  if (await rootPathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return {
@@ -423,12 +423,12 @@ async function resolveArbitraryRoot(
     throw new FilesError(400, "BAD_ROOT", "The root must be an absolute directory path.");
   }
   assertMetadataSafe(rootInput, redactor);
-  if (pathIsDenied(rootInput)) {
+  if (await pathIsDeniedAsync(rootInput)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(rootInput);
   assertMetadataSafe(realRoot, redactor);
-  if (pathIsDenied(realRoot)) {
+  if (await pathIsDeniedAsync(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return { root: rootInput, realRoot, access: createOrdinaryWorkspaceRootAccess(realRoot) };
@@ -1232,15 +1232,15 @@ async function nearestGitRoot(
   }
 }
 
-function canExposeFileSearchGitRoot(
+async function canExposeFileSearchGitRoot(
   selectedRoot: ResolvedProjectRoot,
   gitRoot: string,
   redactor: FilesMetadataRedactor,
-): boolean {
+): Promise<boolean> {
   return (
     gitRoot !== selectedRoot.realRoot &&
     isContained(selectedRoot.realRoot, gitRoot) &&
-    !pathIsDenied(gitRoot) &&
+    !(await pathIsDeniedAsync(gitRoot)) &&
     metadataIsSafe(gitRoot, redactor)
   );
 }
@@ -1271,7 +1271,7 @@ async function resolveFileSearchResultPath(args: {
     rootKind: "selected-root",
   };
   const gitRoot = await nearestGitRoot(dirname(args.nativePath), args.state.gitRootCache);
-  if (gitRoot === null || !canExposeFileSearchGitRoot(args.root, gitRoot, args.redactor)) {
+  if (gitRoot === null || !(await canExposeFileSearchGitRoot(args.root, gitRoot, args.redactor))) {
     return fallback;
   }
 

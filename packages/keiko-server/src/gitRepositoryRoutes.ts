@@ -529,7 +529,7 @@ export function createCloneRepositoryHandler(
       const project = deps.store.createProject(normalizedPath, name);
       return {
         status: 201,
-        body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+        body: { project: await projectWithWorkspaceAvailability(deps.store, project) },
       };
     } catch (error) {
       return handleCloneError(ctx, deps, error);

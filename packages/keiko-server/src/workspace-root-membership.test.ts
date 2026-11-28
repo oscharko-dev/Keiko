@@ -141,7 +141,7 @@ describe("workspace root membership", (): void => {
     );
   });
 
-  it("projects multiple projects from one complete validated manifest snapshot", (): void => {
+  it("projects multiple projects from one complete validated manifest snapshot", async (): Promise<void> => {
     const listRecords = store.listWorkspaceManifestRecords;
     const findRecord = vi.fn(store.findWorkspaceManifestRecordByRoot);
     let listCount = 0;
@@ -154,7 +154,7 @@ describe("workspace root membership", (): void => {
       findWorkspaceManifestRecordByRoot: findRecord,
     };
 
-    expect(projectsWithWorkspaceAvailability(countingStore, store.listProjects())).toEqual(
+    expect(await projectsWithWorkspaceAvailability(countingStore, store.listProjects())).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: rootA, workspaceAvailable: true }),
         expect.objectContaining({ path: rootB, workspaceAvailable: true }),
@@ -164,7 +164,7 @@ describe("workspace root membership", (): void => {
     expect(findRecord).not.toHaveBeenCalled();
   });
 
-  it("fails every workspace projection closed when the manifest snapshot is unavailable", (): void => {
+  it("fails every workspace projection closed when the manifest snapshot is unavailable", async (): Promise<void> => {
     const unavailableStore: UiStore = {
       ...store,
       listWorkspaceManifestRecords: (): never => {
@@ -172,9 +172,11 @@ describe("workspace root membership", (): void => {
       },
     };
 
-    expect(projectsWithWorkspaceAvailability(unavailableStore, store.listProjects())).toEqual([
-      expect.objectContaining({ path: rootA, available: true, workspaceAvailable: false }),
-      expect.objectContaining({ path: rootB, available: true, workspaceAvailable: false }),
-    ]);
+    expect(await projectsWithWorkspaceAvailability(unavailableStore, store.listProjects())).toEqual(
+      [
+        expect.objectContaining({ path: rootA, available: true, workspaceAvailable: false }),
+        expect.objectContaining({ path: rootB, available: true, workspaceAvailable: false }),
+      ],
+    );
   });
 });

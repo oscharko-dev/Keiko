@@ -30,7 +30,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import { pathIsDenied } from "../files-deny.js";
+import { pathIsDeniedAsync } from "../files-deny.js";
 import { FilesError, metadataIsSafe, readJsonObject, resolveRoot } from "../files.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -136,7 +136,7 @@ async function normalizeDefaultPath(value: string | undefined): Promise<string |
 // files.ts's `metadataIsSafe` rather than re-deriving the redactor no-op check.
 async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise<void> {
   if (!metadataIsSafe(path, deps.redactor)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
-  if (pathIsDenied(path)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
+  if (await pathIsDeniedAsync(path)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   let real: string;
   try {
     real = await realpath(path);
@@ -144,7 +144,7 @@ async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }
   if (!metadataIsSafe(real, deps.redactor)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
-  if (pathIsDenied(real)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
+  if (await pathIsDeniedAsync(real)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   const stats = await stat(real).catch(() => {
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   });
