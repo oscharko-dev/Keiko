@@ -1885,15 +1885,8 @@ function unchangedActivations(
 ): readonly VerifiedModelCapabilityObservation[] {
   const kept: VerifiedModelCapabilityObservation[] = [];
   for (const provider of next?.providers ?? []) {
-    const observation = state.observations.get(provider.modelId);
-    const previous = state.config?.providers.find((entry) => entry.modelId === provider.modelId);
-    if (
-      observation?.generation !== state.generation ||
-      observation.fields.conversationReady !== true ||
-      previous === undefined ||
-      !sameActivationBinding(previous, provider)
-    )
-      continue;
+    const observation = keptActivation(state, provider);
+    if (observation === undefined) continue;
     kept.push({
       modelId: provider.modelId,
       generation: state.generation + 1,
@@ -1905,6 +1898,20 @@ function unchangedActivations(
     });
   }
   return kept;
+}
+
+// The current, conversation-ready observation of a provider whose connection and credential did not change.
+function keptActivation(
+  state: RuntimeGatewayState,
+  provider: GatewayConfig["providers"][number],
+): VerifiedModelCapabilityObservation | undefined {
+  const observation = state.observations.get(provider.modelId);
+  if (observation?.generation !== state.generation) return undefined;
+  if (observation.fields.conversationReady !== true) return undefined;
+  const previous = state.config?.providers.find((entry) => entry.modelId === provider.modelId);
+  return previous !== undefined && sameActivationBinding(previous, provider)
+    ? observation
+    : undefined;
 }
 
 function setRuntimeGateway(
