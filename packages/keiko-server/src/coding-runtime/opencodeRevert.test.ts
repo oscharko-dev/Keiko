@@ -1048,7 +1048,6 @@ function gitIn(root: string, ...args: string[]): string {
   return run.stdout;
 }
 
-/** A committed repository whose `a.txt` the turn then stages, as the governed staging does. */
 /** What governed staging records after its mutation: the entry the index now holds per path. */
 async function noteGoverned(root: string, paths: readonly string[]): Promise<void> {
   const image = await captureTurnIndex(root);
@@ -1059,6 +1058,7 @@ async function noteGoverned(root: string, paths: readonly string[]): Promise<voi
   );
 }
 
+/** A committed repository whose `a.txt` the turn then stages, as the governed staging does. */
 async function stagedTurn(): Promise<{
   readonly root: string;
   readonly begun: ReturnType<typeof beginTurnIndex>;
