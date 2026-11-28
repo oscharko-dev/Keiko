@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d621d3eb49f279e616216101767487d77cde62878bcefeb498df30d0185e8962",
+    "catalogDigest": "a3ce2da6c8b49fe3b692e496a6e5f920f6c380abc96cf5e57d8a28c8fa509779",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16423,8 +16423,8 @@
         "failureClasses": ["coding-runtime-revert"],
         "proofIds": ["coding-runtime.revert.applied.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:77",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:810"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:79",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:884"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16555,8 +16555,8 @@
         "failureClasses": ["coding-runtime-revert"],
         "proofIds": ["coding-runtime.revert.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:115",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:841"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:117",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:915"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26025,8 +26025,8 @@
         "failureClasses": ["gateway-readiness"],
         "proofIds": ["gateway.activation.persistence.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/model-activation-memory.ts:66",
-        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:639"]
+        "registrationSite": "packages/keiko-server/src/model-activation-memory.ts:75",
+        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:648"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -127476,7 +127476,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/model-activation-memory.ts:303",
+      "site": "packages/keiko-server/src/model-activation-memory.ts:312",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129169,7 +129169,7 @@
     {
       "op": "coding-runtime.revert.applied",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:80",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:82",
       "package": "keiko-server"
     },
     {
@@ -129181,7 +129181,7 @@
     {
       "op": "coding-runtime.revert.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:118",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:120",
       "package": "keiko-server"
     },
     {
@@ -130151,7 +130151,7 @@
     {
       "op": "gateway.activation.persistence",
       "category": "gateway",
-      "site": "packages/keiko-server/src/model-activation-memory.ts:69",
+      "site": "packages/keiko-server/src/model-activation-memory.ts:78",
       "package": "keiko-server"
     },
     {
