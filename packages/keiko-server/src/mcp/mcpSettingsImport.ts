@@ -90,10 +90,14 @@ function wrappedEntries(section: Fields): readonly ImportEntry[] | undefined {
 
 function resemblesServer(value: unknown): boolean {
   const entry = fields(value);
+  if (entry === undefined) return false;
+  const declared = Object.hasOwn(entry, "type") && fields(entry.type) === undefined;
+  // An untyped object-valued key can be a named member of unrelated OpenCode metadata.
   return (
-    entry !== undefined &&
-    transportKind(entry) !== undefined &&
-    (Object.hasOwn(entry, "command") || Object.hasOwn(entry, "url"))
+    (declared && transportKind(entry) !== undefined) ||
+    ["command", "url"].some(
+      (key) => Object.hasOwn(entry, key) && (declared || fields(entry[key]) === undefined),
+    )
   );
 }
 

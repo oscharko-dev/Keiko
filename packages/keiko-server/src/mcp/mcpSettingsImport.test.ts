@@ -7,7 +7,7 @@ const remote = { type: "remote", url: "https://example.test/mcp", enabled: true 
 describe("central MCP JSON import", () => {
   it("takes only the MCP section of an OpenCode JSONC document", () => {
     const result = prepareMcpSettingsImport(
-      '{ /* copied config */ "provider": {"demo": {"options": {"baseURL":"https://model.example.test"}}}, "mcp": { "remote": {"type":"remote","url":"https://example.test/mcp"}, "local": {"type":"local","command":["/opt/example/node","--flag","/opt/example/server.js"]}, }, }',
+      '{ /* copied config */ "$schema": "https://example.test/config.json", "provider": {"demo": {"options": {"baseURL":"https://model.example.test"}}}, "mcp": { "remote": {"type":"remote","url":"https://example.test/mcp"}, "local": {"type":"local","command":["/opt/example/node","--flag","/opt/example/server.js"]}, }, }',
       snapshot,
     );
     expect(result.kind).toBe("ready");
@@ -76,6 +76,21 @@ describe("central MCP JSON import", () => {
     });
   });
 
+  it.each([
+    { type: "websocket", url: "https://example.test/mcp" },
+    { type: "websocket", url: { address: "https://example.test/mcp" } },
+    { type: 42, url: { address: "https://example.test/mcp" } },
+    { url: 42 },
+    { type: "remote" },
+    { type: "local", command: null },
+  ])("refuses a malformed server definition beside a wrapper (%j)", (bad) => {
+    const document = { mcp: { example: remote }, bad };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toEqual({
+      kind: "invalid",
+      issue: "shape",
+    });
+  });
+
   it("keeps a server literally named servers alongside other direct entries", () => {
     const document = {
       mcp: { servers: remote, second: { url: "https://second.example.test/mcp" } },
@@ -83,6 +98,18 @@ describe("central MCP JSON import", () => {
     expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toMatchObject({
       kind: "ready",
       update: { servers: [{ name: "servers" }, { name: "second" }] },
+    });
+  });
+
+  it("keeps unrelated named OpenCode commands and providers outside the import", () => {
+    const document = {
+      command: { url: { description: "Show addresses", template: "List addresses" } },
+      provider: { command: { options: { baseURL: "https://model.example.test" } } },
+      mcp: { example: remote },
+    };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toMatchObject({
+      kind: "ready",
+      update: { servers: [{ name: "example" }] },
     });
   });
 
