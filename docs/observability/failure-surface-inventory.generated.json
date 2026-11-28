@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ddfbb74168ade56353b32888c39a0169f47cff3cdfbe6871ff218b4e443eb695"
+    "catalogDigest": "a5a09c1f48681feab452bd35fbdb70013f418d7c539bd6c819acc1596b0f01f3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 743,
-    "proofCount": 769,
-    "resolvedProofCount": 769,
+    "operationCount": 744,
+    "proofCount": 770,
+    "resolvedProofCount": 770,
     "failureClassCount": 420,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -727,6 +727,7 @@
         "git.delivery.authority.admitted",
         "git.delivery.authority.denied",
         "git.delivery.buffers.checked",
+        "git.delivery.commit-refused",
         "git.delivery.commit.approval.minted",
         "git.delivery.commit.approval.required",
         "git.delivery.dispatch.no-spawn",
@@ -1169,7 +1170,7 @@
     "git-delivery-authority-gap": ["editor-delivery.dependency-failure"],
     "git-delivery-dirty-buffer": ["editor-delivery.dependency-failure"],
     "git-delivery-mutation": ["editor-delivery.dependency-failure"],
-    "git-delivery-precondition": ["editor-delivery.dependency-failure"],
+    "git-delivery-precondition": ["editor-delivery.rejection"],
     "git-delivery-readiness-provider": ["editor-delivery.dependency-failure"],
     "git-delivery-repository-binding": ["editor-delivery.rejection"],
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
@@ -2642,6 +2643,9 @@
     ],
     "git.delivery.buffers.checked.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionVerifiedCommitDependencies.test.ts"
+    ],
+    "git.delivery.commit-refused.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/commitRefusalLog.test.ts"
     ],
     "git.delivery.commit.approval.minted.emitted-line": [
       "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"

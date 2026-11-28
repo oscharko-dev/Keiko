@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ddfbb74168ade56353b32888c39a0169f47cff3cdfbe6871ff218b4e443eb695",
+    "catalogDigest": "a5a09c1f48681feab452bd35fbdb70013f418d7c539bd6c819acc1596b0f01f3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31264,6 +31264,77 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "git.delivery.commit-refused",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "gitDelivery/commitRefusalLog.logGitCommitRefused",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "not-on-prepared-branch",
+              "authority-lapsed",
+              "sequencer-in-progress",
+              "sequencer-unreadable",
+              "empty-message",
+              "message-invalid",
+              "message-too-large",
+              "cleanup-unavailable",
+              "landed-after-failure",
+              "nothing-to-commit",
+              "ref-moved",
+              "checkout-unreadable",
+              "revision-unreadable",
+              "git-command-failed",
+              "interrupted",
+              "unexpected-error"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["git-delivery-precondition"],
+        "proofIds": ["git.delivery.commit-refused.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:38",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:112"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "git.delivery.commit.approval.minted",
         "category": "security",
         "owner": "keiko-server",
@@ -31400,8 +31471,8 @@
         "failureClasses": ["git-delivery-authority-continuity"],
         "proofIds": ["git.delivery.dispatch.no-spawn.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:120",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:799"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:121",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:800"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31618,8 +31689,8 @@
         "failureClasses": ["git-delivery-mutation"],
         "proofIds": ["git.delivery.mutation.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:181",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1506"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:182",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1511"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31698,8 +31769,8 @@
         "failureClasses": ["git-delivery-precondition"],
         "proofIds": ["git.delivery.mutation.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:338",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1589"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:339",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:1594"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32216,8 +32287,8 @@
         "failureClasses": ["git-upstream-tracking"],
         "proofIds": ["git.delivery.push.upstream-tracking-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:143",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:824"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/execution.ts:144",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/execution.ts:825"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33286,7 +33357,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["stage", "unstage", "branch-ref-lock", "turn-index-restore"]
+            "values": ["stage", "unstage", "branch-ref-lock", "turn-index-restore", "commit-state"]
           },
           "quarantineFailures": {
             "type": "integer",
@@ -33312,6 +33383,36 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "descriptorFailures": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "stateFileFailures": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
           }
         },
         "causal": "correlation",
@@ -33320,8 +33421,8 @@
         "failureClasses": ["git-delivery-precondition"],
         "proofIds": ["git.index-transaction.cleanup-incomplete.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/indexCleanupLog.ts:29",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/indexCleanupLog.ts:64"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/indexCleanupLog.ts:37",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/indexCleanupLog.ts:90"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35351,14 +35452,15 @@
             "type": "string-array",
             "dataClass": "closed-enum",
             "required": false,
-            "maxItems": 6,
+            "maxItems": 7,
             "values": [
               "empty-subject",
               "missing-conventional-prefix",
               "disallowed-type",
               "subject-too-long",
               "missing-issue-key",
-              "missing-signoff"
+              "missing-signoff",
+              "message-too-large"
             ]
           },
           "violationCount": {
@@ -35511,7 +35613,7 @@
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:135",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1438"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1439"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -61946,15 +62048,21 @@
           "start": [],
           "state": [],
           "end": [],
-          "failure": ["git.delivery.mutation.failed", "git.index-transaction.cleanup-incomplete"],
+          "failure": [
+            "git.delivery.commit-refused",
+            "git.delivery.mutation.failed",
+            "git.index-transaction.cleanup-incomplete"
+          ],
           "loss": []
         },
         "requiredCausalOperations": [
+          "git.delivery.commit-refused",
           "git.delivery.mutation.failed",
           "git.index-transaction.cleanup-incomplete"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
+          "git.delivery.commit-refused",
           "git.delivery.mutation.failed",
           "git.index-transaction.cleanup-incomplete"
         ],
@@ -61968,8 +62076,16 @@
           "loss-state",
           "safe-platform-class"
         ],
-        "requiredFrameOperations": ["git.delivery.mutation.failed"],
-        "requiredCauseOperations": ["git.delivery.mutation.failed"]
+        "requiredFrameOperations": [
+          "git.delivery.commit-refused",
+          "git.delivery.mutation.failed",
+          "git.index-transaction.cleanup-incomplete"
+        ],
+        "requiredCauseOperations": [
+          "git.delivery.commit-refused",
+          "git.delivery.mutation.failed",
+          "git.index-transaction.cleanup-incomplete"
+        ]
       },
       {
         "contractKind": "activity-log-failure-class",
@@ -103710,10 +103826,18 @@
             "start": [],
             "state": [],
             "end": [],
-            "failure": ["git.delivery.mutation.failed", "git.index-transaction.cleanup-incomplete"],
+            "failure": [
+              "git.delivery.commit-refused",
+              "git.delivery.mutation.failed",
+              "git.index-transaction.cleanup-incomplete"
+            ],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "git.delivery.commit-refused",
+              "mode": "correlation"
+            },
             {
               "op": "git.delivery.mutation.failed",
               "mode": "correlation"
@@ -103727,6 +103851,54 @@
           "resourceSignals": [],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "git.delivery.commit-refused",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": true
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "safe-platform-class",
+                  "required": false
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "error-kind",
+                "loss-state",
+                "safe-platform-class"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["git.delivery.commit-refused.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "git.delivery.mutation.failed",
               "owner": "keiko-server",
@@ -103802,10 +103974,34 @@
                   "required": true
                 },
                 {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "descriptorFailures",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "directoryFailures",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "safe-platform-class",
+                  "required": false
                 },
                 {
                   "name": "lockLeft",
@@ -103826,16 +104022,29 @@
                   "required": true
                 },
                 {
+                  "name": "stateFileFailures",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "temporaryIndexLeft",
                   "type": "boolean",
                   "dataClass": "closed-enum",
                   "required": true
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "error-kind",
+                "loss-state",
+                "safe-platform-class"
+              ],
               "frameCauseEvidence": {
-                "frames": false,
-                "causeChain": false
+                "frames": true,
+                "causeChain": true
               },
               "proofIds": ["git.index-transaction.cleanup-incomplete.emitted-line"],
               "replayReferences": [],
@@ -130717,6 +130926,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.delivery.commit-refused",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRefusalLog.ts:41",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
       "site": "packages/keiko-server/src/gitDelivery/approvalEvents.ts:159",
@@ -130743,19 +130958,19 @@
     {
       "op": "git.delivery.dispatch.no-spawn",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:123",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:124",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:184",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:185",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:341",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:342",
       "package": "keiko-server"
     },
     {
@@ -130851,7 +131066,7 @@
     {
       "op": "git.delivery.push.upstream-tracking-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:146",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:147",
       "package": "keiko-server"
     },
     {
@@ -130935,7 +131150,7 @@
     {
       "op": "git.index-transaction.cleanup-incomplete",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/indexCleanupLog.ts:32",
+      "site": "packages/keiko-server/src/gitDelivery/indexCleanupLog.ts:40",
       "package": "keiko-server"
     },
     {
@@ -133314,6 +133529,7 @@
     "git.delivery.authority.admitted",
     "git.delivery.authority.denied",
     "git.delivery.buffers.checked",
+    "git.delivery.commit-refused",
     "git.delivery.commit.approval.minted",
     "git.delivery.commit.approval.required",
     "git.delivery.dispatch.no-spawn",
