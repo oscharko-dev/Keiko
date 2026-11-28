@@ -272,9 +272,16 @@ export function workspaceRootsNameSameFolder(
   const fold = (value: string): string => {
     const separated = value.replaceAll("\\", "/");
     const cased = caseInsensitive ? separated.toLowerCase() : separated;
-    return cased.length > 1 ? cased.replace(/\/+$/u, "") : cased;
+    return cased.length > 1 ? withoutTrailingSlashes(cased) : cased;
   };
   return left !== "" && right !== "" && fold(left) === fold(right);
+}
+
+// Linear scan from the end: a trailing-slash regex backtracks quadratically on long slash runs.
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charAt(end - 1) === "/") end -= 1;
+  return value.slice(0, end);
 }
 
 export function isPortableWorkspaceRelativePath(value: unknown): value is string {
