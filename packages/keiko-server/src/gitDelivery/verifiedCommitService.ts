@@ -895,7 +895,11 @@ class VerifiedCommitController implements VerifiedCommitService {
     const driftReason = this.proofDriftReason(context, verification, facts);
     if (driftReason !== undefined)
       return this.record(context, binding, "drift", driftReason, undefined, {}, {}, proofAgeMs);
-    const messagePolicy = await this.options.messageAllowed(message, context.workspace);
+    const messagePolicy = await this.options.messageAllowed(
+      message,
+      context.workspace,
+      context.correlationId,
+    );
     if (!messagePolicyAllowed(messagePolicy))
       return this.record(
         context,

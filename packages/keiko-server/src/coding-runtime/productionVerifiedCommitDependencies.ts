@@ -68,8 +68,17 @@ export function createProductionVerifiedCommitDependencies(
     // #3390: return the full validation (not just `.ok`) so a "blocked"/"message-policy" result
     // carries the closed violation codes end to end into the live OpenCode/sidecar commit-proposal
     // path — see VerifiedCommitServiceOptions["messageAllowed"] and VerifiedCommitResult["violations"].
-    messageAllowed: async (message, workspace): Promise<VerifiedCommitMessageVerdict> => {
-      const decision = await resolveGovernedCommitMessagePolicyDecision(deps, workspace.root);
+    messageAllowed: async (
+      message,
+      workspace,
+      correlationId,
+    ): Promise<VerifiedCommitMessageVerdict> => {
+      const decision = await resolveGovernedCommitMessagePolicyDecision(
+        deps,
+        workspace.root,
+        undefined,
+        correlationId,
+      );
       return {
         ...validateGitCommitMessage(message, decision.policy),
         policyMode: decision.mode,

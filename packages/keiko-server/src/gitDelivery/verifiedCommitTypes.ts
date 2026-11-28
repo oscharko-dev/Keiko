@@ -90,6 +90,7 @@ export interface VerifiedCommitServiceOptions {
   readonly messageAllowed: (
     message: string,
     workspace: WorkspaceInfo,
+    correlationId?: string,
   ) => Promise<boolean | VerifiedCommitMessageVerdict>;
 }
 

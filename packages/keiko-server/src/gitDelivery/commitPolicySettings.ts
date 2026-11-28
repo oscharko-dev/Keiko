@@ -1,7 +1,8 @@
-import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
-import { join } from "node:path";
-
+import {
+  defaultGitProcessRunner,
+  type GitProcessResult,
+  type GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 import type { GitCommitMessagePolicy } from "@oscharko-dev/keiko-contracts";
 import {
   gitCommitMessagePolicyForMode,
@@ -42,39 +43,90 @@ const COMMITLINT_CONFIG_FILES: readonly string[] = [
   ".commitlintrc.mts",
 ];
 const PACKAGE_JSON_MAX_BYTES = 1_048_576;
+const COMMIT_POLICY_GIT_TIMEOUT_MS = 10_000;
+const TREE_LISTING_MAX_BYTES = 4_194_304;
+const REGULAR_BLOB_MODES: ReadonlySet<string> = new Set(["100644", "100755"]);
 
-// Opened without following a link and without blocking, then re-checked on the open handle, so a
-// file swapped for a link or a FIFO after the first check is refused too.
-async function readRegularFile(path: string): Promise<string> {
-  const handle = await open(
-    path,
-    constants.O_RDONLY |
-      constants.O_NONBLOCK |
-      ((constants as Partial<typeof constants>).O_NOFOLLOW ?? 0),
-  );
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.size > PACKAGE_JSON_MAX_BYTES)
-      throw new Error("commit-policy-manifest-not-regular");
-    return await handle.readFile("utf8");
-  } finally {
-    await handle.close();
-  }
+async function runCommittedRead(
+  runner: GitProcessRunner,
+  root: string,
+  args: readonly string[],
+  maxBytes: number,
+  expectedExitCodes?: readonly number[],
+): Promise<GitProcessResult> {
+  const result = await runner(args, {
+    cwd: root,
+    maxBytes,
+    timeoutMs: COMMIT_POLICY_GIT_TIMEOUT_MS,
+    ...(expectedExitCodes === undefined ? {} : { expectedExitCodes }),
+  });
+  const failed =
+    result.refusal !== undefined ||
+    result.timedOut === true ||
+    result.aborted === true ||
+    result.truncated;
+  if (failed) throw new Error("commit-policy-committed-read-failed");
+  return result;
 }
 
-async function readOptionalText(path: string): Promise<string | undefined> {
-  try {
-    // Only a regular file within the bound is read; a link, a FIFO or any other special file is
-    // never opened for reading (it could stall the commit) and is never read as "none".
-    const entry = await lstat(path);
-    if (!entry.isFile()) throw new Error("commit-policy-manifest-not-regular");
-    if (entry.size > PACKAGE_JSON_MAX_BYTES) throw new Error("commit-policy-manifest-too-large");
-    return await readRegularFile(path);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return undefined;
-    throw error;
+interface RootEntry {
+  readonly mode: string;
+  readonly type: string;
+  readonly object: string;
+}
+
+// `git ls-tree -z HEAD` lines: `<mode> SP <type> SP <object> TAB <name> NUL`.
+function parseRootEntries(stdout: string): ReadonlyMap<string, RootEntry> {
+  const entries = new Map<string, RootEntry>();
+  for (const record of stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, type, object] = record.slice(0, tab).split(" ");
+    if (mode === undefined || type === undefined || object === undefined) continue;
+    entries.set(record.slice(tab + 1), { mode, type, object });
   }
+  return entries;
+}
+
+async function readCommittedRootEntries(
+  runner: GitProcessRunner,
+  root: string,
+): Promise<ReadonlyMap<string, RootEntry> | undefined> {
+  // An unborn HEAD (exit 1 under --quiet) has committed nothing, so it declares no convention.
+  const head = await runCommittedRead(
+    runner,
+    root,
+    ["rev-parse", "--verify", "--quiet", "HEAD"],
+    256,
+    [1],
+  );
+  if (head.exitCode === 1) return undefined;
+  if (head.exitCode !== 0) throw new Error("commit-policy-committed-read-failed");
+  const listing = await runCommittedRead(
+    runner,
+    root,
+    ["ls-tree", "-z", "HEAD"],
+    TREE_LISTING_MAX_BYTES,
+  );
+  if (listing.exitCode !== 0) throw new Error("commit-policy-committed-read-failed");
+  return parseRootEntries(listing.stdout);
+}
+
+async function readCommittedManifest(
+  runner: GitProcessRunner,
+  root: string,
+  entry: RootEntry,
+): Promise<string> {
+  if (entry.type !== "blob" || !REGULAR_BLOB_MODES.has(entry.mode))
+    throw new Error("commit-policy-manifest-not-regular");
+  const blob = await runCommittedRead(
+    runner,
+    root,
+    ["cat-file", "blob", entry.object],
+    PACKAGE_JSON_MAX_BYTES,
+  );
+  if (blob.exitCode !== 0) throw new Error("commit-policy-committed-read-failed");
+  return blob.stdout;
 }
 
 function packageDeclaresCommitlint(text: string): boolean {
@@ -93,18 +145,22 @@ function packageDeclaresCommitlint(text: string): boolean {
 }
 
 /**
- * True only when the repository itself declares a commit-message convention Keiko can enforce: a
- * commitlint configuration, or a `commitlint` key or dependency in `package.json`. A repository that
+ * True only when the repository itself declares, in the tree of its current `HEAD`, a commit-message
+ * convention Keiko can enforce: a commitlint configuration, or a `commitlint` key or dependency in
+ * `package.json`. The declaration is read from the committed tree, never from the working tree, so a
+ * run that deletes or edits those files cannot downgrade the commit-message gate. A repository that
  * declares none keeps its own habits and its own hooks; Keiko does not impose Conventional Commits.
  */
 export async function repositoryDeclaresConventionalCommits(
   workspaceRoot: string,
+  runner: GitProcessRunner = defaultGitProcessRunner,
 ): Promise<boolean> {
-  for (const name of COMMITLINT_CONFIG_FILES) {
-    if ((await readOptionalText(join(workspaceRoot, name))) !== undefined) return true;
-  }
-  const manifest = await readOptionalText(join(workspaceRoot, "package.json"));
-  return manifest !== undefined && packageDeclaresCommitlint(manifest);
+  const entries = await readCommittedRootEntries(runner, workspaceRoot);
+  if (entries === undefined) return false;
+  if (COMMITLINT_CONFIG_FILES.some((name) => entries.has(name))) return true;
+  const manifest = entries.get("package.json");
+  if (manifest === undefined) return false;
+  return packageDeclaresCommitlint(await readCommittedManifest(runner, workspaceRoot, manifest));
 }
 
 function decision(
@@ -123,6 +179,7 @@ export async function resolveGovernedCommitMessagePolicyDecision(
   deps: Pick<UiHandlerDeps, "editorSettingsControl" | "diagnostics">,
   workspaceRoot: string,
   configuredPolicy?: GitCommitMessagePolicy,
+  correlationId: string = UNKNOWN_CORRELATION_ID,
 ): Promise<GovernedCommitMessagePolicyDecision> {
   if (configuredPolicy !== undefined) {
     return {
@@ -147,7 +204,7 @@ export async function resolveGovernedCommitMessagePolicyDecision(
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: UNKNOWN_CORRELATION_ID,
+        correlationId,
         source: "git-delivery.commit-policy",
         operation: "git.commit.message-policy.resolve",
         error,
