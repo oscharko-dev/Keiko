@@ -611,7 +611,7 @@ function feedItems(
         id: `${idPrefix}tool:${tool.callId}`,
         occurredAt: tool.occurredAt,
         order: first + items.length,
-        tool: shownTool(tool, activeRunId),
+        tool: shownTool(tool, feed.runId === activeRunId ? activeRunId : undefined),
         count: 1,
       });
     }

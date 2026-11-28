@@ -144,6 +144,35 @@ describe("a continuation's timeline", () => {
     ).toHaveLength(2);
   });
 
+  it("settles a tool left open on an earlier run while a later run is active", () => {
+    const open: CodingSafeActivityTool = {
+      callId: "call-open",
+      tool: "shell",
+      state: "running",
+      occurredAt: "2026-07-19T12:00:03.000Z",
+    };
+    const stopped = feed("run-1", [], [open]);
+    const container = render(
+      <I18nProvider>
+        <Timeline
+          active
+          events={[]}
+          activity={{
+            status: "live",
+            feed: SECOND,
+            earlierFeeds: [stopped],
+            errorCode: null,
+            retry: vi.fn(),
+          }}
+          questions={IDLE_QUESTIONS}
+        />
+      </I18nProvider>,
+    ).container;
+    expect(container.querySelector('[data-tool-state="running"]')).toBeNull();
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="cancelled"]')).not.toBeNull();
+  });
+
   it("puts an earlier run's rows before the continuation's prompt at the same instant", () => {
     const at = "2026-07-19T12:05:00.000Z";
     const stopped = feed("run-1", [], [tool("call-last", "edit", at)]);
