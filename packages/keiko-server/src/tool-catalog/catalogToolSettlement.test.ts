@@ -8,6 +8,7 @@ import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "@oscharko-dev/keiko-contracts/
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { runtimeMaxDurationMs } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { chatTurnDeadlineSignal } from "../chat-tool-turn-deadline.js";
+import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type {
   CatalogHandlerContext,
@@ -88,6 +89,14 @@ const STAGE_EXECUTE = {
   phase: "execute",
   proposalId: "stage-1",
 } as const;
+const STATUS_READ = { ...ID, action: "git", operation: "status" } as const;
+const DIFF_READ = {
+  ...ID,
+  action: "git",
+  operation: "diff",
+  scope: "working-tree",
+  paths: ["big.bin"],
+} as const;
 const MIB = 1_048_576;
 // A supported 6 GiB staging file read at 10 MiB/s: one hash pass takes 614.4 s, which lies between
 // the former ten-minute outer bound and the 674.4 s the hash itself is granted.
@@ -95,9 +104,13 @@ const SIX_GIB_HASH_MS = (6_144 / 10) * 1_000;
 // Dispatches `keiko.git.execute` stage under the production budget; `hold` is the handler's work.
 function stageDispatch(
   hold: Promise<CatalogHandlerResult>,
-  options: { readonly authorityMs?: number; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly authorityMs?: number;
+    readonly signal?: AbortSignal;
+    readonly request?: CodingToolActionRequest;
+  } = {},
 ): { readonly fixture: ReturnType<typeof fixtureWith>; readonly started: Promise<undefined> } {
-  const budget = openCodeCatalogSettlementBudgetMs(STAGE_EXECUTE) ?? 0;
+  const budget = openCodeCatalogSettlementBudgetMs(options.request ?? STAGE_EXECUTE) ?? 0;
   const started = deferred<undefined>();
   const fixture = fixtureWith(
     (f) => ({
@@ -321,6 +334,41 @@ describe("catalog invocation settlement races", () => {
       await started;
       fixture.now.mockReturnValue(1000 + budget);
       await vi.advanceTimersByTimeAsync(budget);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "timeout" } });
+    });
+  });
+  // The raw status/diff scan streams a whole tracked large file whose index stat no longer matches,
+  // so it needs the same bounded lifetime as delivery: a 614.4 s read must not meet a ten-minute cut.
+  describe.each([
+    ["status", STATUS_READ],
+    ["diff", DIFF_READ],
+  ] as const)("a governed git %s read of a large modified file", (_name, request) => {
+    it("grants at least the deadline of the 6 GiB hash and no more than the longest run", () => {
+      const budget = openCodeCatalogSettlementBudgetMs(request) ?? 0;
+      expect(budget).toBeGreaterThanOrEqual(largeHashTimeoutMs(6_144 * MIB));
+      expect(budget).toBe(runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES));
+    });
+    it("completes a read that outlasts ten minutes", async () => {
+      vi.useFakeTimers();
+      const finish = deferred<CatalogHandlerResult>();
+      const { fixture, started } = stageDispatch(finish.promise, { request });
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + SIX_GIB_HASH_MS);
+      await vi.advanceTimersByTimeAsync(SIX_GIB_HASH_MS);
+      finish.resolve(RESULT);
+      expect(await pending).toMatchObject({ kind: "settled", result: { status: "completed" } });
+    });
+    it("still ends a hung read when the run's authority expires", async () => {
+      vi.useFakeTimers();
+      const { fixture, started } = stageDispatch(new Promise(() => undefined), {
+        authorityMs: 700_000,
+        request,
+      });
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      await started;
+      fixture.now.mockReturnValue(1000 + 700_000);
+      await vi.advanceTimersByTimeAsync(700_000);
       expect(await pending).toMatchObject({ kind: "settled", result: { status: "timeout" } });
     });
   });

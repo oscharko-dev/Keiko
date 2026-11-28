@@ -5,6 +5,7 @@ import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  GOVERNED_GIT_EXECUTE_MAX_DURATION_MS,
   GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -158,9 +159,11 @@ describe("the budget of a governed tool that waits for a human decision", () => 
   });
 
   // W-4 (Windows 1.5.10 lab): a six-file status took 14 s; the fixed 30 s default ended healthy work.
-  // Each Git process keeps its own sandbox timeout, so this only caps a runaway sequence of reads.
+  // A modified 6 GiB tracked file at 10 MiB/s needs 614.4 s to read, so a ten-minute budget cut it:
+  // the reads follow the delivery backstop (the longest authorizable run) and end at authority expiry.
   it("gives the Git read tools a budget well above the sandbox default", () => {
-    expect(GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS).toBe(600_000);
+    expect(GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS).toBe(GOVERNED_GIT_EXECUTE_MAX_DURATION_MS);
+    expect(GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS).toBeGreaterThan((6_144 / 10) * 1_000);
     expect(GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
     );

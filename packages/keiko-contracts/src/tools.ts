@@ -226,14 +226,6 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
 // 30 s budget cut a waiting approval off long before its own approval ceiling (PR #3452, F44).
 export const GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS = 60 * 60 * 1_000; // Owner decision 2026-11-24: 60 minutes.
 export const GOVERNED_TOOL_SETTLEMENT_GRACE_MS = 15_000;
-// The settlement budget of the governed Git read tools (`keiko_git_status`, `keiko_git_diff`). A raw
-// status is a sequence of Git processes (one per index, tree, attribute and hash read), and on a
-// host whose process creation is slow (Windows with a real-time scanner, W-4: ~14 s for one status
-// of a six-file repository) the fixed 30 s sandbox default ended healthy work. Hang protection is
-// unchanged where it belongs: every single Git process keeps its own `defaultTimeoutMs`, and the
-// scan is bounded in paths and bytes, so this budget only caps a runaway sequence of healthy reads.
-export const GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS = 10 * 60 * 1_000;
-
 export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
   DEFAULT_SANDBOX_POLICY.defaultTimeoutMs +
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS +
@@ -252,6 +244,18 @@ export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
 // (`context.deadlineAt`) still ends it earlier, and a staging deadline that scales with file size is
 // never cut by a shorter outer one. It is not the global default.
 export const GOVERNED_GIT_EXECUTE_MAX_DURATION_MS = 8 * 60 * 60 * 1_000;
+
+// The settlement budget of the governed Git read tools (`keiko_git_status`, `keiko_git_diff`). A raw
+// status is a sequence of Git processes (one per index, tree, attribute and hash read), and on a
+// host whose process creation is slow (Windows with a real-time scanner, W-4: ~14 s for one status
+// of a six-file repository) the fixed 30 s sandbox default ended healthy work. The same raw scan
+// streams a whole tracked large file whose index stat no longer matches, so a supported 6 GiB file
+// at 10 MiB/s needs 614.4 s for that read alone and a ten-minute budget cut it (PR #4573 review). The
+// budget therefore follows the same bounded-lifetime rule as `keiko.git.execute`: the longest run
+// the product can authorize, still ended earlier by the run's authority expiry, Stop or revocation.
+// Hang protection stays where it belongs: every Git process keeps its own `defaultTimeoutMs`, and
+// the scan is bounded in paths and bytes.
+export const GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS = GOVERNED_GIT_EXECUTE_MAX_DURATION_MS;
 
 // ─── Governed git lanes: the two credential-capable env profiles ─────────────────
 //
