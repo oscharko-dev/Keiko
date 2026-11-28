@@ -39,7 +39,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
-import { workspaceRootsNameSameFolder } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { repositoryRootsAreSameFolder } from "./repositoryRootIdentity.js";
 import {
   CODING_WORKBENCH_RUNTIME_ORIGINS,
   DEFAULT_CODING_WORKBENCH_AGENT,
@@ -4871,11 +4871,7 @@ export class CodingRuntimeOrchestrator {
     // The run starts in the repository the person sees or not at all: the request states the root
     // the Workbench shows, and the server's global pointer is not allowed to differ from it.
     if (
-      !workspaceRootsNameSameFolder(
-        request.expectedWorkspace.root,
-        active.instance.repositoryRoot,
-        process.platform !== "linux",
-      )
+      !repositoryRootsAreSameFolder(request.expectedWorkspace.root, active.instance.repositoryRoot)
     ) {
       return {
         gap: "workspace-selection-mismatch",
