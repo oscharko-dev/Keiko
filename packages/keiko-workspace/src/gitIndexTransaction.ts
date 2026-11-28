@@ -492,6 +492,14 @@ export async function withGitBranchRefLocks<T>(
   }
 }
 
+/** The entries from the last to the first, without changing the array. */
+function* newestFirst<T>(entries: readonly T[]): Generator<T> {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry !== undefined) yield entry;
+  }
+}
+
 /**
  * What the release of the branch ref locks could not finish, body-free: locks (or their descriptors)
  * that stayed, and directories this call created that could not be removed for a reason other than
@@ -510,9 +518,9 @@ function releaseBranchRefLocks(
 ): void {
   const remove = options.removePath ?? defaultRemovePath;
   let refLocks = 0;
-  for (const lock of held.reverse()) if (releaseRefLock(lock, remove)) refLocks += 1;
+  for (const lock of newestFirst(held)) if (releaseRefLock(lock, remove)) refLocks += 1;
   let directories = 0;
-  for (const directory of created.reverse())
+  for (const directory of newestFirst(created))
     if (
       stepFailed(() => {
         removeEmptyDirectory(directory, remove);

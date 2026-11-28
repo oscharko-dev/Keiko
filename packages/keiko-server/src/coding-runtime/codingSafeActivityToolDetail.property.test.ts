@@ -88,7 +88,7 @@ describe(`${MENTION_NAME} (property)`, () => {
         if (kind !== undefined) throw new Error(`labelled ${kind}: ${literalProgram(value)}`);
       },
     };
-    const seen = { pattern: 0, comment: 0, division: 0 };
+    const seen = { run: 0, pattern: 0, comment: 0, division: 0 };
     await checkProperty({
       ...options,
       property: (value) => {
@@ -96,10 +96,12 @@ describe(`${MENTION_NAME} (property)`, () => {
         if (wrap?.pattern === true) seen.pattern += 1;
         if (wrap?.name === "comment") seen.comment += 1;
         if (LEADS[value.lead]?.head.includes(" / ") === true) seen.division += 1;
+        seen.run += 1;
         options.property(value);
       },
     });
     const { runs } = propertySettings(options);
+    expect(seen.run).toBe(runs);
     for (const [what, count, share] of [
       ["a pattern literal", seen.pattern, 0.2],
       ["a comment", seen.comment, 0.05],
@@ -119,7 +121,15 @@ describe(`${MENTION_NAME} (property)`, () => {
         if (kind !== "command") throw new Error(`labelled ${String(kind)}: ${code}`);
       },
     };
-    await checkProperty(options);
+    let run = 0;
+    await checkProperty({
+      ...options,
+      property: (value) => {
+        run += 1;
+        options.property(value);
+      },
+    });
+    expect(run).toBe(propertySettings(options).runs);
   });
 
   it("sees a real call between two divisions", async () => {

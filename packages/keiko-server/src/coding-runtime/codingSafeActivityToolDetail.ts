@@ -166,6 +166,9 @@ class ProgramTokens {
   private lastIsWord = false;
   private adjacent = false;
   private afterDot = false;
+  // A line terminator since the last token: `++` / `--` after it is a prefix (no postfix operator
+  // may follow a line terminator, so automatic semicolon insertion ends the statement before it).
+  private lineBreak = false;
   // A word after a `.` is a property name, never a keyword.
   private wordAfterDot = false;
   private readonly parens: boolean[] = [];
@@ -175,11 +178,13 @@ class ProgramTokens {
     this.lastIsWord = false;
     this.adjacent = false;
     this.afterDot = false;
+    this.lineBreak = false;
   }
 
   /** Whitespace or a comment: the last token stays, but the next word starts a new one. */
-  public gap(): void {
+  public gap(lineBreak = false): void {
     this.adjacent = false;
+    if (lineBreak) this.lineBreak = true;
   }
 
   public slashStartsPattern(): boolean {
@@ -191,11 +196,14 @@ class ProgramTokens {
   // `++` / `--` after an operand is postfix and leaves an operand; anywhere else (after an operator,
   // a keyword, at the start) it is prefix and an operand, such as a pattern, is still to come.
   private incrementOrDecrement(): void {
-    if (this.lastIsWord ? this.slashStartsPattern() : this.last !== "operand") {
+    const prefix =
+      this.lineBreak || (this.lastIsWord ? this.slashStartsPattern() : this.last !== "operand");
+    if (prefix) {
       this.last = "regex-ahead";
       this.lastIsWord = false;
       this.adjacent = false;
       this.afterDot = false;
+      this.lineBreak = false;
     } else {
       this.operand();
     }
@@ -205,7 +213,7 @@ class ProgramTokens {
   public feed(code: string, i: number): number {
     const ch = code.charAt(i);
     if (PROGRAM_SEPARATOR.test(ch)) {
-      this.gap();
+      this.gap(PROGRAM_LINE_TERMINATOR.test(ch));
       return 1;
     }
     if (PROGRAM_WORD_CHAR.test(ch)) return this.feedWord(ch);
@@ -227,6 +235,7 @@ class ProgramTokens {
     this.lastIsWord = true;
     this.adjacent = true;
     this.afterDot = false;
+    this.lineBreak = false;
     this.last = "operand";
     return 1;
   }
@@ -236,6 +245,7 @@ class ProgramTokens {
       this.lastIsWord && !this.wordAfterDot && CONTROL_PAREN_KEYWORDS.has(this.word);
     this.lastIsWord = false;
     this.adjacent = false;
+    this.lineBreak = false;
     this.afterDot = ch === ".";
     if (ch === "(") this.parens.push(headIsControl);
     if (ch === ")") this.last = this.parens.pop() === true ? "regex-ahead" : "operand";
@@ -299,9 +309,10 @@ function slashSpan(code: string, i: number, tokens: ProgramTokens): ProgramScan 
     return { out: " ", end: lineEnd(code, i) };
   }
   if (next === "*") {
-    tokens.gap();
     const close = code.indexOf("*/", i + 2);
-    return { out: " ", end: close === -1 ? code.length : close + 2 };
+    const end = close === -1 ? code.length : close + 2;
+    tokens.gap(PROGRAM_LINE_TERMINATOR.test(code.slice(i + 2, end)));
+    return { out: " ", end };
   }
   if (!tokens.slashStartsPattern()) return undefined;
   const span = regexSpan(code, i);

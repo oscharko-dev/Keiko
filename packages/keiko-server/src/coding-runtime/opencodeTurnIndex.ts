@@ -270,7 +270,7 @@ function transactionObserver(root: string, seen: TransactionStates[]): GitIndexT
       seen.push({ before: await readAt(indexPath) });
     },
     prepared: async (indexPath): Promise<void> => {
-      const current = seen[seen.length - 1];
+      const current = seen.at(-1);
       if (current !== undefined) current.after = await readAt(indexPath);
     },
   };
