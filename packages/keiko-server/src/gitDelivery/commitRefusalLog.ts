@@ -24,6 +24,8 @@ export const GIT_COMMIT_REFUSAL_CAUSE_VALUES = [
   "empty-message",
   "message-invalid",
   "message-too-large",
+  "cleanup-unavailable",
+  "landed-after-failure",
   "nothing-to-commit",
   "ref-moved",
   "checkout-unreadable",
@@ -84,6 +86,8 @@ const REFUSAL_ERROR_KIND: Readonly<Record<string, ActivityLogErrorKind>> = {
   "nothing-to-commit": "validation-failed",
   "ref-moved": "conflict",
   "checkout-unreadable": "read-failed",
+  "cleanup-unavailable": "unavailable",
+  "landed-after-failure": "durability-failed",
   "revision-unreadable": "read-failed",
 };
 

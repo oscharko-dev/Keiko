@@ -3851,6 +3851,7 @@
     "GatewayToolCatalogError",
     "GitChangeBlocked",
     "GitCiFailureContextError",
+    "GitCleanupUnavailable",
     "GitDeliveryBodyTooLargeError",
     "GitDeliveryRootAuthorityRevokedError",
     "GitHubCodeContextPortError",

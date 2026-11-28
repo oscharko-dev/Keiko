@@ -61,6 +61,11 @@ export interface GitIndexCleanupReport {
   readonly descriptor: boolean;
 }
 export interface GitCleanupOptions<R> {
+  /**
+   * The live authority of the caller's run, asked again at each step of a write that has awaited
+   * (never cached): `false` stops the write with `GIT_HEAD_AUTHORITY_LAPSED` and nothing is written.
+   */
+  readonly authorize?: (() => boolean) | undefined;
   /** Receives the report only when something stayed; a port that throws never changes the result. */
   readonly onCleanupFailure?: ((report: R) => void) | undefined;
   readonly removePath?: RemovePath | undefined;
@@ -455,6 +460,9 @@ export async function removeGitCommitState(
   return stayed;
 }
 
+/** The message of the failure thrown when the caller's authority lapsed during a HEAD write. */
+export const GIT_HEAD_AUTHORITY_LAPSED = "git-head-authority-lapsed";
+
 /** The message of the failure thrown when HEAD no longer names the branch it was proved to name. */
 export const GIT_HEAD_CHANGED = "git-head-changed";
 
@@ -478,6 +486,8 @@ export async function repointSymbolicHead(
   if (!SAFE_HEAD_BRANCH.test(expectedBranch) || !SAFE_HEAD_BRANCH.test(targetBranch))
     throw new Error(GIT_REF_LOCK_UNAVAILABLE);
   const base = await resolveGitdir(fs, workspaceRoot);
+  // A Stop that arrived while the metadata was being resolved is honoured before any lock is taken.
+  proveAuthority(options);
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
   const head = join(base.path, "HEAD");
   const lock = `${head}.lock`;
@@ -492,17 +502,24 @@ export async function repointSymbolicHead(
   try {
     if (readFileSync(head, "utf8") !== `ref: refs/heads/${expectedBranch}\n`)
       throw new Error(GIT_HEAD_CHANGED);
+    proveAuthority(options);
     writeSync(held.descriptor, `ref: refs/heads/${targetBranch}\n`);
     held.closeAttempted = true;
     held.closeFailed = stepFailed(() => {
       close(held.descriptor);
     });
     if (held.closeFailed) throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+    // Immediately before the synchronous publication, with HEAD.lock still held.
+    proveAuthority(options);
     renameSync(lock, head);
     published = true;
   } finally {
     if (!published) releaseUnpublishedHeadLock(held, options);
   }
+}
+
+function proveAuthority(options: GitCleanupOptions<GitRefLockCleanupReport>): void {
+  if (options.authorize?.() === false) throw new Error(GIT_HEAD_AUTHORITY_LAPSED);
 }
 
 // Every path that did not publish removes its own HEAD.lock and closes the descriptor exactly once

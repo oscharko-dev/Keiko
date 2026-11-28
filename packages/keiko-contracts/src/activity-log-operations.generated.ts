@@ -30059,6 +30059,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "empty-message",
           "message-invalid",
           "message-too-large",
+          "cleanup-unavailable",
+          "landed-after-failure",
           "nothing-to-commit",
           "ref-moved",
           "checkout-unreadable",

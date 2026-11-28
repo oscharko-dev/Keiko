@@ -105,6 +105,7 @@ import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
   GIT_REF_LOCK_HELD,
   GIT_HEAD_CHANGED,
+  GIT_HEAD_AUTHORITY_LAPSED,
   gitSequencerOperationInProgress,
   repointSymbolicHead,
   removeGitCommitState,
@@ -151,6 +152,8 @@ export const GIT_COMMIT_REFUSAL_CAUSES = [
   "empty-message",
   "message-invalid",
   "message-too-large",
+  "cleanup-unavailable",
+  "landed-after-failure",
   "nothing-to-commit",
   "ref-moved",
   "checkout-unreadable",
@@ -329,11 +332,6 @@ const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
   "pager.commit=false",
   "-c",
   "alias.commit=",
-  // The cleanup of a commit message is pinned, so a repository's `commit.cleanup` (`strip` would
-  // drop a `#` line of a model-written message, `scissors` would cut it) can never make the plain
-  // `git commit` lane differ from the bound lane, which cleans exactly like `whitespace`.
-  "-c",
-  "commit.cleanup=whitespace",
   "-c",
   "gpg.program=gpg",
   "-c",
@@ -659,7 +657,8 @@ async function execInteractiveCommit(
 ): Promise<GitDeliveryExecutionResult> {
   const branch = ctx.preparedCheckout?.branchName;
   if (branch !== undefined) return execBoundCommit(ctx, request, sign, branch);
-  if (!commitMessageFits(request.message)) return reportCommitRefusal(ctx, "message-too-large");
+  const sized = await plainLaneMessageRefusal(ctx, request.message);
+  if (sized !== undefined) return sized;
   const prepared = await checkoutStillPrepared(ctx).catch((error: unknown) => error);
   if (prepared === false) return reportCommitRefusal(ctx, "not-on-prepared-branch");
   if (prepared !== true) {
@@ -726,7 +725,7 @@ async function execBoundCommit(
         "-F",
         "-",
       ],
-      Buffer.from(`${message}\n`, "utf8"),
+      Buffer.from(message, "utf8"),
     );
     const moved = await boundCheckoutRefusal(ctx, branch);
     if (moved !== undefined) return reportCommitRefusal(ctx, moved);
@@ -744,10 +743,132 @@ function boundFailureCause(error: unknown): GitCommitRefusalCause {
   return error instanceof GitObjectCommandFailure ? "git-command-failed" : "unexpected-error";
 }
 
-// Both interactive lanes refuse the same input: the cleaned message must fit the bounded input the
-// bound lane writes its commit object from (the plain lane's argument would not be safe either).
-function commitMessageFits(message: string): boolean {
-  return Buffer.byteLength(cleanedCommitMessage(message), "utf8") <= GIT_COMMIT_MESSAGE_MAX_BYTES;
+// The commit object is written from a bounded standard input (64 KiB) that carries the message and
+// its closing line break, so the effective message (after the cleanup Git itself would apply) is at
+// most this many bytes with its line break. Both interactive lanes refuse the same input.
+const COMMIT_INPUT_MAX_BYTES = GIT_COMMIT_MESSAGE_MAX_BYTES + 1;
+
+// The plain lane hands the message to `git commit`, which cleans it itself; it only has to know
+// whether the effective message fits. A message that fits before any cleanup needs no process.
+async function plainLaneMessageRefusal(
+  ctx: RunContext,
+  raw: string,
+): Promise<GitDeliveryExecutionResult | undefined> {
+  if (Buffer.byteLength(raw, "utf8") <= GIT_COMMIT_MESSAGE_MAX_BYTES) return undefined;
+  const effective = await effectiveCommitMessage(ctx, raw);
+  return typeof effective === "string" ? undefined : effective;
+}
+
+// What `git commit --message` records, made by Git itself: the cleanup mode the repository's
+// effective `commit.cleanup` names, applied by `git stripspace` (`strip` also drops comment lines
+// with the configured comment character), or the message unchanged for `verbatim`. `default` and
+// `scissors` clean like `whitespace` for a message that is not edited. The text ends with the line
+// break `git commit` completes. Returns the refusal (already reported) when it cannot be produced.
+async function effectiveCommitMessage(
+  ctx: RunContext,
+  raw: string,
+): Promise<string | GitDeliveryExecutionResult> {
+  if (raw === "") return reportCommitRefusal(ctx, "empty-message");
+  if (raw.includes("\0")) return reportCommitRefusal(ctx, "message-invalid");
+  if (Buffer.byteLength(raw, "utf8") > COMMIT_INPUT_MAX_BYTES)
+    return reportCommitRefusal(ctx, "message-too-large");
+  let cleaned: CleanedMessage;
+  try {
+    cleaned = await cleanedByGit(ctx, raw);
+  } catch (error) {
+    reportCommitRefusal(ctx, cleanupFailureCause(error), error);
+    return failureFromThrow(error, 0, 0);
+  }
+  // Verbatim keeps even a blank message, as Git does; the other modes refuse one that is empty once
+  // cleaned (Git aborts such a commit).
+  if (cleaned.text.trim() === "" && !cleaned.verbatim)
+    return reportCommitRefusal(ctx, "empty-message");
+  if (Buffer.byteLength(cleaned.text, "utf8") > COMMIT_INPUT_MAX_BYTES)
+    return reportCommitRefusal(ctx, "message-too-large");
+  return cleaned.text;
+}
+
+function cleanupFailureCause(error: unknown): GitCommitRefusalCause {
+  if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
+    return "interrupted";
+  return "cleanup-unavailable";
+}
+
+type CommitCleanupMode = "whitespace" | "strip" | "verbatim";
+
+class GitCleanupUnavailable extends Error {
+  public constructor() {
+    super("git-commit-cleanup-unavailable");
+    this.name = "GitCleanupUnavailable";
+  }
+}
+
+interface CleanedMessage {
+  readonly text: string;
+  readonly verbatim: boolean;
+}
+
+async function cleanedByGit(ctx: RunContext, raw: string): Promise<CleanedMessage> {
+  const mode = await readCommitCleanupMode(ctx);
+  if (mode === "verbatim") return { text: raw.endsWith("\n") ? raw : `${raw}\n`, verbatim: true };
+  const result = await runOne(
+    stripspaceContext(ctx),
+    mode === "strip" ? ["stripspace", "--strip-comments"] : ["stripspace"],
+    Buffer.from(raw, "utf8"),
+  );
+  // The output is the commit text itself: a run that was cut short or altered by a scrub is not it.
+  if (result.exitCode !== 0 || result.truncated || result.outputRedacted === true)
+    throw new GitCleanupUnavailable();
+  return { text: result.stdout, verbatim: false };
+}
+
+// This one read's stdout is the value the caller needs: only credentials are scrubbed, and nothing
+// is dropped for size.
+function stripspaceContext(ctx: RunContext): RunContext {
+  return {
+    ...ctx,
+    runDeps: {
+      ...ctx.runDeps,
+      policy: {
+        ...ctx.runDeps.policy,
+        outputScrub: "credentials-only",
+        maxOutputBytes: Math.max(ctx.runDeps.policy.maxOutputBytes, 4 * COMMIT_INPUT_MAX_BYTES),
+      },
+    },
+  };
+}
+
+// The effective `commit.cleanup`, read through the repository's own Git (every config scope and
+// include). Unset is `default`, which cleans a message that is not edited like `whitespace`; a value
+// Git itself would reject, a failed read or a cut-short answer is unavailable, never a guess.
+async function readCommitCleanupMode(ctx: RunContext): Promise<CommitCleanupMode> {
+  const runDeps = { ...ctx.runDeps, commandRules: GIT_CONFIG_COMMAND_RULES };
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
+  const result = await runCommand(
+    {
+      command: "git",
+      args: ["config", "--get", "commit.cleanup"],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
+    runDeps,
+  );
+  if (result.truncated) throw new GitCleanupUnavailable();
+  if (result.exitCode === 1) return "whitespace";
+  if (result.exitCode !== 0) throw new GitCleanupUnavailable();
+  switch (result.stdout.trim()) {
+    case "default":
+    case "whitespace":
+    case "scissors":
+      return "whitespace";
+    case "strip":
+      return "strip";
+    case "verbatim":
+      return "verbatim";
+    default:
+      throw new GitCleanupUnavailable();
+  }
 }
 
 interface PreparedBoundCommit {
@@ -765,32 +886,12 @@ async function prepareBoundCommit(
 ): Promise<PreparedBoundCommit | GitDeliveryExecutionResult> {
   const bound = await boundCommitHead(ctx, branch);
   if ("outcome" in bound) return bound;
-  const message = cleanedCommitMessage(request.message);
-  if (message === "") return reportCommitRefusal(ctx, "empty-message");
-  if (message.includes("\0")) return reportCommitRefusal(ctx, "message-invalid");
-  if (!commitMessageFits(message)) return reportCommitRefusal(ctx, "message-too-large");
+  const message = await effectiveCommitMessage(ctx, request.message);
+  if (typeof message !== "string") return message;
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
   if (!request.allowEmpty && (await commitsNothing(ctx, bound.head, tree)))
     return reportCommitRefusal(ctx, "nothing-to-commit");
   return { head: bound.head, message, tree };
-}
-
-// The message `git commit --message` records: Git's default `whitespace` cleanup (as `git
-// stripspace`), which drops trailing blanks of every line, collapses runs of empty lines and trims
-// the empty lines around the text. Nothing else changes it, so the bytes match a plain commit; a
-// message that is empty afterwards is not a commit, as for Git.
-function cleanedCommitMessage(message: string): string {
-  const lines = message.split("\n").map(trimTrailingBlanks);
-  const kept = lines.filter((line, index) => line !== "" || lines[index - 1] !== "");
-  while (kept[0] === "") kept.shift();
-  while (kept.at(-1) === "") kept.pop();
-  return kept.join("\n");
-}
-
-function trimTrailingBlanks(line: string): string {
-  let end = line.length;
-  while (end > 0 && " \t\r\f\v".includes(line.charAt(end - 1))) end -= 1;
-  return line.slice(0, end);
 }
 
 // The HEAD a bound commit builds on, or the refusal (already reported with its one closed cause) when
@@ -862,7 +963,10 @@ async function updateBoundCommitRef(
     ["update-ref", "-m", commitReflogMessage(head, message), "--stdin"],
     `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
   );
-  if (result.exitCode !== 0) return classifyRefUpdateFailure(ctx, branch, head);
+  if (result.exitCode !== 0) {
+    const failed = await classifyRefUpdateFailure(ctx, branch, head, commit);
+    if (failed !== undefined) return failed;
+  }
   await removeCommitState(ctx);
   return executionResult("succeeded", result.durationMs, { externalId: commit });
 }
@@ -870,12 +974,22 @@ async function updateBoundCommitRef(
 // A non-zero `update-ref` is a conflict only when the branch really is not at the value the commit
 // was built on; a held ref lock or any other Git failure leaves it there and is a plain failure of
 // the command (its exit class only, never its text), as the plain lane reports it.
+//
+// A branch that already names the commit just written means the update landed although the command
+// reported failure (a late failure after the ref was written): the commit exists on the branch and a
+// retry would duplicate it, so it is a success (`undefined`), and the late failure is recorded as the
+// closed cause `landed-after-failure` rather than hidden.
 async function classifyRefUpdateFailure(
   ctx: RunContext,
   branch: string,
   head: GitHeadState,
-): Promise<GitDeliveryExecutionResult> {
+  commit: string,
+): Promise<GitDeliveryExecutionResult | undefined> {
   const tip = await readGitLocalBranchTip(commitReadDeps(ctx), branch);
+  if (tip === commit) {
+    reportCommitRefusal(ctx, "landed-after-failure");
+    return undefined;
+  }
   const expected = head.kind === "born" ? head.sha : undefined;
   if (tip !== expected) return reportCommitRefusal(ctx, "ref-moved", undefined, "conflict");
   return reportCommitRefusal(ctx, "git-command-failed");
@@ -1257,7 +1371,7 @@ async function execUnbornBranch(
           return failureFromExit(0, 0);
         return await repointUnbornHead(ctx, fromBranch, req);
       },
-      workspaceFsOf(ctx.runDeps),
+      ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
       branchLockCleanupOptions(ctx),
     );
   } catch (error) {
@@ -1297,8 +1411,10 @@ async function repointUnbornHead(
     ctx.runDeps.workspace.root,
     fromBranch,
     req.branchName,
-    workspaceFsOf(ctx.runDeps),
-    branchLockCleanupOptions(ctx),
+    ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+    // The live authority is asked again after the metadata is resolved, after the old value is
+    // proved and immediately before the publication: a Stop during any await writes nothing.
+    { ...branchLockCleanupOptions(ctx), authorize: () => commitEffectAuthorized(ctx) },
   );
   return executionResult("succeeded", ctx.runDeps.now() - startedAtMs);
 }
@@ -1310,14 +1426,12 @@ async function repointUnbornHead(
 export function failureFromUnbornBranchThrow(error: unknown): GitDeliveryExecutionResult {
   if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
     return failureFromThrow(error, 0, 0);
-  if (
-    error instanceof Error &&
-    (error.message === GIT_REF_LOCK_HELD || error.message === GIT_HEAD_CHANGED)
-  )
+  const message = error instanceof Error ? error.message : undefined;
+  // The run's authority lapsed (a Stop) while HEAD was being re-pointed: nothing was written.
+  if (message === GIT_HEAD_AUTHORITY_LAPSED) return executionResult("aborted", 0);
+  if (message === GIT_REF_LOCK_HELD || message === GIT_HEAD_CHANGED)
     return failureFromExit(0, 0, "conflict");
-  const unproven =
-    error instanceof GitWorktreeReadFailure ||
-    (error instanceof Error && error.message === GIT_REF_LOCK_UNAVAILABLE);
+  const unproven = error instanceof GitWorktreeReadFailure || message === GIT_REF_LOCK_UNAVAILABLE;
   return unproven ? failureFromExit(0, 0, "precondition-failed") : failureFromThrow(error, 0, 0);
 }
 

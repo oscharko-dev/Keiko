@@ -6,7 +6,7 @@
 // identity lane on purpose, against a DISPOSABLE HOME it creates itself — never the developer's.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
@@ -364,6 +364,7 @@ describe("node git mutation adapter — an interactive commit stays on the branc
 
 describe("node git mutation adapter — the bound commit leaves the repository as git commit does", () => {
   const SCENARIO_ENV = { PATH: process.env.PATH ?? "" };
+  let commitSequence = 0;
   const tempRepos: string[] = [];
 
   afterEach(() => {
@@ -411,7 +412,11 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     extra: Partial<Parameters<typeof createNodeGitMutationAdapter>[0]> = {},
   ): Promise<GitDeliveryExecutionResultLike> {
     const ad = adapterFor(repo, bound, extra);
-    writeFileSync(join(repo, "a.txt"), `${String(message.length)}\n`, "utf8");
+    writeFileSync(
+      join(repo, "a.txt"),
+      `${String(message.length)}-${String(++commitSequence)}\n`,
+      "utf8",
+    );
     expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
     return ad.commit({ message, allowEmpty: false });
   }
@@ -509,19 +514,134 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     ]);
   });
 
-  it("records the same message on both lanes under a repository commit.cleanup=strip (the pin, not git's own cleanup)", async () => {
-    const message = "# heading\nbody\n";
-    const plainRepo = newRepo();
-    const boundRepo = newRepo();
-    for (const repo of [plainRepo, boundRepo]) {
-      seedBase(repo);
-      gitIn(repo, ["config", "commit.cleanup", "strip"]);
-    }
-    expect((await commitOn(plainRepo, false, message)).outcome).toBe("succeeded");
-    expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
+  // The message bytes git commit -m records, for every effective cleanup mode: the bound lane must
+  // produce exactly them (the cleanup is made by Git itself, never by a hand-written copy of it).
+  const CLEANUP_MESSAGES = [
+    "plain",
+    "  lead  \n\n\n\nbody  \n\n",
+    "# comment\nbody\n# x\n",
+    ";semi\n#hash\nbody",
+    "sub\n\n  \n\ttab\t\n",
+    "a\r\nb\r\n",
+    "\n\nlead\nbody",
+    "tail   ",
+  ];
 
-    const body = (repo: string): string => gitIn(repo, ["log", "-1", "--format=%B"]);
-    expect(body(boundRepo)).toBe(body(plainRepo));
+  function commitBodies(repo: string): string[] {
+    return gitIn(repo, ["rev-list", "--reverse", "HEAD"])
+      .trim()
+      .split("\n")
+      .map((sha) => gitIn(repo, ["cat-file", "commit", sha]).split("\n\n").slice(1).join("\n\n"));
+  }
+
+  it.each([
+    ["default", undefined],
+    ["whitespace", undefined],
+    ["scissors", undefined],
+    ["strip", undefined],
+    ["strip", ";"],
+    ["verbatim", undefined],
+  ])(
+    "records the message bytes of git commit -m for commit.cleanup=%s (comment character %s)",
+    async (mode, commentChar) => {
+      // The oracle is real `git commit -m` run directly, so the lanes cannot agree on a wrong answer.
+      const gitRepo = newRepo();
+      const plainRepo = newRepo();
+      const boundRepo = newRepo();
+      for (const repo of [gitRepo, plainRepo, boundRepo]) {
+        seedBase(repo);
+        gitIn(repo, ["config", "commit.cleanup", mode]);
+        if (commentChar !== undefined) gitIn(repo, ["config", "core.commentChar", commentChar]);
+      }
+      for (const [index, message] of CLEANUP_MESSAGES.entries()) {
+        writeFileSync(join(gitRepo, "a.txt"), `${String(index)}\n`, "utf8");
+        gitIn(gitRepo, ["add", "a.txt"]);
+        gitIn(gitRepo, ["commit", "-q", "-m", message]);
+        expect((await commitOn(plainRepo, false, message)).outcome).toBe("succeeded");
+        expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
+      }
+
+      expect(commitBodies(boundRepo)).toEqual(commitBodies(gitRepo));
+      expect(commitBodies(plainRepo)).toEqual(commitBodies(gitRepo));
+      expect(reflogs(boundRepo)).toEqual(reflogs(gitRepo));
+      expect(commitBodies(boundRepo)).toHaveLength(CLEANUP_MESSAGES.length + 1);
+    },
+  );
+
+  it("refuses an invalid commit.cleanup on both lanes without writing anything", async () => {
+    for (const bound of [false, true]) {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["config", "commit.cleanup", "bogus"]);
+      const causes: string[] = [];
+      const ad = adapterFor(repo, bound, { onCommitRefused: (r) => causes.push(r.cause) });
+      writeFileSync(join(repo, "a.txt"), "x\n", "utf8");
+      expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+      // The bound lane reports the closed cause; the plain lane lets Git refuse it and writes nothing.
+      expect((await ad.commit({ message: "m", allowEmpty: false })).outcome).toBe("failed");
+      expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+      if (bound) expect(causes).toEqual(["cleanup-unavailable"]);
+    }
+  });
+
+  // The limit is on the effective message (after the cleanup), 65,535 bytes without its line break.
+  it.each([true, false])(
+    "accepts 65,535 bytes after cleanup and refuses 65,536 (bound lane: %s)",
+    async (bound) => {
+      const repo = newRepo();
+      seedBase(repo);
+      const causes: string[] = [];
+      const extra = {
+        onCommitRefused: (r: { cause: string }): void => {
+          causes.push(r.cause);
+        },
+      };
+
+      expect((await commitOn(repo, bound, "x".repeat(65_535), extra)).outcome).toBe("succeeded");
+      // 65,536 raw bytes whose trailing blanks are cleaned away fit once cleaned.
+      expect((await commitOn(repo, bound, `${"y".repeat(65_533)}   `, extra)).outcome).toBe(
+        "succeeded",
+      );
+      const before = gitIn(repo, ["rev-list", "--count", "HEAD"]).trim();
+      const refused = await commitOn(repo, bound, "z".repeat(65_536), extra);
+
+      expect(refused.outcome).toBe("failed");
+      expect(refused.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["message-too-large"]);
+      expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe(before);
+    },
+  );
+
+  it("treats an update-ref that fails after the branch names the new commit as a success", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const causes: string[] = [];
+    const lateFailure: SpawnFn = (command, args, options) => {
+      const child = nodeSpawnFn(command, args, options);
+      if (!args.includes("update-ref")) return child;
+      // The real update lands; only the exit code the adapter sees is a failure.
+      return new Proxy(child, {
+        get(target, property): unknown {
+          const value: unknown = Reflect.get(target, property, target);
+          if (property !== "on") return typeof value === "function" ? value.bind(target) : value;
+          return (event: string, listener: (...args: unknown[]) => void): ChildProcess =>
+            target.on(event, (...received: unknown[]) => {
+              if (event === "close") listener(1, received[1]);
+              else listener(...received);
+            });
+        },
+      });
+    };
+
+    const committed = await commitOn(repo, true, "lands anyway", {
+      spawn: lateFailure,
+      onCommitRefused: (report) => causes.push(report.cause),
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.externalId).toBe(gitIn(repo, ["rev-parse", "HEAD"]).trim());
+    expect(gitIn(repo, ["log", "-1", "--format=%s"]).trim()).toBe("lands anyway");
+    expect(causes).toEqual(["landed-after-failure"]);
   });
 
   // A port that fails the way the Node port does: the real lstat error codes of one entry.

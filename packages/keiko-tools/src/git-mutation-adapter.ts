@@ -117,6 +117,7 @@ export const GIT_MUTATION_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze
   "commit",
   "write-tree",
   "commit-tree",
+  "stripspace",
   "update-ref",
   "hash-object",
   "update-index",

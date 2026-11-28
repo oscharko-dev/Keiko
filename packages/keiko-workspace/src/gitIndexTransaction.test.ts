@@ -23,6 +23,7 @@ import { nodeWorkspaceFs } from "./fs.js";
 import {
   GIT_STAGE_FILE_MAX_BYTES,
   GIT_SEQUENCER_STATE_UNAVAILABLE,
+  GIT_HEAD_AUTHORITY_LAPSED,
   assertGitStageFileUnchanged,
   gitSequencerOperationInProgress,
   inspectGitStageFile,
@@ -787,6 +788,24 @@ describe("repointSymbolicHead cleanup", () => {
     expect(reports).toEqual([{ refLocks: 1, descriptors: 0, directories: 0 }]);
     rmSync(headLock());
   });
+
+  it.each([1, 2, 3])(
+    "writes nothing and leaves no HEAD.lock when the authority lapses at check %i",
+    async (lapsingCheck) => {
+      let checks = 0;
+      await expect(
+        repointSymbolicHead(root, "dev", "next", nodeWorkspaceFs, {
+          authorize: () => {
+            checks += 1;
+            return checks < lapsingCheck;
+          },
+        }),
+      ).rejects.toThrow(GIT_HEAD_AUTHORITY_LAPSED);
+      expect(checks).toBe(lapsingCheck);
+      expect(existsSync(headLock())).toBe(false);
+      expect(branch()).toBe("refs/heads/dev");
+    },
+  );
 
   it("publishes and leaves no lock on the normal path", async () => {
     await repointSymbolicHead(root, "dev", "next");

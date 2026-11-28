@@ -18,7 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createNodeGitMutationAdapter,
   failureFromUnbornBranchThrow,
@@ -612,6 +613,55 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/unrelated");
     expect(existsSync(join(root, ".git", "HEAD.lock"))).toBe(false);
   });
+  // A Stop is a live authority change, not a state change: it must be honoured at every await of the
+  // write, so it can never be answered with a moved HEAD and a success.
+  it("writes nothing when Stop arrives while the HEAD metadata is being resolved", async () => {
+    const controller = new AbortController();
+    const stopping: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      // The branch locks exist only while the re-point runs: the first resolution after them is the
+      // one the write itself awaits.
+      realPath: (path) => {
+        if (existsSync(join(root, ".git", "refs", "heads", "fresh.lock"))) controller.abort();
+        return nodeWorkspaceFs.realPath(path);
+      },
+    };
+    const result = await createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      signal: controller.signal,
+      metadataFs: stopping,
+    }).createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(controller.signal.aborted).toBe(true);
+    expect(result.outcome).toBe("aborted");
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+    expect(existsSync(join(root, ".git", "HEAD.lock"))).toBe(false);
+    expect(existsSync(join(root, ".git", "refs", "heads", "fresh.lock"))).toBe(false);
+  });
+  // Authorization checks of one re-point: the entry check, after the metadata, after the old value is
+  // proved under HEAD.lock, and immediately before the publication.
+  it.each([3, 4])(
+    "writes nothing and removes HEAD.lock when the authority lapses at check %i",
+    async (lapsingCheck) => {
+      let checks = 0;
+      const result = await adapter(() => {
+        checks += 1;
+        return checks < lapsingCheck;
+      }).createBranch({
+        branchName: "feature/first",
+        startPointRefHash: gitZeroObjectId(40),
+        fromUnbornBranch: "fresh",
+      });
+      expect(checks).toBe(lapsingCheck);
+      expect(result.outcome).toBe("aborted");
+      expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+      expect(existsSync(join(root, ".git", "HEAD.lock"))).toBe(false);
+    },
+  );
   it("writes nothing when another process holds HEAD.lock", async () => {
     const lock = join(root, ".git", "HEAD.lock");
     writeFileSync(lock, "");
