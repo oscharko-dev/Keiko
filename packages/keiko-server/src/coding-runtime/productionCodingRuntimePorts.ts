@@ -754,18 +754,36 @@ async function abortCodexTurn(
   ).ok;
 }
 
-async function waitForCodexTerminal(
+// Polls the turn's terminal status on a timer until it reports one or the run is aborted; a timer
+// chain keeps no promise chain growing over a long turn.
+function waitForCodexTerminal(
   control: CodexRuntimeControl,
   runId: string,
   turnId: string,
   signal: AbortSignal,
 ): Promise<CodingRuntimeTaskOutcome> {
-  while (!signal.aborted) {
-    const status = control.terminalStatus(runId, turnId);
-    if (status !== undefined) return terminalOutcome(status);
-    await pollDelay(signal);
-  }
-  return "cancelled";
+  return new Promise((resolve) => {
+    let timeout: NodeJS.Timeout | undefined;
+    const settle = (outcome: CodingRuntimeTaskOutcome): void => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      resolve(outcome);
+    };
+    const onAbort = (): void => {
+      settle("cancelled");
+    };
+    const poll = (): void => {
+      const status = control.terminalStatus(runId, turnId);
+      if (status !== undefined) settle(terminalOutcome(status));
+      else timeout = setTimeout(poll, CODEX_TERMINAL_POLL_MS);
+    };
+    if (signal.aborted) {
+      settle("cancelled");
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    poll();
+  });
 }
 
 function terminalOutcome(
@@ -774,18 +792,6 @@ function terminalOutcome(
   if (status === "completed") return "succeeded";
   if (status === "interrupted") return "cancelled";
   return "failed";
-}
-
-function pollDelay(signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = (): void => {
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    };
-    const timeout = setTimeout(finish, CODEX_TERMINAL_POLL_MS);
-    signal.addEventListener("abort", finish, { once: true });
-  });
 }
 
 export function createProductionRuntimeTaskDispatcher(
