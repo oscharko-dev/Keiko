@@ -3597,11 +3597,10 @@ describe("CodingRuntimeOrchestrator", () => {
 
   it("starts when the expected repository is the active one in another spelling", async () => {
     const f = fixture();
-    // Case is folded only where the filesystem ignores it; on Linux the spelling differs in
-    // separators and the trailing separator alone.
-    const cased =
-      process.platform === "linux" ? ACTIVE_REPOSITORY_ROOT : ACTIVE_REPOSITORY_ROOT.toUpperCase();
-    const respelled = `${cased.replaceAll("/", "\\")}\\`;
+    // The spelling differs in separators and the trailing separator alone. Letter case is never
+    // folded by platform: a case-only spelling is the same folder only when the filesystem says so,
+    // which `repositoryRootIdentity.test.ts` proves on a real directory.
+    const respelled = `${ACTIVE_REPOSITORY_ROOT.replaceAll("/", "\\")}\\`;
 
     expect(
       (await f.orchestrator.start({ ...start, expectedWorkspace: { root: respelled } })).ok,
@@ -9229,6 +9228,18 @@ describe("verification truth at task settlement", () => {
     });
   }
 
+  // A failed check the run itself broke: the same target passed earlier in the run and fails after a
+  // later code edit, which is the only red check Keiko repairs automatically (#4491 review).
+  async function provenFailure(
+    f: ReturnType<typeof fixture>,
+    counts?: { passed: number; failed: number; skipped: number },
+    targetDigest: string | null = codingVerificationTargetDigest("targeted-test"),
+  ): Promise<void> {
+    await verification(f, "passed", undefined, targetDigest);
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/proof.js"] });
+    await verification(f, "failed", counts, targetDigest);
+  }
+
   // #4492 (Windows lab): a task's run ended "Changes not checked"; the follow-up the person started
   // with "Run the check now" changed nothing, its check failed, and it settled as succeeded, which
   // erased the warning. A follow-up of an unverified change owes the same evidence.
@@ -9258,7 +9269,7 @@ describe("verification truth at task settlement", () => {
       state: "failed",
       failureCode: "verification-not-evidenced",
     });
-    await verification(f, "failed");
+    await provenFailure(f);
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
@@ -9352,7 +9363,7 @@ describe("verification truth at task settlement", () => {
       expectedRevision: waiting.revision,
     });
     complete?.(target);
-    await verification(f, "failed", undefined, target);
+    await provenFailure(f, undefined, target);
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
@@ -9364,7 +9375,7 @@ describe("verification truth at task settlement", () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     const target = "a".repeat(64);
-    await verification(f, "failed", undefined, target);
+    await provenFailure(f, undefined, target);
     f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", target);
     finish();
     await vi.waitFor(() => {
@@ -9486,7 +9497,7 @@ describe("verification truth at task settlement", () => {
       const executed = f.orchestrator.verificationAdmitted("run-1");
       const target = "d".repeat(64);
       executed?.(target);
-      await verification(f, "failed", undefined, target);
+      await provenFailure(f, undefined, target);
       finish();
       await vi.waitFor(() => {
         expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
@@ -9509,7 +9520,7 @@ describe("verification truth at task settlement", () => {
         kind: "applied",
         changedPaths: ["src/a.js"],
       });
-      await verification(run.f, "failed");
+      await provenFailure(run.f);
       run.finish();
       await vi.waitFor(() => {
         expect(run.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
@@ -9559,7 +9570,7 @@ describe("verification truth at task settlement", () => {
         kind: "applied",
         changedPaths: ["src/a.js"],
       });
-      await verification(run.f, "failed");
+      await provenFailure(run.f);
       run.finish();
       await vi.waitFor(() => {
         expect(run.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
@@ -9572,7 +9583,7 @@ describe("verification truth at task settlement", () => {
     it("names no detail when the run changed code after the continuation and the check still fails", async () => {
       const { f, endContinuation } = await continuedRun();
       f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/b.js"] });
-      await verification(f, "failed");
+      await provenFailure(f);
       endContinuation();
       await vi.waitFor(() => {
         expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
@@ -9580,6 +9591,31 @@ describe("verification truth at task settlement", () => {
       const snapshot = f.orchestrator.getSnapshot("run-1");
       expect(snapshot?.verificationGap).toBe("check-failed");
       expect(snapshot?.verificationGapDetail).toBeUndefined();
+    });
+  });
+
+  describe("a red check the run never made pass (#4491 review)", () => {
+    it("starts no write phase for it and names why on the continuation line", async () => {
+      const { f, log, finish } = await runningTask();
+      f.orchestrator.observeEditOutcome("run-1", {
+        kind: "applied",
+        changedPaths: ["src/a.js"],
+      });
+      // The check was never green in this run: nothing proves the run's own edit broke it.
+      await verification(f, "failed");
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+          state: "failed",
+          verificationGap: "check-failed",
+        });
+      });
+
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      expect(skipLine(log.records)).toMatchObject({
+        skipReason: "target-unproven",
+        gap: "check-failed",
+      });
     });
   });
 
@@ -9595,14 +9631,14 @@ describe("verification truth at task settlement", () => {
         kind: "applied",
         changedPaths: ["src/a.js"],
       });
-      await verification(run.f, "failed");
+      await provenFailure(run.f);
       run.finish();
       await vi.waitFor(() => {
         expect(run.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
       });
       // The continuation fixes the original check without another edit; a second check is red.
       await verification(run.f, "passed");
-      await verification(run.f, "failed", undefined, "e".repeat(64));
+      await provenFailure(run.f, undefined, "e".repeat(64));
       endContinuation?.("succeeded");
       await vi.waitFor(() => {
         expect(run.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
@@ -9617,7 +9653,7 @@ describe("verification truth at task settlement", () => {
     async function continuedIntent(taskHasShellTool: boolean | undefined): Promise<string> {
       const { f, finish } = await runningTask(taskHasShellTool);
       f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-      await verification(f, "failed");
+      await provenFailure(f);
       finish();
       await vi.waitFor(() => {
         expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
@@ -9649,7 +9685,7 @@ describe("verification truth at task settlement", () => {
     it("names the failed check and its failed steps, never a path or an output line", async () => {
       const { f, finish } = await runningTask();
       f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
-      await verification(f, "failed", { passed: 2, failed: 3, skipped: 0 });
+      await provenFailure(f, { passed: 2, failed: 3, skipped: 0 });
       finish();
       await vi.waitFor(() => {
         expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
@@ -9663,7 +9699,7 @@ describe("verification truth at task settlement", () => {
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
     const { f, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed", undefined, "a".repeat(64));
+    await provenFailure(f, undefined, "a".repeat(64));
     f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
     finish();
     await vi.waitFor(() => {
@@ -9787,7 +9823,7 @@ describe("verification truth at task settlement", () => {
   it("never clears a failed target merely because its next attempt was skipped", async () => {
     const { f, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed", undefined, "a".repeat(64));
+    await provenFailure(f, undefined, "a".repeat(64));
     await verification(f, "partial", { passed: 0, failed: 0, skipped: 1 }, "a".repeat(64));
     await verification(f, "passed", undefined, "b".repeat(64));
     finish();
@@ -9801,7 +9837,7 @@ describe("verification truth at task settlement", () => {
     async (unidentified) => {
       const { f, finish } = await runningTask();
       f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-      await verification(f, "failed", undefined, unidentified === "both" ? null : "a".repeat(64));
+      await provenFailure(f, undefined, unidentified === "both" ? null : "a".repeat(64));
       await verification(f, "passed", undefined, null);
       finish();
       // A digest-less FAILURE is still a failed check and fails the run; a digest-less pass names
@@ -9860,7 +9896,7 @@ describe("verification truth at task settlement", () => {
   it("does not let a different passing target clear a failed test", async () => {
     const { f, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed", undefined, "a".repeat(64));
+    await provenFailure(f, undefined, "a".repeat(64));
     await verification(f, "passed", undefined, "b".repeat(64));
     finish();
     await vi.waitFor(() => {
@@ -9887,7 +9923,7 @@ describe("verification truth at task settlement", () => {
 
   it("accepts fresh passes for all selected targets after the repair", async () => {
     const { f, finish } = await runningTask();
-    await verification(f, "failed", undefined, "a".repeat(64));
+    await provenFailure(f, undefined, "a".repeat(64));
     await verification(f, "passed", undefined, "b".repeat(64));
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "passed", undefined, "a".repeat(64));
@@ -9902,7 +9938,7 @@ describe("verification truth at task settlement", () => {
   it("does not report success after a failed verification: one refused repair, then the truthful gap", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed");
+    await provenFailure(f);
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
@@ -9986,7 +10022,7 @@ describe("verification truth at task settlement", () => {
 
   it("accepts the failed-test, repair, passing-test loop", async () => {
     const { f, finish } = await runningTask();
-    await verification(f, "failed");
+    await provenFailure(f);
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "passed");
     finish();
@@ -10159,7 +10195,7 @@ describe("verification truth at task settlement", () => {
   it("still repairs a failed shell check after a governed check that ran no step and blocks nothing", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
-    await verification(f, "failed");
+    await provenFailure(f);
     f.orchestrator.observeVerificationBlocked(
       "run-1",
       "VERIFICATION_NOT_RUN",
@@ -10216,6 +10252,8 @@ describe("verification truth at task settlement", () => {
   it("names only the failed and timed-out steps in the continuation of a mixed summary", async () => {
     const { f, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "passed", undefined, codingVerificationTargetDigest("test"));
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
     await summarized(f, 3, 2);
     finish();
     await vi.waitFor(() => {
@@ -10232,7 +10270,7 @@ describe("verification truth at task settlement", () => {
   it("names check-failed when the budget ran out after a failed check, and still skips for the budget", async () => {
     const { f, log, finish } = await runningTask(undefined, () => true);
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
-    await verification(f, "failed");
+    await provenFailure(f);
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
@@ -10247,7 +10285,7 @@ describe("verification truth at task settlement", () => {
   it("names check-failed before check-not-started, and check-not-started before the budget", async () => {
     const failedThenBlocked = await runningTask();
     failedThenBlocked.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(failedThenBlocked.f, "failed");
+    await provenFailure(failedThenBlocked.f);
     failedThenBlocked.f.orchestrator.observeVerificationBlocked(
       "run-1",
       "VERIFICATION_RUNNER_UNAVAILABLE",
@@ -10280,7 +10318,7 @@ describe("verification truth at task settlement", () => {
       completion: Promise.resolve("succeeded"),
     });
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
-    await verification(f, "failed");
+    await provenFailure(f);
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
@@ -10359,7 +10397,7 @@ describe("verification truth at task settlement", () => {
     });
     f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed");
+    await provenFailure(f);
     finish();
     await vi.waitFor(() => {
       expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
@@ -10398,7 +10436,7 @@ describe("verification truth at task settlement", () => {
   it("keeps the attempted ordinal and actual cause when verification continuation transport throws", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed");
+    await provenFailure(f);
     const error = Object.assign(
       new Error("PRIVATE_CONTINUATION_CANARY", { cause: new TypeError("PRIVATE_CAUSE_CANARY") }),
       { code: "TRANSPORT_UNAVAILABLE" },
@@ -10448,7 +10486,7 @@ describe("verification truth at task settlement", () => {
   it("records an actual operator stop that supersedes verification continuation dispatch", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed");
+    await provenFailure(f);
     let release: ((result: CodingRuntimeTaskDispatchResult) => void) | undefined;
     f.taskDispatcher.dispatch.mockImplementationOnce(
       () =>
@@ -10490,7 +10528,7 @@ describe("verification truth at task settlement", () => {
       completion: Promise.resolve("succeeded"),
     });
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-    await verification(f, "failed");
+    await provenFailure(f);
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({

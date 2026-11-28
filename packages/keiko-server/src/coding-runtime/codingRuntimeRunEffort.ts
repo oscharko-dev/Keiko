@@ -231,6 +231,13 @@ export interface CodingVerificationFailureEvidence {
   readonly failedCount: number;
 }
 
+export interface FailedCheckTarget {
+  readonly target: string;
+  readonly failure: CodingVerificationFailureEvidence;
+  /** The check passed earlier in this run and fails only after the run's own later edit. */
+  readonly provenOwn: boolean;
+}
+
 interface OrchestratorEffortRecord {
   verificationCount: number;
   appliedEditCount: number;
@@ -251,6 +258,11 @@ interface VerificationTargetState {
   readonly selected: boolean;
   /** The target's check ran after the run's last code edit and failed; cleared by the next edit. */
   readonly failure?: CodingVerificationFailureEvidence;
+  /**
+   * The target's check passed in this run before a later code edit: a failure of it afterwards is
+   * the run's own doing, which no baseline outside the run is needed to prove (#4491 review).
+   */
+  readonly passedBeforeEdit?: boolean;
   readonly notRun?: boolean;
   readonly blockedReason?: CodingVerificationBlockedReason;
 }
@@ -327,7 +339,11 @@ export class CodingRuntimeRunEffortLedger {
     run.editRevision = boundedSum(run.editRevision, 1);
     for (const [target, state] of run.verificationTargets) {
       const { failure: _superseded, ...rest } = state;
-      run.verificationTargets.set(target, { ...rest, passed: false });
+      run.verificationTargets.set(target, {
+        ...rest,
+        passed: false,
+        ...(state.passed || state.passedBeforeEdit === true ? { passedBeforeEdit: true } : {}),
+      });
     }
   }
 
@@ -351,7 +367,13 @@ export class CodingRuntimeRunEffortLedger {
       recordStaleVerification(run, target, editRevision, failure);
       return;
     }
-    run.verificationTargets.set(target, { passed, selected: true, ...failedWith(passed, failure) });
+    const earlier = run.verificationTargets.get(target)?.passedBeforeEdit === true;
+    run.verificationTargets.set(target, {
+      passed,
+      selected: true,
+      ...(earlier ? { passedBeforeEdit: true } : {}),
+      ...failedWith(passed, failure),
+    });
   }
 
   /** Whether a summary's edit revision is the run's current one (the rule `verification` applies). */
@@ -413,14 +435,12 @@ export class CodingRuntimeRunEffortLedger {
   }
 
   /** The same failed check with the digest of the target it ran against: which check it was. */
-  failedCheckTarget(
-    runId: string,
-  ): { readonly target: string; readonly failure: CodingVerificationFailureEvidence } | undefined {
+  failedCheckTarget(runId: string): FailedCheckTarget | undefined {
     const run = this.runs.get(runId);
     if (run === undefined) return undefined;
     for (const [target, state] of run.verificationTargets) {
       if (state.selected && !state.passed && state.failure !== undefined)
-        return { target, failure: state.failure };
+        return { target, failure: state.failure, provenOwn: state.passedBeforeEdit === true };
     }
     return undefined;
   }

@@ -18,6 +18,13 @@ import {
  * run's last code change, failed, and the model ended its turn without a passing one. Verification
  * is asked for up front in the run's instructions (the launch profile's "Verify" step), so Keiko
  * never repeats a generic request at the end; every other gap is named to the person instead.
+ *
+ * The continuation is a write phase with the run's editable tools, and the server cannot narrow
+ * what the model then changes (the first lab run changed 301 files for a check that was red before
+ * the run). So it starts only for a check whose own identity is proven the run's doing: the same
+ * check target passed earlier in this run and fails after a later code edit. A red check that never
+ * passed in the run is not repaired automatically; the run settles with its named gap and the
+ * person decides.
  */
 export const VERIFICATION_CONTINUATION_MAX = 1;
 /**
@@ -56,7 +63,9 @@ export function verificationContinuationIntent(
  * one-line answer a support analysis reads (`skipped`). `docs-only`: the run changed documentation
  * alone and needs no check. `no-failed-check`: no check ran, so there is nothing to repair.
  * `blocked`: a check could not start. `budget-exhausted`: the run's budget was used up.
- * `already-continued`: the run's one continuation already ran.
+ * `already-continued`: the run's one continuation already ran. `target-unproven`: the red check
+ * never passed earlier in this run, so nothing proves the run's own edits broke it (it may have been
+ * red before the run, #4491 review): no automatic write phase starts, and the person is told.
  */
 export const VERIFICATION_CONTINUATION_SKIP_REASONS = [
   "docs-only",
@@ -64,6 +73,7 @@ export const VERIFICATION_CONTINUATION_SKIP_REASONS = [
   "blocked",
   "budget-exhausted",
   "already-continued",
+  "target-unproven",
 ] as const;
 
 export type VerificationContinuationSkipReason =

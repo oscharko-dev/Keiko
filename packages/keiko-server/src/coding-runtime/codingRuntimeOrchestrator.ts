@@ -3896,7 +3896,9 @@ export class CodingRuntimeOrchestrator {
     // neither leaves anything the model could still repair, so no continuation runs.
     if (this.effort.verificationBlockedReason(runId) !== undefined) return "blocked";
     if (this.deps.toolBudgetExhausted?.(runId) === true) return "budget-exhausted";
-    return this.effort.failedCheck(runId) === undefined ? "no-failed-check" : undefined;
+    const failed = this.effort.failedCheckTarget(runId);
+    if (failed === undefined) return "no-failed-check";
+    return failed.provenOwn ? undefined : "target-unproven";
   }
 
   /** A run that changed documentation alone asks for no check; the line says why none was asked. */
