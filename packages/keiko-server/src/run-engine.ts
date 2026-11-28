@@ -35,6 +35,7 @@ import {
 import {
   buildVerificationPlan,
   detectScripts,
+  scriptTableDigest,
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
@@ -541,7 +542,16 @@ async function runVerify(
     ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
   });
   const execute = ctx.verificationExecutor ?? executeVerificationEnforced;
-  const { report } = await execute({ plan, workspace, signal, probeCwd: root, correlationId });
+  // The scripts the plan was built on are the ones the effect may run (read once, at plan time).
+  const approvedScriptsDigest = scriptTableDigest(catalog.scripts);
+  const { report } = await execute({
+    plan,
+    workspace,
+    signal,
+    probeCwd: root,
+    correlationId,
+    approvedScriptsDigest,
+  });
   return report;
 }
 

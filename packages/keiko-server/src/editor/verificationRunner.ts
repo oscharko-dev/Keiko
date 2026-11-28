@@ -41,6 +41,8 @@ import {
   planPackageTargetedTests,
   resolveStepNetwork,
   resolveVerificationPackage,
+  scriptTableDigest,
+  type ScriptBindingOutcome,
   type VerificationPackage,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
@@ -282,6 +284,70 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// How one script step was bound to the approved package scripts (keiko-verification's
+// ScriptBindingOutcome), declared as literals because the registry reads them from this file;
+// `recordScriptBindings` passes a ScriptBindingOutcome, so an outcome this list lacks fails to compile.
+export const SCRIPT_BINDING_VALUES = [
+  "bound",
+  "fenced-windows",
+  "scripts-changed",
+  "refused:script-shell-configured",
+  "refused:ignore-scripts-configured",
+  "refused:package-manager-configuration",
+  "refused:lifecycle-order-unknown",
+  "refused:package-config-unsupported",
+  "refused:script-not-runnable",
+  "refused:yarn-pnp-unsupported",
+  "refused:approval-missing",
+  "refused:windows-step-copy-missing",
+] as const satisfies readonly ScriptBindingOutcome[];
+
+// One line per script step of a finished run: whether Keiko ran the approved bytes itself (`bound`),
+// the package manager ran against the private Windows step copy under the digest fence
+// (`fenced-windows`), the scripts differed from the approval (`scripts-changed`), or the approved
+// bytes could not be run unbound (`refused:<closed reason>`). Never a script, a name or a path.
+const EDITOR_VERIFICATION_SCRIPT_BINDING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.script-binding",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.verificationRunner.recordScriptBindings",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: SCRIPT_BINDING_VALUES,
+    },
+    // The 0-based ordinal of the script step among the run's script steps (not the plan step index).
+    scriptStepOrdinal: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  diagnosticWhen: [
+    {
+      field: "outcome",
+      values: [
+        "scripts-changed",
+        "refused:script-shell-configured",
+        "refused:ignore-scripts-configured",
+        "refused:package-manager-configuration",
+        "refused:lifecycle-order-unknown",
+        "refused:package-config-unsupported",
+        "refused:script-not-runnable",
+        "refused:yarn-pnp-unsupported",
+        "refused:approval-missing",
+        "refused:windows-step-copy-missing",
+      ],
+    },
+  ],
+  analyzerProjection: "timeline",
+  failureClasses: ["verification-runner-refusal"],
+  proofIds: ["editor.verification.script-binding.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function verificationActivityErrorKind(code: VerificationRunnerErrorCode): ActivityLogErrorKind {
   if (code === "WORKSPACE_TRUST_REQUIRED") return "authority-denied";
   if (code === "RUN_LIMIT_EXCEEDED") return "rate-limited";
@@ -451,9 +517,24 @@ export function verificationPlanDigest(steps: readonly VerificationPreviewStep[]
   return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
 }
 
-function scriptTableDigest(scripts: Readonly<Record<string, string>>): string {
-  const entries = Object.entries(scripts).sort(([left], [right]) => compareStrings(left, right));
-  return createHash("sha256").update(JSON.stringify(entries), "utf8").digest("hex");
+// The script table digest each built plan was approved on, read from the bytes of that very plan.
+// The effect carries it to the orchestrator, which re-proves it on the workspace the step runs in,
+// after the exclusive queue and the dependency bootstrap, immediately before each script step.
+/**
+ * A plan together with the digest of the package scripts it was built on (undefined for a plan with
+ * no package script, such as Maven's). The digest travels ON the plan, so a plan rebuilt without it
+ * does not compile, and the effect refuses a script step that arrives without one.
+ */
+export interface ApprovedVerificationPlan extends VerificationPlan {
+  readonly approvedScriptsDigest: string | undefined;
+}
+
+function scriptsBinding(plan: ApprovedVerificationPlan): {
+  readonly approvedScriptsDigest?: string;
+} {
+  return plan.approvedScriptsDigest === undefined
+    ? {}
+    : { approvedScriptsDigest: plan.approvedScriptsDigest };
 }
 
 /** The runnable steps of a plan as the approval preview and the effect's own check both see them. */
@@ -609,7 +690,7 @@ const MAVEN_RUNNER: VerificationRunner = Object.freeze({ testFramework: "maven" 
 
 interface PreparedVerificationRun {
   readonly resolved: ResolvedVerificationWorkspace;
-  readonly plan: VerificationPlan;
+  readonly plan: ApprovedVerificationPlan;
   // The runner the run reports: the nested package's test framework when it has one.
   readonly runnerWorkspace: VerificationRunner;
   // The probe the script-trust decision was made on, when one was taken before it (#4519).
@@ -780,19 +861,25 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   // each other. One helper now owns the shared shape; the agent path layers its own
   // `onStepOutput` sink on top of it.
   private buildExecuteArgs(
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
   ): ExecuteVerificationArgs {
+    let scriptStepOrdinal = 0;
     return {
       plan,
       workspace: resolved.workspace,
       signal: entry.controller.signal,
       correlationId: entry.correlationId,
+      onScriptBinding: (outcome): void => {
+        this.recordScriptBinding(entry.correlationId, outcome, scriptStepOrdinal);
+        scriptStepOrdinal += 1;
+      },
       activityLog: this.activityLog,
       diagnostics: this.diagnostics,
       fs: resolved.access.fs,
       dependencyBootstrap: "auto",
+      ...scriptsBinding(plan),
       onTargetedProjectFailure: (error): void => {
         this.recordRunnerFailure(resolved.workspace, entry.correlationId, error, true);
       },
@@ -804,7 +891,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   // port's whole result is kept, not only its report: the completion line also names the isolation
   // the run executed under and how long the probe took (F14, #3873).
   private async executeAgentPlan(
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
     host: {
@@ -916,7 +1003,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     isolation: TimedNetworkIsolationProbe | undefined,
   ): {
-    readonly plan: VerificationPlan;
+    readonly plan: ApprovedVerificationPlan;
     readonly trust: ScriptTrustAdmission | undefined;
     readonly runnerWorkspace: VerificationRunner;
   } {
@@ -925,19 +1012,22 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const pkg = this.resolvePackage(workspace, input, fs);
     const maven = pkg === undefined && this.runsMaven(workspace, fs, isolation);
     const { script: scriptSteps, all: steps } = this.plannedSteps(workspace, fs, input, pkg, maven);
-    this.assertApprovedPlan(input, steps, detectScripts(workspace, fs, pkg?.dir).scripts);
+    const scripts = detectScripts(workspace, fs, pkg?.dir).scripts;
+    this.assertApprovedPlan(input, steps, scripts);
     const trust = this.assertWorkspaceTrustForSteps(
       resolved,
       scriptSteps,
       input.autonomyMode,
       isolation?.probe.available,
     );
+    const plan: ApprovedVerificationPlan = {
+      workspaceRoot: workspace.root,
+      steps,
+      ...(pkg === undefined ? {} : { packageDir: pkg.dir, packageManager: pkg.manager }),
+      approvedScriptsDigest: maven ? undefined : scriptTableDigest(scripts),
+    };
     return {
-      plan: {
-        workspaceRoot: workspace.root,
-        steps,
-        ...(pkg === undefined ? {} : { packageDir: pkg.dir, packageManager: pkg.manager }),
-      },
+      plan,
       trust,
       runnerWorkspace: maven ? MAVEN_RUNNER : (pkg?.workspace ?? workspace),
     };
@@ -1095,7 +1185,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private async runPlan(
     run: EditorVerificationRun,
     resolved: ResolvedVerificationWorkspace,
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
   ): Promise<void> {
     const entry = this.runs.get(run.runId);
     if (entry === undefined) return;
@@ -1137,7 +1227,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private async executeAndReport(
     runId: string,
     resolved: ResolvedVerificationWorkspace,
-    plan: VerificationPlan,
+    plan: ApprovedVerificationPlan,
     entry: InFlightRun,
     startedAtMs: number,
   ): Promise<void> {
@@ -1268,6 +1358,22 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           resourceExceededCount: report.counts["resource-exceeded"],
           ...verificationCompletionLogFields(execution),
         },
+      ),
+    );
+  }
+
+  // One line per script step, written as the effect decides it, so a run that is cancelled or fails
+  // later has still logged the refusals it reached.
+  private recordScriptBinding(
+    correlationId: string,
+    outcome: ScriptBindingOutcome,
+    scriptStepOrdinal: number,
+  ): void {
+    this.activityLog.write(
+      activityLogEvent(
+        EDITOR_VERIFICATION_SCRIPT_BINDING_OPERATION,
+        { correlationId },
+        { outcome, scriptStepOrdinal },
       ),
     );
   }

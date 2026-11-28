@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { describe, expect, it } from "vitest";
 import { planMavenSteps } from "./maven.js";
-import { runVerification, type VerificationDeps } from "./orchestrator.js";
+import { scriptTableDigest } from "./detect.js";
+import {
+  runVerification,
+  SCRIPTS_CHANGED_DENIAL_PREFIX,
+  type VerificationDeps,
+} from "./orchestrator.js";
+import { BOUND_SCRIPT_WRAPPER, SCRIPTS_UNBOUND_DENIAL_PREFIX } from "./boundScript.js";
 import type { VerificationPlan, VerificationStep } from "./types.js";
 import { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
 import {
@@ -942,5 +948,256 @@ describe("runVerification — nested package steps", () => {
     expect(report.results[0]?.status).toBe("skipped");
     expect(report.dependencies).toBeUndefined();
     expect(rec.calls()).toHaveLength(0);
+  });
+});
+
+describe("runVerification — the approved package scripts bind the effect", () => {
+  const approved = { test: "vitest run", pretest: "echo approved" };
+  const approvedDigest = scriptTableDigest(approved);
+
+  function workspaceWith(scripts: Record<string, string>): ReturnType<typeof makeWorkspace> {
+    return makeWorkspace({ scripts });
+  }
+
+  function rewrite(ws: ReturnType<typeof makeWorkspace>, scripts: Record<string, string>): void {
+    ws.writeFile("package.json", JSON.stringify({ name: "demo", scripts }));
+  }
+
+  it("runs the step while the scripts are the approved bytes (positive control)", async () => {
+    const ws = workspaceWith(approved);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, { approvedScriptsDigest: approvedDigest }),
+    );
+    expect(rec.calls()).toHaveLength(1);
+    expect(report.results[0]?.status).toBe("passed");
+  });
+
+  it.each([
+    ["the main script", { test: "node steal.js", pretest: "echo approved" }],
+    ["a pre lifecycle script", { test: "vitest run", pretest: "node steal.js" }],
+    ["a post lifecycle script", { ...approved, posttest: "node steal.js" }],
+  ])(
+    "denies the step without a spawn when %s changed after the plan was approved",
+    async (_name, changed) => {
+      const ws = workspaceWith(approved);
+      // The change lands after the plan was validated, while the run waited for the workspace.
+      rewrite(ws, changed);
+      const rec = recordingSpawn();
+      const report = await runVerification(
+        planOf([step()], ws.info.root),
+        depsWith(ws, rec.fn, { approvedScriptsDigest: approvedDigest }),
+      );
+      expect(rec.calls()).toHaveLength(0);
+      expect(report.results[0]?.status).toBe("denied");
+      expect(report.results[0]?.detail).toMatch(new RegExp(`^${SCRIPTS_CHANGED_DENIAL_PREFIX}`));
+    },
+  );
+
+  it("runs the approved bytes itself, whatever package.json holds when the shell starts", async () => {
+    const ws = workspaceWith(approved);
+    const child = makeFakeChild();
+    scriptChildClose(child, { exitCode: 0 });
+    const rec = recordingSpawn(child);
+    const spawn: VerificationDeps["spawn"] = (cmd, args, opts) => {
+      // The edit lands between the pre-spawn check and the spawn itself.
+      rewrite(ws, { test: "node steal.js", pretest: "node steal.js", posttest: "node steal.js" });
+      return rec.fn(cmd, args, opts);
+    };
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, spawn, { approvedScriptsDigest: approvedDigest, platform: "linux" }),
+    );
+    const call = rec.calls()[0];
+    const args = call?.args ?? [];
+    const at = args.indexOf(BOUND_SCRIPT_WRAPPER);
+    expect(args.slice(at - 1)).toEqual([
+      "-c",
+      BOUND_SCRIPT_WRAPPER,
+      "keiko-script",
+      ".",
+      "pretest",
+      "echo approved",
+      "test",
+      "vitest run",
+    ]);
+    expect(call?.args.join("\n")).not.toContain("steal");
+    expect(call?.options.env.npm_package_name).toBe("demo");
+    // The shell ran the approved bytes; the edit made during the step is reported, not hidden.
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("changed while the step ran");
+    expect(report.results[0]?.command).toBe("npm");
+  });
+
+  it("denies a script step that arrives without its approval when the run requires one", async () => {
+    const ws = workspaceWith(approved);
+    const rec = recordingSpawn();
+    const outcomes: string[] = [];
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, {
+        requireApprovedScripts: true,
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    expect(rec.calls()).toHaveLength(0);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain(`${SCRIPTS_UNBOUND_DENIAL_PREFIX}approval-missing`);
+    expect(outcomes).toEqual(["refused:approval-missing"]);
+  });
+
+  it("reports how each script step was bound", async () => {
+    const outcomes: string[] = [];
+    const bound = workspaceWith(approved);
+    const child = makeFakeChild();
+    scriptChildClose(child, { exitCode: 0 });
+    await runVerification(
+      planOf([step()], bound.info.root),
+      depsWith(bound, recordingSpawn(child).fn, {
+        approvedScriptsDigest: approvedDigest,
+        platform: "linux",
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    const changed = workspaceWith({ test: "node steal.js" });
+    await runVerification(
+      planOf([step()], changed.info.root),
+      depsWith(changed, recordingSpawn().fn, {
+        approvedScriptsDigest: approvedDigest,
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    const shell = workspaceWith(approved);
+    shell.writeFile(".npmrc", "script-shell=/bin/zsh\n");
+    await runVerification(
+      planOf([step()], shell.info.root),
+      depsWith(shell, recordingSpawn().fn, {
+        approvedScriptsDigest: approvedDigest,
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    expect(outcomes).toEqual(["bound", "scripts-changed", "refused:script-shell-configured"]);
+  });
+
+  it("does not report a step as the approved scripts' outcome when they changed while it ran", async () => {
+    const ws = workspaceWith(approved);
+    const child = makeFakeChild();
+    scriptChildClose(child, { exitCode: 0 });
+    const rec = recordingSpawn(child);
+    const outcomes: string[] = [];
+    const spawn: VerificationDeps["spawn"] = (cmd, args, opts) => {
+      // A nested package-manager call reads the file the step's scripts changed.
+      const call = rec.fn(cmd, args, opts);
+      rewrite(ws, { test: "node steal.js", pretest: "echo approved" });
+      return call;
+    };
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, spawn, {
+        approvedScriptsDigest: approvedDigest,
+        platform: "linux",
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("changed while the step ran");
+    expect(outcomes).toEqual(["scripts-changed"]);
+  });
+
+  it("refuses a Windows step that has no private step copy, and does not log a fence", async () => {
+    const ws = workspaceWith(approved);
+    const rec = recordingSpawn();
+    const outcomes: string[] = [];
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, {
+        approvedScriptsDigest: approvedDigest,
+        platform: "win32",
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    expect(rec.calls()).toHaveLength(0);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("windows-step-copy-missing");
+    expect(outcomes).toEqual(["refused:windows-step-copy-missing"]);
+  });
+
+  it("binds a Windows step that runs in a Linux container, which has no AppContainer copy to fence", async () => {
+    const ws = workspaceWith(approved);
+    const child = makeFakeChild();
+    scriptChildClose(child, { exitCode: 0 });
+    const rec = recordingSpawn(child);
+    const outcomes: string[] = [];
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, {
+        approvedScriptsDigest: approvedDigest,
+        platform: "win32",
+        sandboxAvailability: {
+          bubblewrap: false,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: true,
+        },
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      }),
+    );
+    expect(rec.calls()[0]?.args).toContain(BOUND_SCRIPT_WRAPPER);
+    expect(rec.calls()[0]?.options.env ?? {}).not.toHaveProperty("NODE");
+    expect(report.results[0]?.status).toBe("passed");
+    expect(outcomes).toEqual(["bound"]);
+  });
+
+  it("withholds the host's Node.js paths from a step that runs in a container", async () => {
+    const ws = workspaceWith(approved);
+    const child = makeFakeChild();
+    scriptChildClose(child, { exitCode: 0 });
+    const rec = recordingSpawn(child);
+    await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, {
+        approvedScriptsDigest: approvedDigest,
+        platform: "linux",
+        sandboxAvailability: {
+          bubblewrap: false,
+          unshare: false,
+          seatbelt: false,
+          docker: true,
+          podman: false,
+        },
+      }),
+    );
+    const env = rec.calls()[0]?.options.env ?? {};
+    expect(rec.calls()[0]?.command).toBe("/abs/docker");
+    expect(env).not.toHaveProperty("NODE");
+    expect(env).not.toHaveProperty("npm_node_execpath");
+    expect(env.npm_package_name).toBe("demo");
+  });
+
+  it("refuses to run the scripts unbound when the project sets script-shell", async () => {
+    const ws = workspaceWith(approved);
+    ws.writeFile(".npmrc", "script-shell=/bin/zsh\n");
+    const rec = recordingSpawn();
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, { approvedScriptsDigest: approvedDigest, platform: "linux" }),
+    );
+    expect(rec.calls()).toHaveLength(0);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain(
+      `${SCRIPTS_UNBOUND_DENIAL_PREFIX}script-shell-configured`,
+    );
+  });
+
+  it("leaves a run without an approval digest unchanged", async () => {
+    const ws = workspaceWith(approved);
+    rewrite(ws, { test: "anything" });
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    await runVerification(planOf([step()], ws.info.root), depsWith(ws, rec.fn));
+    expect(rec.calls()).toHaveLength(1);
   });
 });

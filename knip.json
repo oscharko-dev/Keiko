@@ -16,7 +16,8 @@
     "ditto",
     "attrib",
     "icacls",
-    "pgrep"
+    "pgrep",
+    "sandbox-exec"
   ],
   "workspaces": {
     ".": {

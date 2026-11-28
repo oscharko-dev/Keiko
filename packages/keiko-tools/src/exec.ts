@@ -25,6 +25,7 @@ import type {
   CommandTerminationEvidence,
   CommandTerminationReason,
   WindowsStepDrive,
+  SandboxBackend,
   WindowsStepSupervisor,
   WindowsTreeKillDisposition,
   WindowsTreeKillResult,
@@ -1291,6 +1292,30 @@ function resolveSpawnTarget(
         input.command,
       );
   }
+}
+
+/**
+ * The sandbox backend an execution-root step would run under with these dependencies, by the same
+ * selection `runCommand` makes. A caller that hands the step host-only facts (the host's Node.js
+ * path, the package manager's path) needs it to withhold them from a container, where those paths
+ * do not exist.
+ */
+export function executionRootBackendFor(
+  deps: Pick<
+    RunCommandDeps,
+    "platform" | "sandboxAvailability" | "processEnv" | "windowsStepSupervisor"
+  >,
+): SandboxBackend {
+  const platform = deps.platform ?? process.platform;
+  const probed = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
+  return selectEnforcingBackend(
+    platform,
+    {
+      ...probed,
+      windowsAppContainer: deps.windowsStepSupervisor !== undefined,
+    },
+    "execution-root",
+  );
 }
 
 function resolveIsolatedSpawnTarget(

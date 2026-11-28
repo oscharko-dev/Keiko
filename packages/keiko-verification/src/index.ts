@@ -29,7 +29,9 @@ export { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
 export { VERIFICATION_CODES, VerificationError, EmptyPlanError } from "./errors.js";
 export type { VerificationCode } from "./errors.js";
 
-export { classifyScripts, detectScripts } from "./detect.js";
+export { classifyScripts, detectScripts, scriptTableDigest } from "./detect.js";
+export { SCRIPT_BINDING_OUTCOMES, SCRIPTS_UNBOUND_DENIAL_PREFIX } from "./boundScript.js";
+export type { BoundScriptRefusal, ScriptBindingOutcome } from "./boundScript.js";
 
 export { classifyOutcome } from "./classify.js";
 export type { AbortReason, OutcomeInput } from "./classify.js";
@@ -60,7 +62,11 @@ export type { ResourceMonitor } from "./monitor.js";
 export { buildAppliedLimits } from "./limits.js";
 export type { BreachedDimension } from "./limits.js";
 
-export { resolveStepNetwork, runVerification } from "./orchestrator.js";
+export {
+  resolveStepNetwork,
+  runVerification,
+  SCRIPTS_CHANGED_DENIAL_PREFIX,
+} from "./orchestrator.js";
 export type {
   NetworkEnforcementMode,
   VerificationDeps,

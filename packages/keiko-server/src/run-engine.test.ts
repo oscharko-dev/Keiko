@@ -174,7 +174,12 @@ describe("startRun verify dispatch", () => {
 
     expect(verificationExecutor).toHaveBeenCalledOnce();
     expect(verificationExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({ probeCwd: workspaceRoot, correlationId: result.runId }),
+      expect.objectContaining({
+        probeCwd: workspaceRoot,
+        correlationId: result.runId,
+        // The scripts the plan was built on, so the effect never runs a script unbound.
+        approvedScriptsDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
+      }),
     );
     expect(registry.get(result.runId)?.report).toBe(report);
   });

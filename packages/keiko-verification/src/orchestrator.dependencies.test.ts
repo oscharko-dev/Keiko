@@ -5,10 +5,11 @@ import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import { classifyScripts } from "./detect.js";
+import { classifyScripts, scriptTableDigest } from "./detect.js";
 import { buildVerificationPlan, ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "./plan.js";
 import {
   runVerification,
+  SCRIPTS_CHANGED_DENIAL_PREFIX,
   type VerificationDeps,
   type VerificationStepOutput,
 } from "./orchestrator.js";
@@ -159,6 +160,43 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     expect(report.results[0]?.status).toBe("passed");
     expect(report.overallStatus).toBe("passed");
   });
+
+  it.each([
+    ["the main script", { test: "node steal.js", pretest: "echo approved" }],
+    ["a pre lifecycle script", { test: "vitest run", pretest: "node steal.js" }],
+  ])(
+    "never runs the step when %s changed while the dependency install held the run",
+    async (_name, changed) => {
+      const approved = { test: "vitest run", pretest: "echo approved" };
+      const workspace = makeDependencyWorkspace(approved);
+      const plan = buildVerificationPlan(
+        workspace,
+        { scripts: approved, mapping: classifyScripts(approved) },
+        { only: ["test"] },
+      );
+      const spawn = sequencedSpawn([{ exitCode: 0 }, { exitCode: 0 }]);
+      const npm: SpawnFn = (command, args, options) => {
+        if (args[0] === "install") {
+          writeInstalledTree(workspace.root);
+          // An external edit lands after the plan was approved, while the install holds the run.
+          const pkg = { name: "demo", scripts: changed, dependencies: { "left-pad": "1.0.0" } };
+          writeFileSync(join(workspace.root, "package.json"), JSON.stringify(pkg), "utf8");
+        }
+        return spawn.fn(command, args, options);
+      };
+      const report = await runVerification(
+        plan,
+        testDeps(workspace, npm, {
+          dependencyBootstrap: "auto",
+          approvedScriptsDigest: scriptTableDigest(approved),
+        }),
+      );
+
+      expect(spawn.calls().map((call) => call.args[0])).toEqual(["install"]);
+      expect(report.results[0]?.status).toBe("denied");
+      expect(report.results[0]?.detail).toMatch(new RegExp(`^${SCRIPTS_CHANGED_DENIAL_PREFIX}`));
+    },
+  );
 
   it("never runs scripts when npm leaves node_modules linked outside the workspace", async () => {
     const workspace = makeDependencyWorkspace({

@@ -5,6 +5,8 @@
 // All name matching is done with plain substring/equality checks (no regex), so there is no
 // ReDoS surface at all (CodeQL js/polynomial-redos). Script NAMES are matched, never values.
 
+import { createHash } from "node:crypto";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ScriptCatalog, ScriptMapping } from "./types.js";
@@ -83,14 +85,20 @@ export function classifyScripts(scripts: Readonly<Record<string, string>>): Scri
   };
 }
 
-// `packageDir` (workspace-relative) names a nested package whose package.json is read instead of the
-// workspace root's; absent, the root package.json is read as before.
-export function detectScripts(
+// The parsed package.json of the workspace root or of the nested package folder `packageDir`
+// (workspace-relative), read once: the scripts every plan and every approval is made on, and the
+// manifest fields an effect that runs those scripts itself needs. Undefined when it cannot be read
+// or is not a JSON object.
+export interface PackageManifest {
+  readonly scripts: Readonly<Record<string, string>>;
+  readonly fields: Readonly<Record<string, unknown>>;
+}
+
+export function readPackageManifest(
   workspace: WorkspaceInfo,
   fs?: WorkspaceFs,
   packageDir?: string,
-): ScriptCatalog {
-  let scripts: Readonly<Record<string, string>>;
+): PackageManifest | undefined {
   try {
     const content = readWorkspaceFile(
       workspace,
@@ -98,10 +106,29 @@ export function detectScripts(
       { maxBytes: PACKAGE_READ_BYTES },
       fs,
     );
-    scripts = parseScripts(content.text);
+    const parsed: unknown = JSON.parse(content.text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    return { scripts: parseScripts(content.text), fields: parsed as Record<string, unknown> };
   } catch {
-    // No package.json or an unreadable one: no scripts detected. The plan marks kinds skipped (D4).
-    scripts = {};
+    return undefined;
   }
+}
+
+// `packageDir` (workspace-relative) names a nested package whose package.json is read instead of the
+// workspace root's; absent, the root package.json is read as before.
+export function detectScripts(
+  workspace: WorkspaceInfo,
+  fs?: WorkspaceFs,
+  packageDir?: string,
+): ScriptCatalog {
+  // No package.json or an unreadable one: no scripts detected. The plan marks kinds skipped (D4).
+  const scripts = readPackageManifest(workspace, fs, packageDir)?.scripts ?? {};
   return { scripts, mapping: classifyScripts(scripts) };
+}
+
+// The digest of a package's whole script table, lifecycle (pre/post) scripts included: the bytes an
+// approval is bound to and the effect re-proves before it spawns a script step.
+export function scriptTableDigest(scripts: Readonly<Record<string, string>>): string {
+  const entries = Object.entries(scripts).sort(([left], [right]) => compareStrings(left, right));
+  return createHash("sha256").update(JSON.stringify(entries), "utf8").digest("hex");
 }

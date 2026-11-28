@@ -4,7 +4,15 @@ import { observedFailureQuery } from "../../../../tests/support/observed-failure
 // content-free lifecycle streaming without a real spawn. Route-level coverage lives in
 // verificationRoutes.test.ts.
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,10 +36,14 @@ import {
   ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
   runVerification,
   mavenTestArguments,
+  SCRIPT_BINDING_OUTCOMES,
+  scriptTableDigest,
+  SCRIPTS_CHANGED_DENIAL_PREFIX,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
+  SCRIPT_BINDING_VALUES,
   verificationPlanDigest,
   decideScriptTrust,
   type VerificationCommandPreview,
@@ -722,6 +734,181 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
           ),
         ).rejects.toBeInstanceOf(VerificationPlanChangedError);
         expect(port.calls).toBe(1);
+      },
+    );
+  });
+
+  describe("carries the approved script bytes to the effect", () => {
+    const approved = { typecheck: "tsc --noEmit", pretypecheck: "echo a" };
+    const writeScripts = (scripts: Record<string, string>): void => {
+      writeFileSync(join(workspaceRoot, "package.json"), JSON.stringify({ name: "x", scripts }));
+    };
+
+    it("hands the effect the digest of the scripts its plan was built on", async () => {
+      writeScripts(approved);
+      const digests: (string | undefined)[] = [];
+      const manager = makeManager({
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          digests.push(args.approvedScriptsDigest);
+          return Promise.resolve({ report: report(["typecheck"]), ...DEFAULT_EXECUTION });
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+      await manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal);
+      expect(digests).toEqual([scriptTableDigest(approved)]);
+    });
+
+    it("records how each script step was bound as the effect decides it, also when the run then throws", async () => {
+      writeScripts(approved);
+      const events: ServerLogEvent[] = [];
+      const manager = makeManager({
+        activityLog: { write: (event): void => void events.push(event) },
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          args.onScriptBinding?.("bound");
+          args.onScriptBinding?.("refused:script-shell-configured");
+          args.onScriptBinding?.("scripts-changed");
+          return Promise.reject(new Error("the run failed after its refusals"));
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+      await expect(
+        manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal),
+      ).rejects.toThrow("the run failed");
+      const lines = events.filter((event) => event.op === "editor.verification.script-binding");
+      expect(lines.map((line) => [line.extra?.outcome, line.extra?.scriptStepOrdinal])).toEqual([
+        ["bound", 0],
+        ["refused:script-shell-configured", 1],
+        ["scripts-changed", 2],
+      ]);
+      expect(lines.every((line) => (line.correlationId ?? "").length > 0)).toBe(true);
+      const proven = expectActivityLogProof(
+        "editor.verification.script-binding.emitted-line",
+        formatActivityLogProofLine(lines[1] ?? {}),
+      );
+      expect(proven).toMatchObject({
+        outcome: "refused:script-shell-configured",
+        scriptStepOrdinal: 1,
+      });
+    });
+
+    it("declares exactly the outcomes keiko-verification defines", () => {
+      expect([...SCRIPT_BINDING_VALUES]).toEqual([...SCRIPT_BINDING_OUTCOMES]);
+    });
+
+    describe("a script change while the workspace queue is held (real effect)", () => {
+      const approvedBytes = {
+        typecheck: "echo approved > approved.txt",
+        pretypecheck: "echo pre >> approved.txt",
+      };
+      const held = {
+        main: { typecheck: "echo stolen > steal.txt", pretypecheck: "echo pre >> approved.txt" },
+        pretest: {
+          typecheck: "echo approved > approved.txt",
+          pretypecheck: "echo stolen > steal.txt",
+        },
+      };
+
+      // The real `runToReport` -> `executeVerificationEnforced`. The workspace queue emits its
+      // `acquired` line synchronously through the activity log sink, so the sink is the seam that
+      // edits package.json while the queue is held, after the plan was validated and before the step.
+      async function runHeld(change: Record<string, string> | undefined): Promise<{
+        readonly report: VerificationReport;
+        readonly events: ServerLogEvent[];
+      }> {
+        writeScripts(approvedBytes);
+        const events: ServerLogEvent[] = [];
+        let edited = false;
+        const manager = makeManager({
+          activityLog: {
+            write: (event): void => {
+              events.push(event);
+              if (
+                change !== undefined &&
+                !edited &&
+                event.op === "editor.verification.workspace" &&
+                event.extra?.state === "acquired"
+              ) {
+                edited = true;
+                writeScripts(change);
+              }
+            },
+          },
+          isWorkspaceTrustedForPackageScripts: () => true,
+          probeIsolation: async () =>
+            Promise.resolve({ probe: { available: true, backend: "seatbelt" }, durationMs: 0 }),
+        });
+        const { report } = await manager.runToReport(
+          input({ kinds: ["typecheck"], correlationId: "run-held-queue" }),
+          new AbortController().signal,
+        );
+        expect(change === undefined || edited).toBe(true);
+        return { report, events };
+      }
+
+      it.each([
+        ["main script", held.main],
+        ["pretest script", held.pretest],
+      ])(
+        "denies the step as scripts-changed and never runs the changed %s",
+        async (_name, change) => {
+          const { report, events } = await runHeld(change);
+          expect(report.results[0]?.status).toBe("denied");
+          expect(report.results[0]?.detail).toContain("scripts changed after approval");
+          expect(existsSync(join(workspaceRoot, "steal.txt"))).toBe(false);
+          expect(existsSync(join(workspaceRoot, "approved.txt"))).toBe(false);
+          const lines = events.filter((event) => event.op === "editor.verification.script-binding");
+          expect(lines.map((line) => line.extra?.outcome)).toEqual(["scripts-changed"]);
+          expect(lines.map((line) => line.correlationId)).toEqual(["run-held-queue"]);
+        },
+      );
+
+      it("positive control: with nothing changed the approved bytes run, or the host fails closed", async () => {
+        const { report, events } = await runHeld(undefined);
+        const lines = events.filter((event) => event.op === "editor.verification.script-binding");
+        if (report.results[0]?.status === "passed") {
+          expect(readFileSync(join(workspaceRoot, "approved.txt"), "utf8")).toBe("approved\n");
+          expect(lines.map((line) => line.extra?.outcome)).toEqual(["bound"]);
+          expect(lines.map((line) => line.correlationId)).toEqual(["run-held-queue"]);
+        } else {
+          // A host without a working sandbox denies before any spawn; nothing ran.
+          expect(existsSync(join(workspaceRoot, "approved.txt"))).toBe(false);
+          expect(report.results[0]?.status).not.toBe("passed");
+          // Nothing changed, so a denial here is the host's, never the binding's.
+          expect(lines.map((line) => line.extra?.outcome)).not.toContain("scripts-changed");
+        }
+      });
+    });
+
+    it.each([
+      ["the script", { typecheck: "node steal.js", pretypecheck: "echo a" }],
+      ["a lifecycle script", { typecheck: "tsc --noEmit", pretypecheck: "node steal.js" }],
+    ])(
+      "never runs the step when %s changed after the plan was validated, while the queue held",
+      async (_name, changed) => {
+        writeScripts(approved);
+        const reports: VerificationReport[] = [];
+        const manager = makeManager({
+          // The port stands for the effect: the change lands while it waits for the workspace queue.
+          execute: async (args): Promise<ExecuteVerificationResult> => {
+            writeScripts(changed);
+            const probe = { available: true, backend: "test-backend" };
+            const run = await runVerification(args.plan, {
+              workspace: args.workspace,
+              networkEnforcement: "inherit",
+              ...(args.approvedScriptsDigest === undefined
+                ? {}
+                : { approvedScriptsDigest: args.approvedScriptsDigest }),
+            });
+            reports.push(run);
+            return { report: run, probe };
+          },
+          isWorkspaceTrustedForPackageScripts: () => true,
+        });
+        await manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal);
+        expect(reports[0]?.results.map((result) => result.status)).toEqual(["denied"]);
+        expect(reports[0]?.results[0]?.detail).toMatch(
+          new RegExp(`^${SCRIPTS_CHANGED_DENIAL_PREFIX}`),
+        );
       },
     );
   });

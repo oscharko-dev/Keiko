@@ -28,6 +28,7 @@ import {
 import {
   runVerification,
   type NetworkEnforcementMode,
+  type ScriptBindingOutcome,
   type VerificationPlan,
   type VerificationReport,
   type VerificationStepOutput,
@@ -416,6 +417,15 @@ export interface ExecuteVerificationArgs {
   // as it happens; never part of the persisted report.
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
   readonly onTargetedProjectFailure?: VerificationDeps["onTargetedProjectFailure"];
+  // The digest of the package scripts the plan was approved on; every script step re-proves it
+  // inside the exclusive scope, right before it spawns (see `VerificationDeps`). Every server
+  // execution requires it: a package-script step of a run that carries none is denied
+  // (`approval-missing`), so no caller can run a script unbound by leaving it out. The CLI's own
+  // `keiko verify` is a direct user action on the person's own folder and does not pass here.
+  readonly approvedScriptsDigest?: string | undefined;
+  // Receives the closed outcome of binding each script step the moment it is decided, so a run that
+  // is cancelled or throws later has still reported the refusals it reached.
+  readonly onScriptBinding?: ((outcome: ScriptBindingOutcome) => void) | undefined;
   // An isolation probe the caller already took (#4519). The run then executes under the verdict its
   // script-trust decision was made on: a run admitted without trust because no step could be
   // isolated never runs a step that a backend started meanwhile would admit. Absent, the run
@@ -739,5 +749,10 @@ function verificationDeps(
       ? {}
       : { sharedHostPlatform: args.sharedHostPlatform }),
     ...(args.onStepOutput === undefined ? {} : { onStepOutput: args.onStepOutput }),
+    ...(args.approvedScriptsDigest === undefined
+      ? {}
+      : { approvedScriptsDigest: args.approvedScriptsDigest }),
+    requireApprovedScripts: true,
+    ...(args.onScriptBinding === undefined ? {} : { onScriptBinding: args.onScriptBinding }),
   };
 }

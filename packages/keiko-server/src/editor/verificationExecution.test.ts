@@ -23,8 +23,10 @@ import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   buildVerificationPlan,
+  DEFAULT_VERIFICATION_LIMITS,
   detectScripts,
   planDirectTargetedTests,
+  scriptTableDigest,
 } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import * as sandbox from "@oscharko-dev/keiko-sandbox";
@@ -162,6 +164,7 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
         plan,
         workspace,
         signal: new AbortController().signal,
+        approvedScriptsDigest: scriptTableDigest(catalog.scripts),
       });
       expect(report.results).toHaveLength(1);
       if (probe.available) {
@@ -201,6 +204,7 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
         plan,
         workspace,
         signal: new AbortController().signal,
+        approvedScriptsDigest: scriptTableDigest(detectScripts(workspace).scripts),
       });
       expect(await readFile(outside, "utf8")).toBe("unchanged");
       if (probe.available) {
@@ -788,5 +792,55 @@ describe("executeVerificationEnforced — an offered step Node.js is pinned or t
     );
     expect(report.results).toEqual([]);
     expect(records).toHaveLength(1);
+  });
+});
+
+describe("executeVerificationEnforced — every server execution is bound to approved scripts", () => {
+  async function run(
+    scripts: Record<string, string>,
+    digest: string | undefined,
+  ): Promise<{
+    readonly report: Awaited<ReturnType<typeof executeVerificationEnforced>>["report"];
+    readonly outcomes: string[];
+  }> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-binding-")));
+    const outcomes: string[] = [];
+    try {
+      await writeFile(join(root, "package.json"), JSON.stringify({ name: "x", scripts }));
+      const step = {
+        kind: "test" as const,
+        scriptName: "test",
+        command: "npm",
+        args: ["test"],
+        limits: { ...DEFAULT_VERIFICATION_LIMITS, maxMemoryBytes: undefined },
+      };
+      const { report } = await executeVerificationEnforced({
+        plan: { workspaceRoot: root, steps: [step] },
+        workspace: detectWorkspaceAt(root),
+        signal: new AbortController().signal,
+        isolation: { probe: { available: true, backend: "seatbelt" }, durationMs: 0 },
+        ...(digest === undefined ? {} : { approvedScriptsDigest: digest }),
+        onScriptBinding: (outcome) => outcomes.push(outcome),
+      });
+      return { report, outcomes };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("denies a package-script step that carries no digest, and reports why", async () => {
+    const { report, outcomes } = await run({ test: "echo hi" }, undefined);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("approval-missing");
+    expect(outcomes).toEqual(["refused:approval-missing"]);
+  });
+
+  it("denies scripts that differ from the approval and reports `scripts-changed`", async () => {
+    const { report, outcomes } = await run(
+      { test: "echo stolen" },
+      scriptTableDigest({ test: "echo approved" }),
+    );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(outcomes).toEqual(["scripts-changed"]);
   });
 });

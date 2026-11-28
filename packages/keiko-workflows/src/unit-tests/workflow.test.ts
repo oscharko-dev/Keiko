@@ -268,7 +268,10 @@ describe("generateUnitTests — apply mode verification", () => {
     expect(report.status).toBe("completed");
     expect(report.verificationSummary?.overallStatus).toBe("passed");
     expect(report.verificationSkipReason).toBeUndefined();
-    expect(spawn.calls()[0]?.args.slice(-2)).toEqual(["/trusted-tools/npm", "test"]);
+    // The approved script runs as its own bytes through `sh -c`, not through a second read of
+    // package.json by npm; the confinement is unchanged.
+    expect(spawn.calls()[0]?.args.slice(-4)).toEqual(["keiko-script", ".", "test", "echo ok"]);
+    expect(spawn.calls()[0]?.args).toContain("/trusted-tools/sh");
     expect(spawn.calls()[0]?.args).toContain("--bind");
   });
 

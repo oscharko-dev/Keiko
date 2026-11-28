@@ -7,23 +7,24 @@
 // pre-patch reproduction baseline — Wave-1 verifies only the post-apply state.
 
 import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
-import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
-import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
-  buildVerificationPlan,
-  detectScripts,
+  DEFAULT_VERIFICATION_LIMITS,
   planDirectTargetedTests,
   resolveTargetedTests,
-  runVerification,
-  summarizeForAudit,
-  DEFAULT_VERIFICATION_LIMITS,
   type VerificationAuditSummary,
-  type VerificationPlan,
+  type VerificationStep,
 } from "@oscharko-dev/keiko-verification";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  resolvePlannedVerification,
+  runPlannedVerification,
+  SKIP_UNRESOLVED,
+  verificationResultFields,
+} from "../verification/planned-verification.js";
 import { isSensitivePath } from "./guard.js";
 import type { BugRunState } from "./internal.js";
 
-export const SKIP_UNRESOLVED = "verification skipped: framework unknown or no test files resolved";
+export { SKIP_UNRESOLVED };
 
 // The non-test source files the patch changed — passed to resolveTargetedTests so it can find the
 // associated tests (incl. the just-added regression test). We approximate "source" as any changed
@@ -43,34 +44,6 @@ function isTestFile(path: string): boolean {
   return segments.has("test") || segments.has("spec");
 }
 
-function buildPlanFallback(workspace: WorkspaceInfo, fs: WorkspaceFs): VerificationPlan {
-  const catalog = detectScripts(workspace, fs);
-  return buildVerificationPlan(workspace, catalog, { only: ["test"] }, fs);
-}
-
-function resolveVerificationPlan(
-  workspace: WorkspaceInfo,
-  changedFiles: readonly PatchFileChange[],
-  fs: WorkspaceFs,
-): VerificationPlan | undefined {
-  const directTests = planDirectTargetedTests(workspace, changedTestFiles(changedFiles), fs);
-  if (directTests.length > 0) {
-    return { workspaceRoot: workspace.root, steps: directTests };
-  }
-  const targeted = resolveTargetedTests(
-    workspace,
-    changedSourceFiles(changedFiles),
-    fs,
-    DEFAULT_VERIFICATION_LIMITS,
-  );
-  if (targeted.length > 0) {
-    return { workspaceRoot: workspace.root, steps: targeted };
-  }
-  const fallback = buildPlanFallback(workspace, fs);
-  const runnable = fallback.steps.filter((step) => step.skipReason === undefined);
-  return runnable.length > 0 ? { workspaceRoot: workspace.root, steps: runnable } : undefined;
-}
-
 export interface BugVerificationOutcome {
   readonly summary: VerificationAuditSummary | undefined;
   readonly skipReason: string | undefined;
@@ -82,34 +55,21 @@ export async function runBugVerification(
   changedFiles: readonly PatchFileChange[],
   fs: WorkspaceFs,
 ): Promise<BugVerificationOutcome> {
-  const plan = resolveVerificationPlan(workspace, changedFiles, fs);
-  if (plan === undefined) {
+  const planned = resolvePlannedVerification(workspace, fs, [
+    (): readonly VerificationStep[] =>
+      planDirectTargetedTests(workspace, changedTestFiles(changedFiles), fs),
+    (): readonly VerificationStep[] =>
+      resolveTargetedTests(
+        workspace,
+        changedSourceFiles(changedFiles),
+        fs,
+        DEFAULT_VERIFICATION_LIMITS,
+      ),
+  ]);
+  if (planned === undefined) {
     return { summary: undefined, skipReason: SKIP_UNRESOLVED };
   }
-  const report = await runVerification(plan, {
-    workspace,
-    signal: state.signal,
-    spawn: state.deps.spawn ?? nodeSpawnFn,
-    processEnv: state.deps.processEnv ?? process.env,
-    now: state.now,
-    fs,
-    // Explicit-only (ADR-0043 D8): leaving this undefined applies the orchestrator's fail-closed
-    // default. Deriving it from an injected dependency instead — `spawn !== undefined`, as shorthand
-    // for "a test harness is driving this" — also matched the production budget wrapper, which is
-    // exactly how a governed run injects its spawn, so the egress boundary was disabled on the one
-    // path that executes model-authored code.
-    networkEnforcement: state.deps.verificationNetworkEnforcement,
-    ...(state.deps.verificationEnforcedNetworkAvailable === undefined
-      ? {}
-      : { enforcedNetworkAvailable: state.deps.verificationEnforcedNetworkAvailable }),
-  });
-  const summary = summarizeForAudit(report);
-  state.emitter.emit({
-    type: "bug:verification:result",
-    overallStatus: summary.overallStatus,
-    stepCount: summary.results.length,
-    passedCount: summary.results.filter((r) => r.status === "passed").length,
-    durationMs: summary.durationMs,
-  });
+  const summary = await runPlannedVerification(state, workspace, fs, planned);
+  state.emitter.emit({ type: "bug:verification:result", ...verificationResultFields(summary) });
   return { summary, skipReason: undefined };
 }

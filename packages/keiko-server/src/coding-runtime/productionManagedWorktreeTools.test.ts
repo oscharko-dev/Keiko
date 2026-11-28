@@ -32,7 +32,11 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { matchesOverallStatus } from "@oscharko-dev/keiko-contracts/runtime/verification";
-import { buildAppliedLimits, runVerification } from "@oscharko-dev/keiko-verification";
+import {
+  buildAppliedLimits,
+  runVerification,
+  scriptTableDigest,
+} from "@oscharko-dev/keiko-verification";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -3146,6 +3150,9 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         plan: {
           workspaceRoot,
+          // The plan carries the digest of the script table it was built on (a fixture without
+          // scripts), so the effect can re-prove it before any package-script step.
+          approvedScriptsDigest: scriptTableDigest({}),
           steps: [
             expect.objectContaining({
               kind: "targeted-test",
