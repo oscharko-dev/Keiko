@@ -1160,8 +1160,22 @@ function useRunRepositoryPin(
   onPinRepository: ((root: string) => void) | undefined,
 ): void {
   const startedHere = useRef(false);
-  if (mutation.status === "pending" && RUN_STARTING_MUTATIONS.has(mutation.kind))
-    startedHere.current = true;
+  const sawActive = useRef(false);
+  const starting = mutation.status === "pending" && RUN_STARTING_MUTATIONS.has(mutation.kind);
+  // Declared before the pin effect so the same commit that shows the run sees the claim. The claim
+  // ends with the run it was made for (or with a refused start), never carrying over to a later
+  // run of another window.
+  useEffect(() => {
+    if (starting) startedHere.current = true;
+    else if (mutation.status === "error" && !runIsActive) startedHere.current = false;
+  }, [starting, mutation.status, runIsActive]);
+  useEffect(() => {
+    if (runIsActive) sawActive.current = true;
+    else if (sawActive.current) {
+      sawActive.current = false;
+      startedHere.current = false;
+    }
+  }, [runIsActive]);
   useEffect(() => {
     if (startedHere.current && runIsActive && selectedRoot === undefined && repositoryRoot !== null)
       onPinRepository?.(repositoryRoot);

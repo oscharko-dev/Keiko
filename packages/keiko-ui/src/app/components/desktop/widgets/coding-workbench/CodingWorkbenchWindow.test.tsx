@@ -5848,6 +5848,39 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
   });
 
+  it("does not pin a later run of another window after its own run ended", () => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "start", requestId: "req-own", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-own" }),
+      actions: actions(),
+    });
+    view.rerender(window());
+    expect(onPinRepository).toHaveBeenCalledTimes(1);
+
+    runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: actions() });
+    view.rerender(window());
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).toHaveBeenCalledTimes(1);
+  });
+
   // The runtime follows one run for every window: a window that never started it must not take the
   // repository of another window's run as its own.
   it("does not pin the run of another window", () => {
