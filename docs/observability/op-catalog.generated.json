@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "50e1746c21caed1ac89dfd76b497a861c471229a331e484b30f6cc76f80fcf3e",
+    "catalogDigest": "4a3baf69c11681edf612ad696a18859b1cb34ee311cc76c69dc93fc68cdd4acd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33539,8 +33539,8 @@
         "failureClasses": ["git-large-file-streaming"],
         "proofIds": ["git.large-files-streamed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:81",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:252"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:87",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:258"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34039,8 +34039,8 @@
         "failureClasses": ["git-raw-conversion-settlement"],
         "proofIds": ["git.raw-status.conversion-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:148",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:318"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:154",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:324"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34134,8 +34134,8 @@
         "failureClasses": ["git-raw-conversion-settlement"],
         "proofIds": ["git.raw-status.conversion-settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:106",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:331"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:112",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:337"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34167,8 +34167,8 @@
         "failureClasses": ["git-denied-path-exclusion"],
         "proofIds": ["git.raw-status.denied-paths-excluded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:61",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:236"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:67",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:242"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34321,6 +34321,11 @@
             "dataClass": "count",
             "required": false
           },
+          "requestedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "fileCount": {
             "type": "integer",
             "dataClass": "count",
@@ -34404,8 +34409,8 @@
         "failureClasses": ["git-runtime-action"],
         "proofIds": ["git.runtime-action.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:157",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1109"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:158",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1182"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34448,8 +34453,8 @@
         "failureClasses": ["git-diff-search-bounded"],
         "proofIds": ["git.runtime-diff.search-bounded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:190",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:277"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:196",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:283"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106113,6 +106118,12 @@
                   "required": false
                 },
                 {
+                  "name": "requestedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "runId",
                   "type": "string",
                   "dataClass": "opaque-id",
@@ -130361,7 +130372,7 @@
     {
       "op": "git.large-files-streamed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:84",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:90",
       "package": "keiko-server"
     },
     {
@@ -130391,19 +130402,19 @@
     {
       "op": "git.raw-status.conversion-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:151",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:157",
       "package": "keiko-server"
     },
     {
       "op": "git.raw-status.conversion-settled",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:109",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:115",
       "package": "keiko-server"
     },
     {
       "op": "git.raw-status.denied-paths-excluded",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:64",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:70",
       "package": "keiko-server"
     },
     {
@@ -130415,13 +130426,13 @@
     {
       "op": "git.runtime-action",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:160",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:161",
       "package": "keiko-server"
     },
     {
       "op": "git.runtime-diff.search-bounded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:193",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:199",
       "package": "keiko-server"
     },
     {

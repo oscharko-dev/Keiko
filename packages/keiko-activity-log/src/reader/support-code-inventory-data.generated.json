@@ -4138,6 +4138,7 @@
     "WorkspaceShortcutReservedError",
     "WorkspaceStateBodyTooLarge",
     "WorkspaceTrustRequiredError",
+    "YamlDepthRefusal",
     "YamlSyntaxRefusal"
   ],
   "tokens": [
