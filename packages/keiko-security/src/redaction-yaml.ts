@@ -15,9 +15,11 @@ function yamlApi(): typeof import("yaml") {
 /**
  * The pinned parser composes nesting by recursion, one generator frame per level, so a document
  * nested a few thousand levels deep (about 230 on a small stack) overflows the stack mid-parse.
- * Real configuration is far shallower. Deeper text is refused up front with an explicit outcome
+ * Real configuration is far shallower. Text whose block nesting, measured from indentation columns
+ * and compact `- ` / `? ` markers, exceeds this limit is refused up front with an explicit outcome
  * that every projection owner already treats as a depth refusal, closed and body-free, instead of
- * running the parser to the edge of the stack.
+ * running the parser to the edge of the stack. Flow collections (`[[[…]]]`, `{a: {b: …}}`) are not
+ * counted here: this guard does not bound them, and they rely on the parser's own limits.
  */
 export const MAX_YAML_NESTING = 512;
 
