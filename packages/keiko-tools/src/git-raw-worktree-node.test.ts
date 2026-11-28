@@ -31,7 +31,7 @@ import {
   readGitWorktreeSnapshot,
   readStagedPaths,
 } from "./git-worktree-snapshot-node.js";
-import { redact, redactCredentialShapes } from "@oscharko-dev/keiko-security";
+import { redactCredentialShapes } from "@oscharko-dev/keiko-security";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
 
@@ -183,9 +183,9 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
   // change") because the metadata read ran through the full redactor, whose source-language
   // projection infers code or YAML from the text and, when that refuses (a syntax refusal, or a
   // call-stack overflow on a ~300-file listing), masks the rest of the output. Closed machine
-  // metadata must never meet that projection. The production redactor itself names the trigger: a
-  // tracked file whose NAME reads as source (`class A {`) is masked by `redact` yet clean under the
-  // credential floor the machine lane now uses.
+  // metadata must never meet that projection. A tracked file whose NAME reads as source
+  // (`class A {`) is the deterministic trigger; the test pins that the machine lane returns the
+  // listing intact and that the credential floor alone leaves it unchanged.
   it("keeps the commit proof readable when a tracked file name reads as source code", async () => {
     const sourceLikeName = "class A {";
     writeFileSync(join(root, sourceLikeName), "body\n");
@@ -194,7 +194,6 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
     const clean = { workspace, processEnv: { PATH: process.env.PATH } };
     const statOutput = await readGitIndexStat(clean);
     expect(statOutput).toContain(sourceLikeName);
-    expect(redact(statOutput, [])).not.toBe(statOutput);
     expect(redactCredentialShapes(statOutput, [], false)).toBe(statOutput);
     expect((await readGitIndexEntries(clean)).map((entry) => entry.path)).toContain(sourceLikeName);
     expect(await readGitIndexTreeDigest(clean)).toMatch(/^[0-9a-f]+$/u);

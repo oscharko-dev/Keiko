@@ -2325,9 +2325,10 @@ describe("runCommand — outputScrub: credentials-only", () => {
     expect(result.stdout).toContain("[REDACTED]");
   });
 
-  // U-25: closed machine metadata must not meet the source-language projection. A listing whose
-  // path reads as source is masked by the full redactor; "machine-metadata" keeps it byte for byte
-  // while still scrubbing a credential value and a credential-shaped token.
+  // U-25: closed machine metadata must not meet the source-language projection. "machine-metadata"
+  // keeps a listing whose path reads as source byte for byte while still scrubbing a credential
+  // value and a credential-shaped token. The contrast is pinned on this mode, never on how the full
+  // redactor treats the listing, so fixing that redactor cannot turn this test red.
   it("machine-metadata skips the source projection but keeps the credential scrub", async () => {
     const listing = "class A {\n  mtime: 1795824484:748913727\n  size: 109\tflags: 0\nsrc/b.js\n";
     const run = async (
@@ -2349,7 +2350,6 @@ describe("runCommand — outputScrub: credentials-only", () => {
           },
         )
       ).stdout;
-    expect(await run(listing, "credentials-only")).not.toBe(listing);
     expect(await run(listing, "machine-metadata")).toBe(listing);
     expect(await run("a deploy-tok3n-9 b", "machine-metadata")).not.toContain("deploy-tok3n-9");
     const shaped = `sk-${"a1".repeat(12)}`;

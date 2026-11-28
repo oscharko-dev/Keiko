@@ -153,8 +153,9 @@ export interface SandboxPolicy {
   //     not exist. Never a way to leak a token: the shape-based redaction always applies too.
   //   "machine-metadata": the same credential scrub as "credentials-only" (credential values and
   //     credential shapes), but WITHOUT the source-language projection the full redactor applies to
-  //     prose. For typed readers whose stdout is closed machine data that is parsed and never shown
-  //     (index stat, index/tree listings, object ids). The projection infers code or YAML from the
+  //     prose. For typed readers whose stdout is closed machine data: mostly parsed and never shown
+  //     (index stat, index/tree listings, object ids); a few results (staged paths, branch and
+  //     remote names) are shown and keep the credential floor. The projection infers code or YAML from the
   //     text itself and fails closed by masking the rest of the output, so a tracked file named
   //     like source (`class A {`) or a YAML parse that overflowed the stack on a 300-file listing
   //     turned a healthy read into "git metadata was redacted" and made a commit impossible (U-25).

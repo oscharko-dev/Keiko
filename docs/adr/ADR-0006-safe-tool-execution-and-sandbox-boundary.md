@@ -445,8 +445,11 @@ Tool `output` strings are redacted at two points:
    projection infers code or YAML from the text itself and fails closed by masking the rest of the
    output; on a ~300-file index listing it hit a stack overflow in the YAML pass, and a tracked
    file named like source (`class A {`) triggers it deterministically, so the metadata read was
-   rejected and a healthy commit could never be proved. Content-bearing reads keep the full
-   redactor.
+   rejected and a healthy commit could never be proved. Most reads on this lane are parsed and
+   never shown; the staged paths of the commit draft (seen by the model) and the branch and remote
+   names of the worktree snapshot (shown in the action sheet) are shown, and keep the credential
+   floor that content a person reads and the model receives keeps. Nothing on this lane is
+   evidence or Activity Log content. Content-bearing reads keep the full redactor.
    The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the `credentials-only` scrub for
    one reason: it runs only a fixed, repository-independent Node metadata script whose output is
    bounded to 1 KiB and parsed against a closed key set, and a host that exports `NODE_VERSION` (the

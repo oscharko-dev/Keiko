@@ -707,6 +707,11 @@ function machineReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
       ...deps,
       // Ordinary task/CI context can equal a Git identity. Credential values and patterns remain
       // scrubbed; reject their marker before parsing or hashing. Child authority is unchanged.
+      // `machine-metadata` is the credential floor without the source-language projection. Most
+      // reads here are parsed and never shown; `readStagedPaths` (the commit draft's staged files,
+      // seen by the model) and the snapshot's branch and remote names (the action sheet) are shown,
+      // and keep the credential floor a person-visible read gets. Nothing on this lane is evidence
+      // or Activity Log content.
       policy: { ...(deps.policy ?? DEFAULT_SANDBOX_POLICY), outputScrub: "machine-metadata" },
     }),
     rejectRedactedMetadata: true,
