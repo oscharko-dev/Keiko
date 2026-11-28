@@ -3,6 +3,7 @@ import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 import {
+  STREAM_WAITING_THRESHOLD_MS,
   acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
   admitDirectBrowserStream,
@@ -17,6 +18,7 @@ import {
 } from "./browser-stream-capacity";
 
 afterEach(() => {
+  Reflect.deleteProperty(document, "visibilityState");
   resetBrowserStreamCapacityForTests();
   resetClientDiagnosticWriter();
   vi.unstubAllGlobals();
@@ -314,5 +316,199 @@ describe("persistent stream connection ceiling", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(admitted.has(4)).toBe(true);
     admissions.forEach((admission) => admission.release());
+  });
+});
+
+// #4491 stream fairness: who may take whose slot. A background stream gives its slot up only to an
+// essential waiter; an essential stream of a hidden document gives its slot up to an essential
+// waiter of a visible one; an essential waiter keeps its place and says when it waits long.
+describe("stream fairness between documents and priorities", () => {
+  function setVisibility(state: "visible" | "hidden"): void {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  }
+
+  function admitMany(
+    count: number,
+    options: DirectStreamOptions = {},
+    admitted: Set<number> = new Set<number>(),
+  ): DirectStreamAdmission[] {
+    return Array.from({ length: count }, (_, index) =>
+      admitDirectBrowserStream(() => admitted.add(index), options),
+    );
+  }
+
+  function useLocks(): void {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+  }
+
+  it("does not make background streams yield to each other, only to an essential waiter", async () => {
+    useLocks();
+    const yielded = vi.fn();
+    const background: DirectStreamOptions = { priority: "background", onYield: yielded };
+    const holders = admitMany(4, background);
+    await vi.advanceTimersByTimeAsync(0);
+    const queuedAdmitted = new Set<number>();
+    const queued = admitMany(1, background, queuedAdmitted);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(yielded).not.toHaveBeenCalled();
+    expect(queuedAdmitted.size).toBe(0);
+    const essentialAdmitted = new Set<number>();
+    const essential = admitMany(1, {}, essentialAdmitted);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    expect(essentialAdmitted.size).toBe(1);
+    expect(queuedAdmitted.size).toBe(0);
+    [...holders, ...queued, ...essential].forEach((admission) => admission.release());
+  });
+
+  it("makes a hidden document's essential streams yield to an essential stream of a visible one", async () => {
+    useLocks();
+    setVisibility("visible");
+    const yielded = vi.fn();
+    const holders = admitMany(4, { yieldWhenHidden: true, onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const waiterAdmitted = new Set<number>();
+    const waiter = admitMany(1, {}, waiterAdmitted);
+    await vi.advanceTimersByTimeAsync(0);
+    // The waiter's document is the visible one; the holders' document went into the background.
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(waiterAdmitted.size).toBe(1);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    [...holders, ...waiter].forEach((admission) => admission.release());
+  });
+
+  it("keeps a visible document's essential streams and never yields hidden ones to a hidden waiter", async () => {
+    useLocks();
+    const yielded = vi.fn();
+    setVisibility("visible");
+    const visibleHolders = admitMany(4, { yieldWhenHidden: true, onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const visibleWaiter = admitMany(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(yielded).not.toHaveBeenCalled();
+    [...visibleHolders, ...visibleWaiter].forEach((admission) => admission.release());
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("hidden");
+    const hiddenHolders = admitMany(4, { yieldWhenHidden: true, onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const hiddenWaiter = admitMany(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(yielded).not.toHaveBeenCalled();
+    [...hiddenHolders, ...hiddenWaiter].forEach((admission) => admission.release());
+  });
+
+  it("asks again at once when the yielded document becomes visible", async () => {
+    useLocks();
+    setVisibility("visible");
+    const onAdmitted = vi.fn();
+    const holders = Array.from({ length: 4 }, () =>
+      admitDirectBrowserStream(onAdmitted, { yieldWhenHidden: true, onYield: vi.fn() }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const [waiter] = admitMany(1);
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(5_150);
+    expect(onAdmitted).toHaveBeenCalledTimes(4);
+    waiter?.release();
+    setVisibility("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(onAdmitted).toHaveBeenCalledTimes(5);
+    holders.forEach((admission) => admission.release());
+  });
+
+  it("does not hold a yield while the stream is mid-action", async () => {
+    useLocks();
+    const yielded = vi.fn();
+    let busy = true;
+    const holders = admitMany(4, {
+      priority: "background",
+      onYield: yielded,
+      canYield: () => !busy,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const [essential] = admitMany(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(yielded).not.toHaveBeenCalled();
+    busy = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    [...holders, essential].forEach((admission) => admission?.release());
+  });
+
+  it("tells a waiting essential stream once after the threshold and clears it on admission", async () => {
+    useLocks();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const holders = admitMany(4);
+    await vi.advanceTimersByTimeAsync(0);
+    const onWaiting = vi.fn();
+    const waiting = admitDirectBrowserStream(vi.fn(), { onWaiting, correlationId: "wait-1" });
+    await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS - 1);
+    expect(onWaiting).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onWaiting.mock.calls).toEqual([[true]]);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(onWaiting.mock.calls).toEqual([[true]]);
+    const messages = (): string[] => writer.mock.calls.map(([message]) => String(message));
+    expect(messages().filter((message) => message.includes("waiting for origin"))).toHaveLength(1);
+    expect(messages().filter((message) => message.includes("acquisition unavailable"))).toEqual([]);
+    holders[0]?.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onWaiting.mock.calls).toEqual([[true], [false]]);
+    expect(messages().filter((message) => message.includes("admitted after waiting"))).toHaveLength(
+      1,
+    );
+    [...holders, waiting].forEach((admission) => admission.release());
+  });
+
+  it("keeps an essential stream's place in the queue past the old acquisition deadline", async () => {
+    useLocks();
+    const holders = admitMany(4);
+    await vi.advanceTimersByTimeAsync(0);
+    const firstAdmitted = new Set<number>();
+    const first = admitMany(1, {}, firstAdmitted);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const secondAdmitted = new Set<number>();
+    const second = admitMany(1, {}, secondAdmitted);
+    await vi.advanceTimersByTimeAsync(10_000);
+    holders[0]?.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(firstAdmitted.size).toBe(1);
+    expect(secondAdmitted.size).toBe(0);
+    [...holders, ...first, ...second].forEach((admission) => admission.release());
+  });
+
+  it("leaves no queued lock request behind a lease that ended while it was choosing a slot", async () => {
+    vi.useFakeTimers();
+    const base = createOriginLocksFixture();
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let gated = false;
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: base.request,
+        query: () => (gated ? gate.then(() => base.query()) : base.query()),
+      },
+    });
+    const held = Array.from({ length: 3 }, () =>
+      acquirePersistentBrowserStreamCapacity(vi.fn(), vi.fn(), { yieldable: false }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    gated = true;
+    const cancel = acquirePersistentBrowserStreamCapacity(vi.fn(), vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    cancel();
+    open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await base.query()).pending).toEqual([]);
+    held.forEach((stop) => stop());
   });
 });
