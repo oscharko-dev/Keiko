@@ -504,10 +504,11 @@ describe("the generated native plugins", () => {
             commandLabel: "branch",
             risk: "medium",
             targetPathHash: digest,
+            // U-27: the ask names the branch so the card shows what Approve creates.
+            branchName: "feature/x",
           },
         },
       });
-      expect(JSON.stringify(bodies[0])).not.toContain("feature/x");
       expect(bodies[1]).toMatchObject({
         action: "git",
         operation: "branch",

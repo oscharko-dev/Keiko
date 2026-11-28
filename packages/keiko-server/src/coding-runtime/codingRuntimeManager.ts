@@ -3459,6 +3459,7 @@ function approvalReviewFacts(
 ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
   if (event.nativeAction !== undefined) return nativeActionReviewFacts(event);
   if (event.actionKind === "verification-command") return verificationReviewFacts(event, shown);
+  if (event.actionKind === "git-branch") return gitBranchReviewFacts(event);
   if (event.actionKind !== "file-edit") return undefined;
   const declared = event.allowedRelativePaths ?? [];
   const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
@@ -3494,6 +3495,26 @@ function shownVerification(
     actionId: event.actionId,
     packageDir: event.packageDir,
   });
+}
+
+/**
+ * The task branch a governed `git-branch` ask would create (#4491 U-27): the person approves a named
+ * branch, not a bare class label. The name was bound to the approved digest at the protocol
+ * boundary; it rides the authenticated review channel only and never reaches the Activity Log.
+ */
+function gitBranchReviewFacts(
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (event.branchName === undefined) return undefined;
+  return {
+    requestId: event.requestId,
+    gitBranch: { branchName: event.branchName },
+    paths: [],
+    pathsTruncated: false,
+    fileCount: 0,
+    addedLines: 0,
+    deletedLines: 0,
+  };
 }
 
 function verificationReviewFacts(

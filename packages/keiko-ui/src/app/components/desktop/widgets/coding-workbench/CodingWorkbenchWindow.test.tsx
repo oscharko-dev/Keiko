@@ -3409,6 +3409,76 @@ describe("CodingWorkbenchWindow", () => {
     },
   );
 
+  // U-27: the person approves a NAMED branch, never a bare "create a task branch" card.
+  function branchAskState(): CodingWorkbenchRuntimeState {
+    const base = verificationAskState();
+    const pending = base.run.value?.pendingPermission;
+    if (pending === undefined) throw new Error("expected a pending permission");
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            ...pending,
+            requestId: "permission-branch-1",
+            risk: "medium",
+            actionKind: "git-branch",
+            commandLabel: "branch",
+          },
+        }),
+      },
+    });
+  }
+
+  function branchReview(
+    gitBranch: { readonly branchName: string } | undefined,
+    status: UseCodingWorkbenchApprovalReviewResult["status"] = "ready",
+  ): UseCodingWorkbenchApprovalReviewResult {
+    return {
+      status,
+      review:
+        gitBranch === undefined
+          ? null
+          : {
+              requestId: "permission-branch-1",
+              gitBranch,
+              paths: [],
+              pathsTruncated: false,
+              fileCount: 0,
+              addedLines: 0,
+              deletedLines: 0,
+            },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult;
+  }
+
+  it("U-27: a task-branch approval names the branch in its title and body and passes axe", async () => {
+    approvalReviewHookMock.mockReturnValue(branchReview({ branchName: "refactor/retry-limit" }));
+    renderWorkbench(branchAskState());
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Create task branch refactor/retry-limit and switch to it",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Branch to create" })).toHaveTextContent(
+      "refactor/retry-limit",
+    );
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("U-27: Approve stays disabled while the branch name is not loaded, Deny stays", () => {
+    approvalReviewHookMock.mockReturnValue(branchReview(undefined, "loading"));
+    renderWorkbench(branchAskState());
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
   it("#3897: a native web ask names the internet and Full access, never the task workspace", () => {
     approvalReviewHookMock.mockReturnValue(nativeReview("webfetch", ["https://example.test/doc"]));
     renderWorkbench(nativeAskState("webfetch"));

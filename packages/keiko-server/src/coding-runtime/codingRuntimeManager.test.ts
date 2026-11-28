@@ -3510,6 +3510,7 @@ describe("coding runtime manager", () => {
             approvalId: approvalProof.approvalId,
             approvalDigest: approvalProof.approvalDigest,
             targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+            branchName: "feature/x",
           },
         },
       },
@@ -3527,6 +3528,16 @@ describe("coding runtime manager", () => {
         risk: "medium",
       },
     });
+    // U-27: the person is shown WHICH branch Approve creates, on the review channel only: the
+    // public permission request stays name-free.
+    expect(manager.pendingApprovalReview("run-1991", projected.requestId)).toMatchObject({
+      requestId: projected.requestId,
+      gitBranch: { branchName: "feature/x" },
+      paths: [],
+    });
+    expect(
+      JSON.stringify(events.find((event) => event.kind === "permission-requested")),
+    ).not.toContain("feature/x");
     const redeem = (branchName: string): boolean =>
       codingToolApprovals.consume({
         runId: "run-1991",
@@ -3610,6 +3621,7 @@ describe("coding runtime manager", () => {
             approvalId: approvalProof.approvalId,
             approvalDigest: approvalProof.approvalDigest,
             targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+            branchName: "feature/x",
           },
         },
       },

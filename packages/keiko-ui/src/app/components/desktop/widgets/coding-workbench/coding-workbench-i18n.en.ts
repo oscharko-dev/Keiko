@@ -1180,6 +1180,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Approve creation of one draft pull request with this exact title, description and target. This does not merge the pull request.",
   "codingWorkbench.approval.commit.help":
     "Approval applies once to this reviewed message and staged change. A changed proposal requires a new review.",
+  "codingWorkbench.approval.gitBranch.title": "Create task branch {branch} and switch to it",
+  "codingWorkbench.approval.gitBranch.branch": "Branch to create",
   "codingWorkbench.approval.changes.title": "Files this change would write",
   "codingWorkbench.approval.changes.files": "Files",
   "codingWorkbench.approval.changes.lines": "Lines",

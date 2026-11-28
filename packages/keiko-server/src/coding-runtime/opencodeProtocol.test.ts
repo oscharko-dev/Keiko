@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -1511,7 +1513,8 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
               idempotencyKey: "session:branch-call",
               approvalId: "session:branch-call",
               approvalDigest: "b".repeat(64),
-              targetPathHash: "c".repeat(64),
+              targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+              branchName: "feature/x",
               ...overrides,
             },
           },
@@ -1522,14 +1525,21 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       actionKind: "git-branch",
       commandLabel: "branch",
       risk: "medium",
-      targetPathHash: "c".repeat(64),
+      targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+      branchName: "feature/x",
     });
     expect(branchAsk({ targetPathHash: undefined })).toBeUndefined();
     expect(branchAsk({ targetPathHash: "feature/x" })).toBeUndefined();
     expect(branchAsk({ commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
     expect(branchAsk({ risk: "low" })).toBeUndefined();
     expect(branchAsk({}, ["feature/x"])).toBeUndefined();
-    expect(branchAsk({ branchName: "feature/x" })).toBeUndefined();
+    // U-27: the ask names the branch the card shows, and that name must be the one the approval is
+    // bound to: absent, foreign, empty or control-character names are not the ask.
+    expect(branchAsk({ branchName: undefined })).toBeUndefined();
+    expect(branchAsk({ branchName: "feature/y" })).toBeUndefined();
+    expect(branchAsk({ branchName: "" })).toBeUndefined();
+    expect(branchAsk({ branchName: "feature/x\n" })).toBeUndefined();
+    expect(syncAsk("fetch", { branchName: "feature/x" })).toBeUndefined();
     expect(syncAsk("pull", { commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
     expect(syncAsk("pull", { risk: "low" })).toBeUndefined();
     expect(syncAsk("fetch", {}, ["origin"])).toBeUndefined();

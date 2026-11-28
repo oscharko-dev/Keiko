@@ -20,6 +20,7 @@ import type {
   OpenCodeCompactionActivity,
   OpenCodeReconciliationEvent,
 } from "./opencodeReconciler.js";
+import { isRuntimeGitBranchName } from "./codingRuntimeGitIpc.js";
 import { isAdmissibleOpenCodeToolName, openCodeToolLogLabel } from "./opencodeNativeTools.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
@@ -353,6 +354,12 @@ const GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS = [
   ...GOVERNED_VERIFICATION_METADATA_KEYS,
   "targetPathHash",
 ] as const;
+// A governed task branch's ask also names the branch (a validated ref name, not a secret) so the
+// approval card shows what Approve creates; the server re-derives the digest from it (#4491 U-27).
+const GOVERNED_BRANCH_METADATA_KEYS = [
+  ...GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS,
+  "branchName",
+] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
 // `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
@@ -514,7 +521,7 @@ function governedCommandMetadataKeys(
     ];
   }
   return actionKind === "git-branch"
-    ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
+    ? GOVERNED_BRANCH_METADATA_KEYS
     : GOVERNED_VERIFICATION_METADATA_KEYS;
 }
 
@@ -546,9 +553,24 @@ function validCommandApproval(
   );
 }
 
+// The branch the ask names must be printable and its digest IS the approved target, so the card can
+// never show a name other than the one Approve binds to. Whether Git accepts the name stays the Git
+// service's decision (a refusal the model can act on), so an unusual name is shown, not dropped.
+function validAskBranchName(metadata: Record<string, unknown>): boolean {
+  if (metadata.actionKind !== "git-branch") return !Object.hasOwn(metadata, "branchName");
+  const name = metadata.branchName;
+  return (
+    isRuntimeGitBranchName(name) &&
+    !/\p{Cc}/u.test(name) &&
+    createHash("sha256").update(name, "utf8").digest("hex") === metadata.targetPathHash
+  );
+}
+
 function validGovernedAsk(metadata: Record<string, unknown>, commandLabel: string): boolean {
   return (
-    validGovernedCommandTarget(metadata.actionKind, commandLabel) && validAskPackageDir(metadata)
+    validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
+    validAskPackageDir(metadata) &&
+    validAskBranchName(metadata)
   );
 }
 

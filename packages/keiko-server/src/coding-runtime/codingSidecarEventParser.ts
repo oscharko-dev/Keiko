@@ -48,6 +48,8 @@ export interface SidecarPermissionEvent {
   readonly targetPath?: string | undefined;
   /** The package folder a governed verification ask named; absent means the workspace root. */
   readonly packageDir?: string | undefined;
+  /** The task branch a governed `git-branch` ask names, for the approval card only; never logged. */
+  readonly branchName?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
   readonly fileCount?: number | undefined;
   readonly addedLines?: number | undefined;
@@ -207,6 +209,7 @@ function optionalVerificationMetadata(
 ): Partial<SidecarPermissionEvent> {
   return {
     ...optionalStringField(record, "packageDir"),
+    ...optionalStringField(record, "branchName"),
     ...optionalStringField(record, "executable"),
     ...optionalStringArrayField(record, "args"),
     ...optionalIntegerField(record, "passedCount"),

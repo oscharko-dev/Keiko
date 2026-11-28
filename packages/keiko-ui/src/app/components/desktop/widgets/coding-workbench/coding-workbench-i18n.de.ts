@@ -1220,6 +1220,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Einen Draft Pull Request mit diesem exakten Titel, dieser Beschreibung und diesem Ziel freigeben. Diese Freigabe führt den Pull Request nicht zusammen.",
   "codingWorkbench.approval.commit.help":
     "Die Freigabe gilt einmalig für diese geprüfte Nachricht und vorgemerkte Änderung. Ein geänderter Vorschlag erfordert eine erneute Prüfung.",
+  "codingWorkbench.approval.gitBranch.title": "Aufgaben-Branch {branch} anlegen und wechseln",
+  "codingWorkbench.approval.gitBranch.branch": "Anzulegender Branch",
   "codingWorkbench.approval.changes.title": "Dateien, die diese Änderung schreiben würde",
   "codingWorkbench.approval.changes.files": "Dateien",
   "codingWorkbench.approval.changes.lines": "Zeilen",

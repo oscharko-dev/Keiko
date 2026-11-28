@@ -2023,7 +2023,9 @@ function toolApprovalProofSource(): readonly string[] {
     "  if (isGitBranch(request)) {",
     '    if (typeof request.branchName !== "string") throw new Error("keiko-tool-invalid");',
     "    const targetPathHash = await sha256Hex(request.branchName);",
-    "    return { targetId: `branch:${targetPathHash}`, targetPathHash };",
+    // The ask names the branch itself so the approval card shows it; the server re-derives the digest
+    // from it and refuses a mismatch (#4491 U-27).
+    "    return { targetId: `branch:${targetPathHash}`, targetPathHash, branchName: request.branchName };",
     "  }",
     '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
     "}",
@@ -2032,10 +2034,10 @@ function toolApprovalProofSource(): readonly string[] {
     "  const runId = process.env.KEIKO_CODING_RUN_ID;",
     "  const target = await toolApprovalTarget(request);",
     '  if (!runId || !target || typeof target.targetId !== "string") throw new Error("keiko-tool-invalid");',
-    "  const { targetId, targetPathHash } = target;",
+    "  const { targetId, targetPathHash, branchName } = target;",
     '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
     "  const approvalDigest = await sha256Hex(payload);",
-    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}) };",
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}), ...(branchName ? { branchName } : {}) };",
     "}",
   ];
 }

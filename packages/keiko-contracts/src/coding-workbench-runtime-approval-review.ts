@@ -133,6 +133,13 @@ export type CodingWorkbenchVerificationPreview =
       readonly reason: CodingWorkbenchVerificationPreviewUnavailableReason;
     };
 
+export const CODING_WORKBENCH_GIT_BRANCH_REVIEW_NAME_MAX_CHARS = 255;
+
+/** The task branch a pending `git-branch` approval would create and switch to. */
+export interface CodingWorkbenchGitBranchReview {
+  readonly branchName: string;
+}
+
 export interface CodingWorkbenchRuntimePendingApprovalReview {
   /** Binds the review to the exact pending permission the operator is deciding about. */
   readonly requestId: string;
@@ -140,6 +147,12 @@ export interface CodingWorkbenchRuntimePendingApprovalReview {
   readonly nativeAction?: CodingWorkbenchNativeActionReview;
   /** Present only for a governed verification ask; carries no paths. */
   readonly verificationPreview?: CodingWorkbenchVerificationPreview;
+  /**
+   * Present only for a governed task-branch ask (`git-branch`, #4491 U-27): the branch Approve
+   * would create and switch to, so the person sees what they approve. A ref name, not a secret;
+   * it carries no paths.
+   */
+  readonly gitBranch?: CodingWorkbenchGitBranchReview;
   /** Workspace-relative, deduplicated, in the order the changeset declared them. */
   readonly paths: readonly string[];
   /** True when the changeset declared more files than `paths` carries. */
@@ -221,6 +234,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "draftDelivery",
         "nativeAction",
         "verificationPreview",
+        "gitBranch",
       ],
       "pendingApprovalReview",
     ),
@@ -234,6 +248,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
   else if (value.verificationPreview !== undefined)
     validateVerificationPreviewReview(value, errors);
+  else if (value.gitBranch !== undefined) validateGitBranchReview(value, errors);
   else if (value.draftDelivery === undefined)
     validateReviewPaths(value.paths, errors, value.verifiedCommit !== undefined);
   else validateDraftReview(value, errors);
@@ -269,6 +284,29 @@ function validateNativeActionReview(pending: Record<string, unknown>, errors: st
   }
   // Edit asks also carry their contained paths; other native actions carry none.
   if (pending.paths.length > 0) validateReviewPaths(pending.paths, errors);
+}
+
+function validateGitBranchReview(pending: Record<string, unknown>, errors: string[]): void {
+  if (
+    pending.draftDelivery !== undefined ||
+    pending.verifiedCommit !== undefined ||
+    !Array.isArray(pending.paths) ||
+    pending.paths.length > 0
+  )
+    errors.push("a git branch review carries no paths, delivery or commit authority");
+  const value = pending.gitBranch;
+  if (!isRecord(value)) {
+    errors.push("gitBranch must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["branchName"], "gitBranch"));
+  if (
+    !validateUntrustedDisplayText(
+      value.branchName,
+      CODING_WORKBENCH_GIT_BRANCH_REVIEW_NAME_MAX_CHARS,
+    )
+  )
+    errors.push("gitBranch.branchName must be bounded display text");
 }
 
 function validateVerificationPreviewReview(

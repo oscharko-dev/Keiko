@@ -51,6 +51,7 @@ const REVIEWED_ACTION_KINDS: ReadonlySet<string> = new Set([
   "push",
   "pull-request",
   "verification-command",
+  "git-branch",
 ]);
 
 export function approvalReviewRequestId(

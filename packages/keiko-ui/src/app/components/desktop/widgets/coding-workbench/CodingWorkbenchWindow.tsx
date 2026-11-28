@@ -2811,7 +2811,7 @@ function PermissionPrompt({
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
       <PanelTitle eyebrow={approvalEyebrow(request, t)} id="permission-title" focusable>
-        {approvalTitle(request, native ? approvalReview.review?.nativeAction : undefined, t)}
+        {approvalTitle(request, native ? approvalReview.review : null, branchOf(approvalReview), t)}
       </PanelTitle>
       <ApprovalReviewContent
         kind={request.actionKind}
@@ -2865,13 +2865,21 @@ function approvalEyebrow(
   return `${eyebrow} · ${t("codingWorkbench.approval.risk")}: ${t(APPROVAL_RISK_MESSAGE_KEYS[request.risk])}`;
 }
 
+function branchOf(state: UseCodingWorkbenchApprovalReviewResult): string | undefined {
+  return state.review?.gitBranch?.branchName;
+}
+
 /** The card names the action itself: the native permission, else the supervised action kind. */
 function approvalTitle(
   request: CodingWorkbenchRuntimePendingPermission,
-  nativeAction: Parameters<typeof CodingWorkbenchNativeActionReview>[0]["action"] | undefined,
+  review: UseCodingWorkbenchApprovalReviewResult["review"],
+  branch: string | undefined,
   t: CodingWorkbenchTranslate,
 ): string {
-  if (nativeAction !== undefined) return nativeActionTitle(nativeAction, t);
+  if (review?.nativeAction !== undefined) return nativeActionTitle(review.nativeAction, t);
+  // A task branch is approved by name (#4491 U-27): the title says which branch Approve creates.
+  if (request.actionKind === "git-branch" && branch !== undefined)
+    return t("codingWorkbench.approval.gitBranch.title", { branch });
   if (request.actionKind !== undefined) return t(ACTION_KIND_MESSAGE_KEYS[request.actionKind]);
   return t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]);
 }
@@ -2881,6 +2889,35 @@ const APPROVAL_NATIVE_MESSAGE_KEYS = {
   unavailable: "codingWorkbench.approval.native.unavailable",
   retry: "codingWorkbench.approval.native.retry",
 } as const;
+
+const APPROVAL_GIT_BRANCH_MESSAGE_KEYS = {
+  loading: "codingWorkbench.approval.native.loading",
+  unavailable: "codingWorkbench.approval.native.unavailable",
+  retry: "codingWorkbench.approval.native.retry",
+} as const;
+
+/** The branch a pending task-branch ask would create, as plain text on the review channel. */
+function GitBranchReview({
+  state,
+  t,
+}: {
+  readonly state: UseCodingWorkbenchApprovalReviewResult;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const branch = state.review?.gitBranch;
+  const title = t("codingWorkbench.approval.gitBranch.branch");
+  return (
+    <fieldset className={styles.approvalResearch} aria-label={title}>
+      {branch === undefined ? (
+        <RetryMessage {...detailMessageProps(state, t, APPROVAL_GIT_BRANCH_MESSAGE_KEYS)} />
+      ) : (
+        <dl className={styles.approvalFacts}>
+          <ApprovalFact label={title} value={branch.branchName} />
+        </dl>
+      )}
+    </fieldset>
+  );
+}
 
 function ApprovalReviewContent({
   kind,
@@ -2910,6 +2947,7 @@ function ApprovalReviewContent({
   if (kind === "verification-command") {
     return <CodingWorkbenchVerificationPreviewReview state={review} t={t} />;
   }
+  if (kind === "git-branch") return <GitBranchReview state={review} t={t} />;
   return (
     <>
       <StageReviewDiagnostic
