@@ -9,7 +9,7 @@ import {
   branchOptions,
   CodingWorkbenchRepositorySelector,
 } from "./CodingWorkbenchRepositorySelector";
-import { useRepositoryReconnect } from "./useRepositoryReconnect";
+import { RECONNECT_TIMEOUT_MS, useRepositoryReconnect } from "./useRepositoryReconnect";
 
 const selectableRepositories = vi.hoisted(() => vi.fn());
 vi.mock("./codingWorkbenchRepositories", () => ({ selectableRepositories }));
@@ -510,12 +510,21 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     const user = await openPicker({ onSelect });
     await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
     expect(await screen.findByText("Reconnecting…")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
     expect(onSelect).not.toHaveBeenCalled();
     finish({ project: project("/work/cloned") });
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith("/work/cloned"));
     await waitFor(() => expect(screen.queryByText("Reconnecting…")).toBeNull());
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
@@ -540,6 +549,41 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     expect(interactions()).toEqual([
       { interaction: "repository-reconnected", outcome: "superseded" },
     ]);
+  });
+
+  it("ends a hung reconnect as a timeout failure and unlocks", async () => {
+    vi.useFakeTimers();
+    try {
+      reconnectRepository.mockReturnValue(new Promise(() => undefined));
+      const onSelect = vi.fn();
+      const { result } = renderHook(() =>
+        useRepositoryReconnect([project("/work/app"), drifted], vi.fn(), onSelect),
+      );
+      act(() => result.current.choose("/work/cloned"));
+      expect(result.current.reconnecting).toBe(true);
+      await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_TIMEOUT_MS));
+      expect(result.current.reconnecting).toBe(false);
+      expect(result.current.failed).toBe(true);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        "[keiko] coding workbench repository reconnect failed",
+        expect.objectContaining({ errorKind: "timeout" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the status region mounted and empty until a reconnect runs, and keeps focus", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    reconnectRepository.mockReturnValue(new Promise(() => undefined));
+    const user = await openPicker();
+    const region = screen.getByRole("status");
+    expect(region).toBeEmptyDOMElement();
+    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    expect(await screen.findByText("Reconnecting…")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBe(region);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveFocus();
   });
 
   it("treats a reconnect that leaves the workspace unavailable as a failure", async () => {

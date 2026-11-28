@@ -167,6 +167,7 @@ function chipTrigger(
 function RepositoryChip({
   root,
   locked,
+  busy,
   catalog,
   onSelect,
   t,
@@ -174,6 +175,7 @@ function RepositoryChip({
 }: {
   readonly root: string | null;
   readonly locked: boolean;
+  readonly busy: boolean;
   readonly catalog: CatalogState;
   readonly onSelect: (root: string) => void;
   readonly t: CodingWorkbenchTranslate;
@@ -190,6 +192,7 @@ function RepositoryChip({
       sections={[{ options }]}
       onValueChange={onSelect}
       onOpen={catalog.reload}
+      busy={busy}
       disabled={locked || (catalog.loading && options.length === 0) || catalog.error}
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
@@ -829,14 +832,14 @@ function SelectorRecoveryNotice({
 function RepositorySelectorField({
   root,
   locked,
-  catalog,
+  state,
   onSelect,
   placement,
   t,
 }: {
   readonly root: string | null;
   readonly locked: boolean;
-  readonly catalog: CatalogState;
+  readonly state: RepositorySelectorState;
   readonly onSelect: (root: string) => void;
   readonly placement: SelectorPlacement;
   readonly t: CodingWorkbenchTranslate;
@@ -846,7 +849,8 @@ function RepositorySelectorField({
       <RepositoryChip
         root={root}
         locked={locked}
-        catalog={catalog}
+        busy={state.reconnecting}
+        catalog={state.catalog}
         onSelect={onSelect}
         t={t}
         placement={placement}
@@ -864,18 +868,28 @@ function ReconnectNotice({
   readonly reconnecting: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  if (reconnecting) {
-    return (
+  // The status region stays mounted and empty, so a screen reader announces the text swapped in.
+  return (
+    <>
       <p className={styles.cmpRepositorySelectorNotice} role="status">
-        {t("codingWorkbench.repository.reconnecting")}
+        {reconnecting ? t("codingWorkbench.repository.reconnecting") : null}
       </p>
-    );
-  }
-  return failed ? (
-    <p className={styles.cmpRepositorySelectorNotice} role="alert">
-      {t("codingWorkbench.repository.reconnectChoiceFailed")}
-    </p>
-  ) : null;
+      {failed ? (
+        <p className={styles.cmpRepositorySelectorNotice} role="alert">
+          {t("codingWorkbench.repository.reconnectChoiceFailed")}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+// The location follows the repository: it waits for a reconnect, and an ordinary folder has none.
+function locationLocked(
+  locked: boolean,
+  root: string | null,
+  state: RepositorySelectorState,
+): boolean {
+  return locked || state.reconnecting || root === null || state.folderMode;
 }
 
 export function CodingWorkbenchRepositorySelector({
@@ -894,8 +908,8 @@ export function CodingWorkbenchRepositorySelector({
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField
         root={root}
-        locked={locked || state.reconnecting}
-        catalog={state.catalog}
+        locked={locked}
+        state={state}
         onSelect={state.choose}
         t={t}
         placement={placement}
@@ -903,7 +917,7 @@ export function CodingWorkbenchRepositorySelector({
       <LocationSelectorField
         location={state.folderMode ? "local" : work.location}
         offered={work.offeredLocations}
-        locked={locked || root === null || state.folderMode}
+        locked={locationLocked(locked, root, state)}
         onSelect={work.onSelectLocation}
         t={t}
         placement={placement}
@@ -911,7 +925,7 @@ export function CodingWorkbenchRepositorySelector({
       <BranchSelectorField
         root={root}
         branch={branch}
-        locked={state.branchLocked}
+        locked={state.branchLocked || state.reconnecting}
         state={state.branchState}
         onSelect={onSelectBranch}
         t={t}

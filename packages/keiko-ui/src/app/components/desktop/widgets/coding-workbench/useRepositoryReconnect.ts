@@ -55,6 +55,20 @@ function reconnectOutcome(
   return latest ? "selected" : "superseded";
 }
 
+// A reconnect is a state-changing request, which the shared client gives no read deadline. The
+// picker stays locked while it runs, so a hung request would lock it for good: the wait ends as a
+// `TimeoutError` failure instead (U-44).
+export const RECONNECT_TIMEOUT_MS = 30_000;
+
+function withReconnectDeadline<T>(request: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new DOMException("The reconnect did not answer in time.", "TimeoutError"));
+    }, RECONNECT_TIMEOUT_MS);
+    request.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
+
 function useMounted(): { readonly current: boolean } {
   const mounted = useRef(true);
   useEffect(() => {
@@ -115,7 +129,7 @@ export function useRepositoryReconnect(
       if (inFlight.current.has(path)) return;
       inFlight.current.add(path);
       setReconnecting(true);
-      void DEFAULT_GIT_CLIENT.reconnectRepository(path).then(
+      void withReconnectDeadline(DEFAULT_GIT_CLIENT.reconnectRepository(path)).then(
         (response): void =>
           settle(path, response.project.workspaceAvailable === true ? null : { error: undefined }),
         (error: unknown): void => settle(path, { error }),

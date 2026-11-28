@@ -686,7 +686,13 @@
 }
 
 .cmpSetupSelector > .cmpRepositorySelectorGit,
-.cmpSetupSelector > .cmpRepositorySelectorNotice {
+.cmpSetupSelector > .cmpRepositorySelectorNotice:empty {
+  /* The live region stays mounted for screen readers but takes no room while it is empty. */
+  flex-basis: 0;
+  height: 0;
+}
+
+.cmpRepositorySelectorNotice {
   grid-column: 1 / -1;
   justify-self: start;
 }
