@@ -721,7 +721,12 @@ function expectNotVerified(
   mode: AcceptanceMode,
   expected: {
     readonly testsPassOutsideKeiko: boolean;
-    /** `repair` (the default) when a check ran and failed after the edit; else why none was sent. */
+    /**
+     * Why the run's one continuation did or did not start. `target-unproven` (the default): the
+     * check was red before the edit and never passed in the run, so nothing proves the run broke it
+     * and no automatic write phase starts (c0fccaad1). `repair`: the check passed earlier in the run
+     * and failed after a later edit, so the model is sent back to repair it.
+     */
     readonly continuation?: "repair" | VerificationContinuationSkipReason;
     readonly projectCheckCount?: number;
   },
@@ -733,12 +738,13 @@ function expectNotVerified(
   expect(observed.editLanded, context).toBe(true);
   if (expected.testsPassOutsideKeiko) expect(observed.testerCheckExitCode, context).toBe(0);
   else expect(observed.testerCheckExitCode, context).toBeGreaterThan(0);
-  // #4491: a check that ran after the edit and failed sends the model back to repair it, up to the
-  // bound, and the next end of the run is skipped as already continued. Without a failed check to
-  // repair (none ran after the edit, or one was blocked) no continuation runs, and the line names
-  // why. Either way the run ends not evidenced.
+  // #4491: a check the run itself broke (it passed earlier in the run) sends the model back to
+  // repair it, up to the bound, and the next end of the run is skipped as already continued. A red
+  // check that never passed in the run is named to the person instead (`target-unproven`), and so
+  // is every other gap (none ran, one was blocked). Either way the run ends not evidenced and never
+  // succeeds.
   expect(VERIFICATION_CONTINUATION_MAX).toBeGreaterThan(0);
-  const continuation = expected.continuation ?? "repair";
+  const continuation = expected.continuation ?? "target-unproven";
   expect(observed.continuations, context).toEqual(
     continuation === "repair"
       ? [
