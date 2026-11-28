@@ -131,7 +131,6 @@ function useImportDraft({ path, perform, onSaved }: ImportProps): {
   }
   function edit(): void {
     setPreview(undefined);
-    setIssue(undefined);
   }
   return { text, preview, issue, putText, readFile, review, edit };
 }
