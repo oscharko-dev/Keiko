@@ -1609,15 +1609,15 @@ it("returns an already open Settings panel to model verification without automat
   expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-failed", undefined);
 });
 
-// 2026-11-16: every model starts inactive in each server process. The person activates it here;
-// the activation is the readiness check, and only afterwards is the model offered for use.
+// 2026-11-16 / 2026-11-28: a model is inactive until the person activates it here; the activation is
+// the readiness check, and it is remembered across restarts until an update or a changed connection.
 describe("SettingsPanel manual model activation", () => {
   it("offers Activate for a model nobody activated and switches to a re-check once it passed", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockResolvedValue(readyReport());
     render(<SettingsPanel />);
     expect(await screen.findByTestId("model-activation-bar")).toHaveTextContent(
-      /Models are inactive after every start/i,
+      /A model stays activated across restarts/i,
     );
     expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not activated/i);
     expect(screen.getByTestId("model-status-test-chat-1")).toHaveAttribute(

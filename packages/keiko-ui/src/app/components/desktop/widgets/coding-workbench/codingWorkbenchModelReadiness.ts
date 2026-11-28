@@ -10,7 +10,7 @@ import type { ModelActivationState } from "@/lib/useModelActivation";
 
 // What the Workbench says about a model the server reports as "conversation-not-ready". The server
 // uses that one reason for two different facts (ADR-0171 D2, amended 2026-11-16): the model was never
-// activated in this process (the normal state after every start), or its readiness check failed.
+// activated (the normal state on a first start, after an update or after a changed connection), or its readiness check failed.
 // `conversationReady` on the catalog tells them apart: absent is "not activated", false is a check
 // that did not pass.
 

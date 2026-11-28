@@ -842,7 +842,7 @@ const MODEL_READINESS_KEYS: Readonly<
   "request-failed": "codingWorkbench.source.unavailableReason.conversation-request-failed",
 };
 
-// "Not activated yet" is the normal state after every start; "did not pass its readiness check" is a
+// "Not activated yet" is the normal state until a person activates the model (and again after an update or a changed connection); "did not pass its readiness check" is a
 // failure. The server reports both as one reason, so the sentence is chosen from the catalog's fact.
 function modelReadinessText(
   readiness: WorkbenchModelReadiness | null,

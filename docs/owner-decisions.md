@@ -6,6 +6,21 @@ content changes. Read the matching entry before you change that area. Where an A
 ADR is the architectural record; this page keeps the binding detail agents previously found in
 AGENTS.md.
 
+## Model activation (2026-11-28)
+
+Verbatim (German): "eigentlich ist es so gewollt, dass die aktivierten Modelle sich gemerkt werden
+und nur beim Erststart oder wenn irgendein Update durchgeführt wurde, wo es sich nicht verhindern
+lässt, die Modelle wieder aktiviert werden müssen. Also eigentlich sollte sich Keiko einmal
+aktivierte Modelle merken."
+
+Binding rules: Keiko remembers a model a person activated in Settings > Models (or the Coding
+Workbench notice). The record is bound to the installation, the product version and the model's
+configuration and credential digest, and is restored at the next start without sending any request
+(startup loads no model). Only a first start, a product update, a changed endpoint, model or
+credential, Deactivate, or a proven failure of the model discards it and requires a new activation.
+A tool-calling proof is never inferred from the record. Activation stays the person's act: Keiko
+never activates a model by itself. Amends ADR-0171 D2.
+
 ## Repository credential relay (2026-11-22)
 
 In every mode a native Coding run reads dependencies from the Maven and npm repositories the person

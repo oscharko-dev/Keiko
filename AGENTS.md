@@ -95,6 +95,10 @@ This shapes the product _and_ how you work on it:
 Each line is binding. Read its long form in [`docs/owner-decisions.md`](docs/owner-decisions.md)
 before you change that area.
 
+- **Model activation (2026-11-28):** a model a person activated is remembered across restarts and
+  restored without any model request while its installation, product version, configuration and
+  credential digest still match; a first start, an update, a changed connection, Deactivate or a
+  proven failure discards it (ADR-0171 D2).
 - **Coding Workbench availability (2026-09-27):** a normal installation offers all three modes; the
   Coding ceiling defaults to `autonomous-delivery`, the selected mode to **Ask for approval**.
   Memory keeps its own ceiling; a person's clear "Merke dir"/"Vergiss das" acts at once in every

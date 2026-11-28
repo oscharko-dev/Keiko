@@ -336,8 +336,8 @@
     "de": "Deaktivieren"
   },
   "settings.models.activationHint": {
-    "en": "Models are inactive after every start. Activate a model to run its readiness check; once it passes, the model can be used in Chat and the Coding Workbench.",
-    "de": "Modelle sind nach jedem Start inaktiv. Aktiviere ein Modell, um seine Bereitschaftsprüfung auszuführen; danach ist es im Chat und in der Coding Workbench nutzbar."
+    "en": "A model stays activated across restarts. Activate it once to run its readiness check; once it passes, the model can be used in Chat and the Coding Workbench. After an update or a changed connection (endpoint, model or credential), activate it again.",
+    "de": "Ein Modell bleibt über Neustarts hinweg aktiviert. Aktiviere es einmal, um seine Bereitschaftsprüfung auszuführen; danach ist es im Chat und in der Coding Workbench nutzbar. Nach einem Update oder einer geänderten Verbindung (Endpunkt, Modell oder Zugangsdaten) aktivierst du es erneut."
   },
   "settings.models.deepProbes": {
     "en": "Deep probes",
