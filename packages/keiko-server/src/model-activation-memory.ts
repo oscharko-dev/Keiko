@@ -181,8 +181,9 @@ function configurationDigest(provider: ModelProviderConfig): string {
 
 const CREDENTIAL_KDF = { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
 const CREDENTIAL_MEMO_LIMIT = 256;
-// Per process only, never persisted or logged. Keyed by a hash of the KDF input tuple so the
-// credential itself is not a map key.
+// Per process only, never persisted or logged. Keyed by the KDF input itself (salt and credential,
+// which this process already holds in its configuration), so no fast hash of the credential is ever
+// computed: such a hash could be tested against guesses far cheaper than the KDF.
 const credentialMemo = new Map<string, string>();
 
 /**
@@ -192,7 +193,7 @@ const credentialMemo = new Map<string, string>();
  */
 function credentialDigest(installationId: string, provider: ModelProviderConfig): string {
   const salt = canonicalise({ purpose: "model-activation-credential", installationId });
-  const memoKey = sha256Hex(canonicalise({ salt, apiKey: provider.apiKey }));
+  const memoKey = `${salt}\u0000${provider.apiKey}`;
   const known = credentialMemo.get(memoKey);
   if (known !== undefined) return known;
   const derived = scryptSync(provider.apiKey, salt, 32, CREDENTIAL_KDF).toString("hex");
