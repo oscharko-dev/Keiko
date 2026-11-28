@@ -367,11 +367,10 @@ export class CodingRuntimeRunEffortLedger {
       recordStaleVerification(run, target, editRevision, failure);
       return;
     }
-    const earlier = run.verificationTargets.get(target)?.passedBeforeEdit === true;
     run.verificationTargets.set(target, {
       passed,
       selected: true,
-      ...(earlier ? { passedBeforeEdit: true } : {}),
+      ...keptPassedBeforeEdit(run.verificationTargets.get(target)),
       ...failedWith(passed, failure),
     });
   }
@@ -503,6 +502,12 @@ export class CodingRuntimeRunEffortLedger {
 }
 
 // The failed check's evidence rides the target only while the target is failing.
+function keptPassedBeforeEdit(earlier: VerificationTargetState | undefined): {
+  readonly passedBeforeEdit?: true;
+} {
+  return earlier?.passedBeforeEdit === true ? { passedBeforeEdit: true } : {};
+}
+
 function failedWith(
   passed: boolean,
   failure: CodingVerificationFailureEvidence | undefined,

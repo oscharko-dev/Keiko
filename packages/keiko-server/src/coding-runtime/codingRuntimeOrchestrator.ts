@@ -3925,8 +3925,7 @@ export class CodingRuntimeOrchestrator {
     }
     const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
-    const dispatchedAt = this.effort.verificationRevision(live.runId);
-    const dispatchedTarget = this.effort.failedCheckTarget(live.runId)?.target;
+    const asked = this.continuationAsked(live.runId);
     const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
     if (dispatched === undefined) return false;
     if (this.continuationSuperseded(live)) {
@@ -3934,17 +3933,22 @@ export class CodingRuntimeOrchestrator {
       return true;
     }
     // Only a continuation the model actually received counts as "asked" (U-38).
-    if (dispatchedAt !== undefined && dispatchedTarget !== undefined)
-      this.continuationRevisions.set(live.runId, {
-        revision: dispatchedAt,
-        target: dispatchedTarget,
-      });
+    if (asked !== undefined) this.continuationRevisions.set(live.runId, asked);
     recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "continued", {
       failure,
     });
     this.operations.observeContinuation(live.runId, dispatched.completion);
     this.advanceRevision(live, "task-submitted");
     return true;
+  }
+
+  // The check and edit revision a continuation is about to be asked for (U-38).
+  private continuationAsked(
+    runId: string,
+  ): { readonly revision: number; readonly target: string } | undefined {
+    const revision = this.effort.verificationRevision(runId);
+    const target = this.effort.failedCheckTarget(runId)?.target;
+    return revision === undefined || target === undefined ? undefined : { revision, target };
   }
 
   // The one continuation task, naming the failed check; a refused or thrown dispatch is logged and

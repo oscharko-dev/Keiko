@@ -152,7 +152,10 @@ describe("coalesced text deltas of a run that moved on (#4491 review)", () => {
     droppedEventCount: 0,
   });
 
-  function newestDeltas(replacedFeed: CodingSafeActivityFeed, newestFeed: CodingSafeActivityFeed) {
+  function newestDeltas(
+    replacedFeed: CodingSafeActivityFeed,
+    newestFeed: CodingSafeActivityFeed,
+  ): readonly CodingSafeActivityTextDelta[] {
     const { res, publish, drain } = harness();
     publish(snapshot([delta("answer", 2, "stale")], replacedFeed));
     publish(snapshot([delta("answer", 0, "own")], newestFeed));
