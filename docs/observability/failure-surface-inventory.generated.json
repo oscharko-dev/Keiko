@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "be10bc1d66ba301e36aaaaba89c896746f6c102fd40c131f2e1ed8dc49c9cc40"
+    "catalogDigest": "4227ac7548e3b95f1b8f7e084558fea12b74383f97647fe9cde87d802c508a19"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 744,
-    "proofCount": 770,
-    "resolvedProofCount": 770,
+    "operationCount": 745,
+    "proofCount": 771,
+    "resolvedProofCount": 771,
     "failureClassCount": 420,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -708,6 +708,7 @@
         "editor.producer-turn.completed",
         "editor.verification.dependencies",
         "editor.verification.execute",
+        "editor.verification.script-binding",
         "editor.verification.windows-step-copy",
         "editor.verification.windows-step-drives",
         "editor.verification.windows-step-node",
@@ -2251,6 +2252,9 @@
     ],
     "editor.verification.execute.emitted-line": [
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/editor/verificationRunner.test.ts"
+    ],
+    "editor.verification.script-binding.emitted-line": [
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.windows-step-copy.credentials-skipped": [

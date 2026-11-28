@@ -11275,16 +11275,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["editor.verification.execute"],
+      state: ["editor.verification.execute", "editor.verification.script-binding"],
       end: [],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["editor.verification.execute"],
+    requiredCausalOperations: ["editor.verification.execute", "editor.verification.script-binding"],
     requiredLossOperations: [],
-    requiredProofOperations: ["editor.verification.execute"],
+    requiredProofOperations: ["editor.verification.execute", "editor.verification.script-binding"],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["editor.verification.execute"],
+    requiredResourceOperations: [
+      "editor.verification.execute",
+      "editor.verification.script-binding",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

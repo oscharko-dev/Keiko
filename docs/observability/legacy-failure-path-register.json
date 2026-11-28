@@ -3773,7 +3773,7 @@
       "path": "packages/keiko-server/src/editor/patchApplyRoutes.ts",
       "owner": "mutateThroughReprovedRoot",
       "kind": "unregistered-catch",
-      "count": 2
+      "count": 1
     },
     {
       "path": "packages/keiko-server/src/editor/processHardening.ts",
@@ -7684,12 +7684,6 @@
     {
       "path": "packages/keiko-verification/src/dependencies.ts",
       "owner": "statOrUndefined",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-verification/src/detect.ts",
-      "owner": "detectScripts",
       "kind": "unregistered-catch",
       "count": 1
     },

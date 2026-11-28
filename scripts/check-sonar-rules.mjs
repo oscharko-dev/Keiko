@@ -233,7 +233,8 @@ export function lintGroupInChild(
 
 export async function lintChangedFiles(files, lintGroup = lintGroupInChild) {
   const results = [];
-  for (const group of groupLintFiles(files)) results.push(...(await lintGroup(group)));
+  // One group at a time: each group process may take the whole analysis heap.
+  for (const group of groupLintFiles(files)) results.push(...(await lintGroup(group))); // NOSONAR javascript:S9382 -- groups run one after another so their heaps never add up
   return results;
 }
 
