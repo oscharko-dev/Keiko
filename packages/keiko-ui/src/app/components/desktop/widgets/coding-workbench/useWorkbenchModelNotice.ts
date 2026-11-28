@@ -29,6 +29,8 @@ export function useWorkbenchModelNotice(input: {
   readonly t: CodingWorkbenchTranslate;
   readonly setupVisible: boolean;
   readonly authorityError: string | null;
+  /** The branch the checkout moved to outside Keiko since the window last read it (U-39). */
+  readonly checkoutBranchChangedTo?: string | null;
 }): WorkbenchModelNotice {
   const { state, t } = input;
   const modelActivation = useModelActivation("coding-workbench");
@@ -41,6 +43,13 @@ export function useWorkbenchModelNotice(input: {
   const alert =
     modelActivation.state.status === "running"
       ? null
-      : visibleAlert(state, t, input.setupVisible, input.authorityError, modelReadiness);
+      : visibleAlert(
+          state,
+          t,
+          input.setupVisible,
+          input.authorityError,
+          modelReadiness,
+          input.checkoutBranchChangedTo ?? null,
+        );
   return { alert, modelReadiness, modelActivation };
 }

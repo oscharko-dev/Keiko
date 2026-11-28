@@ -79,4 +79,32 @@ describe("useSelectionMismatchRecovery", () => {
     });
     expect(rebind).not.toHaveBeenCalled();
   });
+
+  // U-39 (#4491): the branch the chip showed at the refusal comes back, so the window can tell a
+  // branch changed outside Keiko from another repository once the checkout is read again.
+  it("returns the branch shown at the refusal, for that refused request only", async () => {
+    const refresh = vi.fn(() => Promise.resolve(true));
+    const { result, rerender } = renderHook(
+      ({ mutation, shown }) => useSelectionMismatchRecovery(mutation, refresh, vi.fn(), shown),
+      { initialProps: { mutation: IDLE, shown: "chore/mark-reviewed" } },
+    );
+    expect(result.current).toBeNull();
+
+    rerender({
+      mutation: failedStart("CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH"),
+      shown: "chore/mark-reviewed",
+    });
+    await vi.waitFor(() => {
+      expect(result.current).toBe("chore/mark-reviewed");
+    });
+    // The chip corrects itself after the read; the remembered branch does not move with it.
+    rerender({
+      mutation: failedStart("CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH"),
+      shown: "perf/green",
+    });
+    expect(result.current).toBe("chore/mark-reviewed");
+
+    rerender({ mutation: IDLE, shown: "perf/green" });
+    expect(result.current).toBeNull();
+  });
 });

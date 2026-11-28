@@ -929,6 +929,21 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     };
   }
 
+  // U-39 (#4491): a branch changed outside Keiko in the same repository must not read as another
+  // repository. Only the selection refusal changes, and only once a changed branch is known.
+  it("names a branch changed outside Keiko for the selection refusal, and only for it", () => {
+    const mismatch = failedMutationState(undefined, "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH");
+    expect(visibleAlert(mismatch, tv, false, null, null, "perf/green")).toBe(
+      'codingWorkbench.alert.startRefusedBranchChanged {"branch":"perf/green","code":"CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH"}',
+    );
+    expect(visibleAlert(mismatch, tv, false, null, null, null)).toContain(
+      "codingWorkbench.alert.startRefusedSelectionMismatch",
+    );
+    expect(visibleAlert(failedMutationState(), tv, false, null, null, "perf/green")).not.toContain(
+      "BranchChanged",
+    );
+  });
+
   it("selects the visible mutation before a concurrent resource failure for reporting", () => {
     const state = failedMutationState("mutation-support-id");
     const resourceError = {

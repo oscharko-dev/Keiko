@@ -10,6 +10,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchVerificationGap,
 } from "@oscharko-dev/keiko-contracts";
+import { SELECTION_MISMATCH_ERROR_CODE } from "@/lib/coding-workbench-runtime-mutations";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import type { WorkbenchModelReadiness } from "./codingWorkbenchModelReadiness";
@@ -638,8 +639,9 @@ export function actionFailureAlert(
   summaryKey: CodingWorkbenchMessageKey,
   failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
+  extraValues: Readonly<Record<string, string>> = {},
 ): string {
-  const generic = t(summaryKey, { code: failure.code });
+  const generic = t(summaryKey, { ...extraValues, code: failure.code });
   const issueSummary =
     failure.issueBindingFailure === undefined
       ? ""
@@ -983,8 +985,22 @@ export function visibleAlert(
   setupVisible: boolean,
   authorityError: string | null = null,
   modelReadiness: WorkbenchModelReadiness | null = null,
+  checkoutBranchChangedTo: string | null = null,
 ): string | null {
   if (state.mutation.error) {
+    // U-39 (#4491): a start refused for the selection, where the same repository's checkout moved
+    // to another branch outside Keiko, says so instead of naming another repository.
+    if (
+      checkoutBranchChangedTo !== null &&
+      state.mutation.error.code === SELECTION_MISMATCH_ERROR_CODE
+    ) {
+      return actionFailureAlert(
+        "codingWorkbench.alert.startRefusedBranchChanged",
+        state.mutation.error,
+        t,
+        { branch: checkoutBranchChangedTo },
+      );
+    }
     return actionFailureAlert(
       startRefusalSummaryKey(state.mutation.error.code, state.mutation.error.modelRefusalReason),
       state.mutation.error,

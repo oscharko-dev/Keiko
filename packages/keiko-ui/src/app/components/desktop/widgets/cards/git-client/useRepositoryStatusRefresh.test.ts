@@ -18,6 +18,7 @@ import {
   AMBIENT_MAX_INTERVAL_MS,
   REFRESH_COALESCE_MS,
   statusFingerprintDiffers,
+  useRefreshOnWindowReturn,
   useRepositoryStatusRefresh,
 } from "./useRepositoryStatusRefresh";
 
@@ -475,5 +476,56 @@ describe("useRepositoryStatusRefresh coalescing (PERF-5)", () => {
     expect(vi.getTimerCount()).toBe(0);
     await advance(REFRESH_COALESCE_MS * 2);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// U-39 (#4491): the Coding Workbench's branch chip re-reads the checkout when the page regains focus
+// or its document becomes visible, through the same debounced watcher, with no ambient polling.
+describe("useRefreshOnWindowReturn (U-39)", () => {
+  beforeEach((): void => {
+    vi.useFakeTimers();
+    setVisibility("visible");
+  });
+  afterEach((): void => {
+    vi.useRealTimers();
+    setVisibility("visible");
+  });
+
+  it("re-reads once, debounced, on focus and on becoming visible, never while hidden or polling", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    const { unmount } = renderHook((): void => useRefreshOnWindowReturn("/repos/alpha", refresh));
+    await advance(AMBIENT_MAX_INTERVAL_MS * 2);
+    expect(refresh).not.toHaveBeenCalled();
+
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    act((): void => setVisibility("hidden"));
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    act((): void => setVisibility("visible"));
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    unmount();
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("watches nothing without a repository", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    renderHook((): void => useRefreshOnWindowReturn(null, refresh));
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS);
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

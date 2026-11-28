@@ -173,6 +173,29 @@ export function useRepositoryStatusRefresh(
   }, [coalescer, selectedPath]);
 }
 
+/**
+ * A window that only re-reads when the page regains focus or its document becomes visible, with no
+ * ambient probe (U-39, #4491): the Coding Workbench's branch chip re-reads the checkout this way, so
+ * a branch changed in a terminal while the window was away shows on return, not after a refused
+ * start. It reuses the Git window's debounced focus and visibility watcher.
+ */
+export function useRefreshOnWindowReturn(selectedPath: string | null, refresh: () => void): void {
+  const refreshRef = useRef(refresh);
+  const ambientRef = useRef<AmbientRefresh | undefined>(undefined);
+  useEffect((): void => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+  // The same one-trigger-one-refresh funnel as the Git window (PERF-5): a focus burst costs one read.
+  const [coalescer] = useState(
+    (): RefreshCoalescer => new RefreshCoalescer(refreshRef, ambientRef),
+  );
+  useEffect((): (() => void) => (): void => coalescer.cancel(), [coalescer, selectedPath]);
+  useEffect((): (() => void) | undefined => {
+    if (selectedPath === null) return undefined;
+    return watchRepositoryFromOutside(coalescer, ambientRef);
+  }, [coalescer, selectedPath]);
+}
+
 function documentVisible(): boolean {
   return document.visibilityState === "visible";
 }

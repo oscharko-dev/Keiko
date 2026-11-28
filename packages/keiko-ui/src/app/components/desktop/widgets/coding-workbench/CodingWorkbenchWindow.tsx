@@ -237,6 +237,7 @@ import { useCodingWorkbenchIdentityEvidence } from "./useCodingWorkbenchIdentity
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
 import { useSelectionMismatchRecovery } from "./useSelectionMismatchRecovery";
+import { useRefreshOnWindowReturn } from "../cards/git-client/useRepositoryStatusRefresh";
 import { useCodingWorkbenchConnectors } from "./useCodingWorkbenchConnectors";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
@@ -1050,6 +1051,63 @@ function useWorkspaceReadAfterRun(
 }
 
 /**
+ * The checkout is read again once a task has been opened or loaded (U-39, #4491): the branch chip
+ * showed the branch a previous run used until a refused start corrected it, although the checkout
+ * had been switched outside Keiko. The read follows the falling edge of the task session's pending
+ * state, so "New task" and a task opened from Coding History both end on the checkout as it is now.
+ */
+function useCheckoutReadAfterTaskOpened(
+  taskPending: boolean,
+  refreshCheckout: () => Promise<boolean>,
+): void {
+  const wasPending = useRef(taskPending);
+  useEffect(() => {
+    if (wasPending.current && !taskPending) void refreshCheckout();
+    wasPending.current = taskPending;
+  }, [taskPending, refreshCheckout]);
+}
+
+/**
+ * Keeps the branch chip true to the checkout (U-39, #4491): the checkout is read again when a task
+ * is opened and when the window regains focus or visibility (the Git window's watcher), and a start
+ * refused for its selection reads it again and reports the branch the window showed at that moment.
+ */
+function useCheckoutFreshness(input: {
+  readonly runIsActive: boolean;
+  readonly repositoryRoot: string | null;
+  readonly refreshCheckout: () => Promise<boolean>;
+  readonly mutation: CodingWorkbenchRuntimeState["mutation"];
+  readonly retry: () => void;
+  readonly shownBranch: string | null;
+  readonly taskPending: boolean;
+}): string | null {
+  const { refreshCheckout } = input;
+  useCheckoutReadAfterTaskOpened(input.taskPending, refreshCheckout);
+  const readAgain = useCallback((): void => void refreshCheckout(), [refreshCheckout]);
+  useRefreshOnWindowReturn(input.runIsActive ? null : input.repositoryRoot, readAgain);
+  return useSelectionMismatchRecovery(
+    input.mutation,
+    refreshCheckout,
+    input.retry,
+    input.shownBranch,
+  );
+}
+
+/**
+ * The branch the checkout now stands on when it differs from the one the window showed at a refused
+ * start, so the alert names the branch change instead of another repository. Nothing while the
+ * branch inventory is still being read again.
+ */
+function checkoutBranchMovedTo(
+  shownAtRefusal: string | null,
+  inventory: Pick<RepositoryBranchState, "loading" | "currentBranch">,
+): string | null {
+  if (shownAtRefusal === null || inventory.loading) return null;
+  const now = inventory.currentBranch;
+  return now !== null && now !== shownAtRefusal ? now : null;
+}
+
+/**
  * A window that follows the active workspace has no repository of its own, so a remount of the
  * window would seed it again from the shell's project - which can be another repository the person
  * only looked at elsewhere (the Git window). Once a run works in a repository the window keeps it:
@@ -1238,7 +1296,22 @@ export function CodingWorkbenchWindow({
     activationTrigger,
     refresh: refreshCheckout,
   });
+  const shownAtRefusal = useCheckoutFreshness({
+    runIsActive,
+    repositoryRoot,
+    refreshCheckout,
+    mutation: state.mutation,
+    retry: locationState.retry,
+    shownBranch: displayedExecutionBranch(
+      activeWorkspace,
+      repositoryRoot,
+      selectedBranch,
+      "composer",
+    ),
+    taskPending: history.pending,
+  });
   const { alert, modelReadiness, modelActivation } = useWorkbenchModelNotice({
+    checkoutBranchChangedTo: checkoutBranchMovedTo(shownAtRefusal, branchInventory),
     state,
     catalog: chatCatalog,
     t,
@@ -2035,7 +2108,6 @@ function WorkbenchColumns(
     fork: history.fork,
     resumeMode,
   });
-  useSelectionMismatchRecovery(state.mutation, activeWorkspace.refresh, locationState.retry);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
