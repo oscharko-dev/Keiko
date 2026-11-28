@@ -364,6 +364,29 @@ describe("production workspace HEAD reader worktree layouts", () => {
       expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(length));
     });
 
+    // `[extensions] objectformat = sha256` on one line is valid Git config; Git is the authority.
+    it.each([
+      ["[extensions] objectformat = sha256", 64],
+      ['[Extensions]   objectFormat = "sha256"  # one line', 64],
+      ["[extensions] objectformat = sha1", 40],
+    ] as const)("reads `%s` as Git does", (header, length) => {
+      const root = unbornRepo();
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(root, ["init", "-q", "-b", "main", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories.
+      }
+      const configPath = join(root, ".git", "config");
+      const original = readFileSync(configPath, "utf8");
+      const respelled = original.replace(/^\[extensions\]\s*\n\s*objectformat\s*=.*$/imu, header);
+      expect(respelled).not.toBe(original);
+      writeFileSync(configPath, respelled);
+      const format = git(root, ["rev-parse", "--show-object-format"]).trim();
+      expect(format === "sha256" ? 64 : 40).toBe(length);
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(length));
+    });
+
     it("ignores an objectformat key outside the extensions section", () => {
       const root = unbornRepo();
       const configPath = join(root, ".git", "config");

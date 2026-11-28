@@ -184,23 +184,30 @@ function declaresSha256(config: string): boolean {
   let section = "";
   let format: string | undefined;
   for (const raw of config.split(/\r?\n/u)) {
-    const line = raw.trim();
+    let line = raw.trim();
     if (line.startsWith("[")) {
-      section = sectionName(line);
-    } else if (section === "extensions") {
-      const assignment = assignmentOf(line);
-      if (assignment?.key === "objectformat") format = assignment.value;
+      // A header may carry the first assignment on its own line: `[extensions] objectformat = sha256`.
+      const header = headerOf(line);
+      section = header.section;
+      line = header.rest;
     }
+    if (section !== "extensions") continue;
+    const assignment = assignmentOf(line);
+    if (assignment?.key === "objectformat") format = assignment.value;
   }
   return format === "sha256";
 }
 
-// The lower-cased name of a `[section]` or `[section "subsection"]` header; a subsection or a
-// malformed header names no section that counts.
-function sectionName(line: string): string {
+// The lower-cased name of a `[section]` or `[section "subsection"]` header and the text after its
+// closing bracket; a subsection or a malformed header names no section that counts.
+function headerOf(line: string): { readonly section: string; readonly rest: string } {
   const close = line.indexOf("]");
-  const name = close < 0 ? "" : line.slice(1, close).trim();
-  return /^[A-Za-z][A-Za-z0-9-]*$/u.test(name) ? name.toLowerCase() : "";
+  if (close < 0) return { section: "", rest: "" };
+  const name = line.slice(1, close).trim();
+  return {
+    section: /^[A-Za-z][A-Za-z0-9-]*$/u.test(name) ? name.toLowerCase() : "",
+    rest: line.slice(close + 1).trim(),
+  };
 }
 
 function assignmentOf(line: string): { readonly key: string; readonly value: string } | undefined {
