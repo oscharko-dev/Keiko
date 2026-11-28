@@ -258,6 +258,15 @@ describe("parseGitEditorDiffResponse", () => {
     });
   });
 
+  it.each(["~$report.docx", "C:notes", "docs/~$lock.docx"])(
+    "lists the reported file %j that only looks like a home or drive path",
+    (path) => {
+      expect(
+        parseGitEditorDiffResponse(diffResponse({ files: [diffFile({ path })] })),
+      ).toMatchObject({ ok: true });
+    },
+  );
+
   it.each(["\\\\server\\share\\f.js", "\\\\?\\C:\\f.js", "dir\\..\\f.js", "..\\f.js"])(
     "still rejects the escaping reported path %j",
     (path) => {

@@ -163,6 +163,9 @@ describe("transient verified commit review", () => {
     "dir/line\nbreak.js",
     "dir/back\\slash.js",
     "dir/time 10:30.js",
+    "~$report.docx",
+    "docs/~$report.docx",
+    "C:notes",
   ])("accepts the repository-spelled path %j", (path) => {
     expect(
       validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
@@ -180,7 +183,11 @@ describe("transient verified commit review", () => {
     "\\\\?\\C:\\f.js",
     "..\\outside.js",
     "~/secrets.env",
+    "~",
     "C:/Windows/system32",
+    "C:\\Windows",
+    "/abs",
+    "a\0b",
     "dir//f.js",
     "./f.js",
     "dir/f\0.js",
