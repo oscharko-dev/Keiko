@@ -694,10 +694,31 @@ const REFRESH_FAILURE_ALERTS = [
   ["stream", "codingWorkbench.alert.eventStreamRefreshFailed"],
 ] as const;
 
+// U-55: the refusal a window gets when its app session no longer exists, as after the server
+// restarted under an open tab. Once the Workbench knows the window is unpaired, the pairing note
+// says what to do; a red alert naming this code beside it tells the person nothing more. Any other
+// refusal, and the same refusal of a paired or not yet checked window, stays an alert. The body-free
+// diagnostic of the failed repair is written where the repair fails, not here.
+const UNPAIRED_AUTHORITY_REFUSAL = "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED";
+
+function isUnpairedRefusal(
+  state: CodingWorkbenchRuntimeState,
+  error: CodingWorkbenchClientError | null,
+): boolean {
+  return state.pairing === "unpaired" && error?.code === UNPAIRED_AUTHORITY_REFUSAL;
+}
+
+function shownMutationError(state: CodingWorkbenchRuntimeState): CodingWorkbenchClientError | null {
+  return isUnpairedRefusal(state, state.mutation.error) ? null : state.mutation.error;
+}
+
 function refreshFailureResource(
   state: CodingWorkbenchRuntimeState,
 ): (typeof REFRESH_FAILURE_ALERTS)[number] | undefined {
-  return REFRESH_FAILURE_ALERTS.find(([resource]) => state[resource].status === "error");
+  return REFRESH_FAILURE_ALERTS.find(
+    ([resource]) =>
+      state[resource].status === "error" && !isUnpairedRefusal(state, state[resource].error),
+  );
 }
 
 function refreshFailureAlert(
@@ -712,7 +733,8 @@ function refreshFailureAlert(
 export function visibleAlertFailure(
   state: CodingWorkbenchRuntimeState,
 ): CodingWorkbenchClientError | null {
-  if (state.mutation.error !== null) return state.mutation.error;
+  const mutationError = shownMutationError(state);
+  if (mutationError !== null) return mutationError;
   const failure = refreshFailureResource(state);
   return failure === undefined ? null : state[failure[0]].error;
 }
@@ -1003,23 +1025,21 @@ export function visibleAlert(
   modelReadiness: WorkbenchModelReadiness | null = null,
   checkoutBranchChangedTo: string | null = null,
 ): string | null {
-  if (state.mutation.error) {
+  const mutationError = shownMutationError(state);
+  if (mutationError) {
     // U-39 (#4491): a start refused for the selection, where the same repository's checkout moved
     // to another branch outside Keiko, says so instead of naming another repository.
-    if (
-      checkoutBranchChangedTo !== null &&
-      state.mutation.error.code === SELECTION_MISMATCH_ERROR_CODE
-    ) {
+    if (checkoutBranchChangedTo !== null && mutationError.code === SELECTION_MISMATCH_ERROR_CODE) {
       return actionFailureAlert(
         "codingWorkbench.alert.startRefusedBranchChanged",
-        state.mutation.error,
+        mutationError,
         t,
         { branch: checkoutBranchChangedTo },
       );
     }
     return actionFailureAlert(
-      startRefusalSummaryKey(state.mutation.error.code, state.mutation.error.modelRefusalReason),
-      state.mutation.error,
+      startRefusalSummaryKey(mutationError.code, mutationError.modelRefusalReason),
+      mutationError,
       t,
     );
   }

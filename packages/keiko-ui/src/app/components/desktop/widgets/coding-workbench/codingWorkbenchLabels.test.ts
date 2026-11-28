@@ -971,6 +971,38 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).not.toContain("codingWorkbench.alert.actionFailedSupportId");
   });
 
+  // U-55: after a server restart the open tab's session repair is refused with the authority code
+  // while the window is known to be unpaired. The pairing note already says so; a second red alert
+  // naming a code the person cannot act on is noise. A paired window keeps the alert.
+  it("shows no runtime-failure alert for the authority refusal of an unpaired window", () => {
+    const unpaired = { ...failedMutationState("ui-correlation-9"), pairing: "unpaired" as const };
+    expect(visibleAlert(unpaired, tv, false)).toBeNull();
+    expect(visibleAlertFailure(unpaired)).toBeNull();
+    const paired = { ...unpaired, pairing: "paired" as const };
+    expect(visibleAlert(paired, tv, false)).toContain("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
+    expect(visibleAlertFailure(paired)).not.toBeNull();
+  });
+
+  it("also keeps a refused read of an unpaired window out of the alerts", () => {
+    const refused = {
+      code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+      message: "Runtime request was rejected.",
+      retryable: false,
+    };
+    const base = createInitialCodingWorkbenchRuntimeState();
+    const state = { ...base, run: { status: "error" as const, value: null, error: refused } };
+    expect(visibleAlert({ ...state, pairing: "paired" }, tv, false)).toContain("runRefreshFailed");
+    expect(visibleAlert({ ...state, pairing: "unpaired" }, tv, false)).toBeNull();
+  });
+
+  it("keeps every other refusal visible while the window is unpaired", () => {
+    const other = {
+      ...failedMutationState(undefined, "CODING_RUNTIME_MODEL_UNAVAILABLE"),
+      pairing: "unpaired" as const,
+    };
+    expect(visibleAlert(other, tv, false)).toContain("startRefusedModelUnavailable");
+  });
+
   it("appends the correlation id as a copyable support id when the transport carried one", () => {
     const alert = visibleAlert(failedMutationState("ui-correlation-9"), tv, false);
     expect(alert).toContain("codingWorkbench.alert.actionFailedSupportId");
