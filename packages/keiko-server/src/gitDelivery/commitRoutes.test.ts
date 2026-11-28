@@ -855,7 +855,11 @@ describe("commit draft — explicit model-backed generation", () => {
           draftModelPort((request) => {
             calls.push(request);
             if (request.responseFormat !== undefined) throw new ProviderError("Unavailable", 501);
-            return draftResponse({ subject: "fix: repair review", body: "Handle empty results." });
+            const response = draftResponse({
+              subject: "fix: repair review",
+              body: "Handle empty results.",
+            });
+            return { ...response, structuredOutput: null };
           }),
       }),
     );
