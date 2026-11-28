@@ -1115,6 +1115,7 @@ export {
   readGitLocalBranchTip,
   readGitHeadState,
   readGitBaseState,
+  readGitObjectIdLength,
   readGitTreeDigest,
   readGitWorktreeSnapshot,
   readGitStagedDiff,

@@ -25,7 +25,7 @@ import {
   readGitRawWorktreeSnapshotAtHead,
 } from "./git-raw-worktree-node.js";
 import { nodeSpawnFn } from "./exec.js";
-import { readGitHeadState } from "./git-worktree-snapshot-node.js";
+import { readGitHeadState, readGitObjectIdLength } from "./git-worktree-snapshot-node.js";
 
 const dirs: string[] = [];
 const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
@@ -377,5 +377,15 @@ describe("the unborn state is exact", () => {
       branch: "master",
       objectIdLength: 40,
     });
+  });
+});
+
+describe("the object-id length of a repository", () => {
+  it("is answered by Git whatever HEAD or the index hold", async () => {
+    const root = repository(false);
+    await expect(readGitObjectIdLength(deps(root))).resolves.toBe(40);
+    writeFileSync(join(root, ".git", "refs", "heads", "master"), "not a commit id\n");
+    await expect(readGitHeadState(deps(root))).rejects.toThrow();
+    await expect(readGitObjectIdLength(deps(root))).resolves.toBe(40);
   });
 });

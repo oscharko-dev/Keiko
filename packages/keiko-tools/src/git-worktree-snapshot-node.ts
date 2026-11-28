@@ -1238,7 +1238,11 @@ export async function readGitBaseState(
   return { kind: "born", sha: await readGitRevision(deps, baseRef) };
 }
 
-async function readGitObjectIdLength(deps: NodeGitWorktreeReaderDeps): Promise<40 | 64> {
+/**
+ * The repository's object-id length (40 for SHA-1, 64 for SHA-256), asked of Git itself. It does not
+ * depend on HEAD, so an unreadable HEAD or an empty index never changes the answer.
+ */
+export async function readGitObjectIdLength(deps: NodeGitWorktreeReaderDeps): Promise<40 | 64> {
   const format = (
     await runRead(machineReadContext(deps), ["rev-parse", "--show-object-format"])
   ).trim();

@@ -3271,6 +3271,27 @@ describe("productive runtime status/diff/stage lane", () => {
       expect(review).toEqual({ fileCount: 1, addedLines: 10, deletedLines: 0 });
     });
 
+    // The same with an empty index: no entry names the format, so Git is asked, never HEAD.
+    it("counts a new CRLF file of a SHA-256 repository with an empty index", async () => {
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(["init", "-qb", "dev", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories.
+      }
+      git(["config", "user.name", "Keiko Test"]);
+      git(["config", "user.email", "keiko@example.test"]);
+      git(["config", "core.autocrlf", "true"]);
+      git(["config", "commit.gpgsign", "false"]);
+      git(["checkout", "-qb", "codex/task"]);
+      writeCrlf("fresh.txt", lines);
+      expect(git(["ls-files"])).toBe("");
+      const execution = options.execution ?? {};
+      const selection = await admitStageSelection(context(), execution, ["fresh.txt"]);
+      const review = await reviewStageSelection(context(), execution, selection ?? []);
+      expect(review).toEqual({ fileCount: 1, addedLines: 10, deletedLines: 0 });
+    });
+
     it("counts a file that mixes CRLF and LF lines as Git does", async () => {
       git(["config", "core.autocrlf", "true"]);
       commitLf("mixed.txt");

@@ -27,6 +27,7 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import {
   readGitHeadState,
+  readGitObjectIdLength,
   sameGitHeadState,
   readGitIndexTreeDigest,
   gitBlobObjectId,
@@ -497,16 +498,16 @@ interface SideSources {
   readonly hashLength: number;
 }
 
-// Every index entry carries the repository's object format in its id length; with no entry the
-// answer is HEAD's (a born commit id, or the unborn branch's own format), never a SHA-1 guess.
+// Every index entry carries the repository's object format in its id length; with no entry Git
+// itself is asked (`rev-parse --show-object-format`), which does not read HEAD: an unreadable HEAD
+// neither fails the preview nor is read a second time, and the answer is never a SHA-1 guess.
 async function repositoryHashLength(
   deps: ReturnType<typeof runtimeGitReadDeps>,
   entries: readonly SideEntry[],
 ): Promise<number> {
   const first = entries[0];
   if (first !== undefined) return first.objectId.length;
-  const head = await readGitHeadState(deps);
-  return head.kind === "born" ? head.sha.length : head.objectIdLength;
+  return readGitObjectIdLength(deps);
 }
 
 async function readSideSources(
