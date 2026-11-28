@@ -420,28 +420,34 @@ export async function handleApplyEditorProfileImport(
   return runFilesHandler(async () => applyResolvedImport(ctx, deps, body, key));
 }
 
+// A profile mutation names a root only when it is project-scoped; the root is resolved under the
+// request's correlation id so a denied one is recorded against this request.
+async function optionalRealRoot(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  root: string | undefined,
+): Promise<string | undefined> {
+  if (root === undefined) return undefined;
+  return (await resolveRoot(deps.store, root, deps.redactor, ctx.correlationId)).realRoot;
+}
+
+function profilesUnavailable(): RouteResult {
+  return { status: 503, body: errorBody("STATE_UNAVAILABLE", "Editor profiles are unavailable.") };
+}
+
 async function applyResolvedImport(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   body: ParsedImportApply,
   idempotency: string,
 ): Promise<RouteResult> {
-  const resolved =
-    body.root === undefined
-      ? undefined
-      : await resolveRoot(deps.store, body.root, deps.redactor, ctx.correlationId);
   const mutation: EditorProfileImportControlMutation = {
     ...body,
     idempotencyKey: idempotency,
-    realRoot: resolved?.realRoot,
+    realRoot: await optionalRealRoot(ctx, deps, body.root),
   };
   const result = await deps.editorSettingsControl?.applyProfileImport?.(mutation);
-  if (result === undefined) {
-    return {
-      status: 503,
-      body: errorBody("STATE_UNAVAILABLE", "Editor profiles are unavailable."),
-    };
-  }
+  if (result === undefined) return profilesUnavailable();
   if (result.kind === "ok" && body.switchAfterImport) {
     deps.editorSettingsEvents?.publish({
       snapshot: result.settings,
@@ -458,22 +464,13 @@ async function mutateResolvedProfile(
   body: ParsedProfileMutation,
   idempotency: string,
 ): Promise<RouteResult> {
-  const resolved =
-    body.root === undefined
-      ? undefined
-      : await resolveRoot(deps.store, body.root, deps.redactor, ctx.correlationId);
   const mutation: EditorProfilesControlMutation = {
     ...body,
     idempotencyKey: idempotency,
-    realRoot: resolved?.realRoot,
+    realRoot: await optionalRealRoot(ctx, deps, body.root),
   };
   const result = await deps.editorSettingsControl?.mutateProfile?.(mutation);
-  if (result === undefined) {
-    return {
-      status: 503,
-      body: errorBody("STATE_UNAVAILABLE", "Editor profiles are unavailable."),
-    };
-  }
+  if (result === undefined) return profilesUnavailable();
   if (result.kind === "ok" && result.changed) {
     deps.editorSettingsEvents?.publish({
       snapshot: result.settings,
