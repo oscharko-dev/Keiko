@@ -189,6 +189,26 @@ describe("coalescedFetch bounded lifetime", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects the joiner when its replacement read throws synchronously", async () => {
+    vi.useFakeTimers();
+    const hung = deferredResponse();
+    const fetchMock = vi.fn().mockReturnValueOnce(hung.promise);
+    fetchMock.mockImplementationOnce(() => {
+      throw new TypeError("fetch threw before returning a promise");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const options = { joinable: true };
+    void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    const joiner = coalescedFetch("/api/x", { cache: "no-store" }, options);
+    const settled = joiner.then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : "non-error"),
+    );
+    await vi.advanceTimersByTimeAsync(INFLIGHT_READ_MAX_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(settled).resolves.toBe("fetch threw before returning a promise");
+  });
+
   it("starts one replacement read for every joiner of a hung read, not one each", async () => {
     vi.useFakeTimers();
     const hung = deferredResponse();

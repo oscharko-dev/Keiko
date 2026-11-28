@@ -146,13 +146,22 @@ function joinSharedRead(
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
-    void shared.expired.then(() => {
-      if (settled) return;
-      settled = true;
-      replacementRead(key, path, init).then(resolve, (error: unknown) => {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
+    // The first handler turns a synchronous throw of the replacement read into a rejection, so the
+    // second always settles this joiner.
+    void shared.expired
+      .then((): Promise<Response> | undefined => {
+        if (settled) return undefined;
+        settled = true;
+        return replacementRead(key, path, init);
+      })
+      .then(
+        (response) => {
+          if (response !== undefined) resolve(response);
+        },
+        (error: unknown) => {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
   });
 }
 
