@@ -2685,6 +2685,7 @@ describe("coding request timeout evidence (#4109)", () => {
   it("names every call kind the Workbench bounds with a deadline", () => {
     expect([...CLIENT_CODING_RUNTIME_CALLS]).toEqual([
       "status",
+      "readiness",
       "snapshot",
       "start",
       "approval",

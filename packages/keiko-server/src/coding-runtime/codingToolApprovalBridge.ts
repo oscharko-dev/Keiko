@@ -250,8 +250,7 @@ export function createCodingToolApprovalBridge(
     },
     proposalDeclined: (runId, proposalId): boolean =>
       declined.has(permissionKey(runId, proposalId)),
-    proposalRefused: (runId, proposalId): boolean =>
-      refused.has(permissionKey(runId, proposalId)),
+    proposalRefused: (runId, proposalId): boolean => refused.has(permissionKey(runId, proposalId)),
     observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),

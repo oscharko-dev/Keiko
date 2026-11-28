@@ -1631,7 +1631,9 @@ describe("GET /api/git/history — changed-file count without diffing contents",
       const entry = bySubject.get(subject);
       expect(entry, subject).toBeDefined();
       expect(entry?.author).toBe("Keiko Fixture");
-      expect(entry?.date).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:]+[+-]\d{2}:\d{2}$/u);
+      // `%aI` renders a UTC instant as `Z` (git 2.56.1 and later for every UTC author) and any other
+      // offset as `+HH:MM`/`-HH:MM`.
+      expect(entry?.date).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:]+(?:Z|[+-]\d{2}:\d{2})$/u);
       expect(entry?.subject).not.toContain("\0");
     }
     expect(bySubject.get("empty commit")).toMatchObject({ parentCount: 1, changedFileCount: 0 });
