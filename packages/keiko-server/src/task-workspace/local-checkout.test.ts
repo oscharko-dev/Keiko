@@ -20,6 +20,7 @@ import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { runNativeWorkspaceWrite } from "../coding-runtime/nativeWriteGate.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { readProductionWorkspaceHead } from "../coding-runtime/productionWorkspaceHeadReader.js";
 import {
@@ -28,6 +29,8 @@ import {
 } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -211,6 +214,53 @@ describe("local checkout selection", () => {
     expect(service.list(root)).toEqual([]);
     expect(service.listAll()).toEqual([]);
     expect(readFileSync(join(root, "README.md"), "utf8")).toBe("fixture\n");
+  });
+
+  it("refuses to switch the checkout while a runtime revert write runs, and switches once it ended", async () => {
+    const service = fixture();
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+    });
+    await entered;
+
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      expect(() =>
+        service.selectLocal({
+          root,
+          branch: "feature",
+          requestedBy: "test",
+          correlationId: "req-switch-busy-0001",
+        }),
+      ).toThrow(/still writing these files/u);
+    } finally {
+      resetServerLogger();
+    }
+    expect(
+      sink.events.filter((event) => event.op === "coding-runtime.revert.refused"),
+    ).toMatchObject([
+      {
+        correlationId: "req-switch-busy-0001",
+        extra: { operation: "write", reason: "write-gate-busy" },
+      },
+    ]);
+    expect(git("branch", "--show-current")).toBe("main");
+    release();
+    await native;
+
+    // Positive control: the same switch succeeds once no runtime write runs.
+    service.selectLocal({ root, branch: "feature", requestedBy: "test" });
+    expect(git("branch", "--show-current")).toBe("feature");
   });
 
   it("switches a large dirty checkout without terminating Git between index and HEAD updates", () => {

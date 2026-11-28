@@ -1,9 +1,17 @@
 import { mkdtemp, mkdir, realpath, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  HUMAN_WRITE_WAIT_MS,
+  nativeWriteGateWaiters,
+  runNativeWorkspaceWrite,
+} from "../coding-runtime/nativeWriteGate.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   EditorM7SettingId,
@@ -337,6 +345,52 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
 
     expect(wire(result).status).toBe("applied");
     expect(verificationCorrelationId).toBe("req-patch-apply-verify-01");
+  });
+
+  it("refuses with a retryable 409 and writes nothing when a runtime revert write never ends", async () => {
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite(root, async () => {
+      enter();
+      await released;
+    });
+    await entered;
+
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const applying = handleEditorPatchApply(
+        { ...postContext(body()), correlationId: "req-patch-gate-busy-01" },
+        deps({ env: ENABLED_NO_VERIFY }),
+        options(),
+      );
+      while (nativeWriteGateWaiters() === 0) await new Promise<void>((done) => setImmediate(done));
+      await vi.advanceTimersByTimeAsync(HUMAN_WRITE_WAIT_MS);
+      const refused = await applying;
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ error: { code: "BUSY" } });
+      expect(sink.events).toMatchObject([
+        {
+          op: "coding-runtime.revert.refused",
+          correlationId: "req-patch-gate-busy-01",
+          extra: { operation: "write", reason: "write-gate-timeout" },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+      resetServerLogger();
+    }
+
+    expect(await exists("src/a.test.ts")).toBe(false);
+    release();
+    await native;
   });
 
   it("records a reject decision and mutates nothing", async () => {

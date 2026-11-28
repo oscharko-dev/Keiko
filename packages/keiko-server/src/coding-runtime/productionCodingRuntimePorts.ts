@@ -19,6 +19,7 @@ import type {
   CodingRuntimeRevertRefusal,
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
+  CodingRuntimeStagedRevertOutcome,
   CodingRuntimeTurnOrigin,
 } from "./codingRuntimeRevert.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
@@ -264,7 +265,7 @@ export interface ProductionRuntimeTurnPort {
     ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
   /** Commits an undo left staged when the post-completion undo window closes (#3904 AC3). */
   readonly commitStagedRevert?:
-    ((runId: string) => Promise<"committed" | "none" | "failed">) | undefined;
+    ((runId: string) => Promise<CodingRuntimeStagedRevertOutcome>) | undefined;
   /**
    * The messages the operator sent into the running turn that the runtime has not handed to the
    * model yet, and the withdrawal or promotion of one (S07, ADR-0137 D10). Absent for a port that

@@ -6,7 +6,7 @@
 // comment on SYNC_OUTCOME_FOR_REMOTE_FAILURE in syncExecution.ts), so a future reader must not "fix"
 // an aborted sync into `timeout` or a new outcome. Hermetic: no real git, an injected fake runner.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // Load-bearing side-effect import, keep it: this is the only test file in the package that enters
 // the module graph through gitDelivery/syncExecution.ts before anything has loaded routes.ts. Doing
 // so exposes a pre-existing circular-import ordering hazard (routes.ts's module-scope route table
@@ -19,6 +19,11 @@ import { describe, expect, it } from "vitest";
 // a fix for `syncExecution.ts` (its production behaviour is unaffected either way); it makes this
 // suite resilient to which file vitest happens to load first.
 import "../routes.js";
+import {
+  HUMAN_WRITE_WAIT_MS,
+  nativeWriteGateWaiters,
+  runNativeWorkspaceWrite,
+} from "../coding-runtime/nativeWriteGate.js";
 import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { buildSyncPreview, runSyncExecute } from "./syncExecution.js";
@@ -187,5 +192,102 @@ describe("sync status read — byte-cap cut (large untracked tree)", () => {
     const result = await runSyncExecute("fetch", "/repo", undefined, { runner });
 
     expect(result).toMatchObject({ outcome: "succeeded", branch: "main", ahead: 1, behind: 2 });
+  });
+});
+
+describe("runSyncExecute — a pull waits for a runtime revert write in the native-write gate", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function recordingRunner(seen: string[]): GitProcessRunner {
+    return (args): Promise<GitProcessResult> => {
+      const cmd = subcommand(args);
+      seen.push(cmd);
+      if (cmd === "status") return Promise.resolve(ok(readyPorcelain()));
+      if (cmd === "remote") return Promise.resolve(ok("origin\n"));
+      return Promise.resolve(ok("Already up to date.\n"));
+    };
+  }
+
+  async function nativeWriteInFlight(): Promise<{ release: () => Promise<void> }> {
+    let enter: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const native = runNativeWorkspaceWrite("/repo", async () => {
+      enter();
+      await released;
+    });
+    await entered;
+    return {
+      release: async (): Promise<void> => {
+        release();
+        await native;
+      },
+    };
+  }
+
+  async function untilWaiting(): Promise<void> {
+    while (nativeWriteGateWaiters() === 0) await new Promise<void>((done) => setImmediate(done));
+  }
+
+  it("starts the pull only after the runtime write ended", async () => {
+    const seen: string[] = [];
+    const native = await nativeWriteInFlight();
+    const running = runSyncExecute("pull", "/repo", undefined, { runner: recordingRunner(seen) });
+    await untilWaiting();
+    expect(seen).not.toContain("pull");
+
+    await native.release();
+    const result = await running;
+
+    expect(seen).toContain("pull");
+    expect(result.outcome).not.toBe("git-error");
+  });
+
+  it("answers git-error without starting the pull when the runtime write never ends", async () => {
+    const seen: string[] = [];
+    const native = await nativeWriteInFlight();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const capture = captureActivityLog();
+    const running = runSyncExecute("pull", "/repo", undefined, {
+      runner: recordingRunner(seen),
+      activityLog: capture.sink,
+      correlationId: "req-sync-gate-busy-01",
+    });
+    await untilWaiting();
+    await vi.advanceTimersByTimeAsync(HUMAN_WRITE_WAIT_MS);
+    const result = await running;
+    vi.useRealTimers();
+
+    // The sync outcome vocabulary is a wire contract, so the refusal's reason is on the log line.
+    expect(result.outcome).toBe("git-error");
+    expect(seen).not.toContain("pull");
+    expect(capture.withOp("coding-runtime.revert.refused")).toMatchObject([
+      {
+        correlationId: "req-sync-gate-busy-01",
+        errorKind: "timeout",
+        extra: { operation: "write", reason: "write-gate-timeout" },
+      },
+    ]);
+    await native.release();
+  });
+
+  it("never gates a fetch, which touches no worktree file", async () => {
+    const seen: string[] = [];
+    const native = await nativeWriteInFlight();
+
+    const result = await runSyncExecute("fetch", "/repo", undefined, {
+      runner: recordingRunner(seen),
+    });
+
+    expect(seen).toContain("fetch");
+    expect(result.outcome).not.toBe("git-error");
+    await native.release();
   });
 });

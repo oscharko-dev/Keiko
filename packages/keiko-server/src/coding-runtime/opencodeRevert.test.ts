@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { runHumanWorkspaceWrite } from "./nativeWriteGate.js";
 
 // What happens right after Restore changes reapplied the index, before the files are written: a
 // person's edit lands in the window the index transaction opened.
@@ -55,6 +58,7 @@ import {
   noteOpenCodeEditTargets,
   openCodeNativeCallKey,
   openCodeRevertBlocksTurn,
+  settleUncertainRevertOnTurn,
   recordOpenCodeEditSettled,
   recordOpenCodeTurnImage,
   recordRevertTurnBlocked,
@@ -72,7 +76,15 @@ import {
   reopenTurnIndex,
   type IndexRead,
 } from "./opencodeTurnIndex.js";
-import type { OpenCodeV2FileDiff } from "./opencodeV2HttpClient.js";
+import { OpenCodeV2HttpStatusError, type OpenCodeV2FileDiff } from "./opencodeV2HttpClient.js";
+
+/** A request the runtime refused with a client error: proven not applied, so a plain failure. */
+class RefusedRequest extends OpenCodeV2HttpStatusError {
+  constructor(note: string) {
+    super(409);
+    this.message = note;
+  }
+}
 
 const RUN_ID = "run-340282366920938463463374607431768211455";
 const SESSION_ID = "ses_revert_unit";
@@ -607,7 +619,7 @@ describe("undo of the newest turn", () => {
 
   it("answers a failing runtime with a refusal that carries frames, never the error text", async () => {
     const { port, run, log } = subject({
-      stage: () => Promise.reject(new Error(`stage failed ${SECRET}`)),
+      stage: () => Promise.reject(new RefusedRequest(`stage failed ${SECRET}`)),
     });
 
     await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toEqual({
@@ -764,10 +776,8 @@ describe("restore of an undo", () => {
 
   it("restores when a file the undo removed is still absent", async () => {
     const root = workspace();
-    const { port, client } = subject({
-      root,
-      staged: [{ file: "gone.txt", status: "added", additions: 1, deletions: 0 }],
-    });
+    const gone = { file: "gone.txt", status: "added" as const, additions: 1, deletions: 0 };
+    const { port, client } = subject({ root, files: [gone], staged: [gone] });
     await port.revertTurn(RUN_ID, "undo");
 
     await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({ ok: true });
@@ -789,7 +799,7 @@ describe("restore of an undo", () => {
 
   it("keeps the undo staged when the runtime fails to clear it", async () => {
     const { port, run, log } = subject({
-      clear: () => Promise.reject(new Error(`clear failed ${SECRET}`)),
+      clear: () => Promise.reject(new RefusedRequest(`clear failed ${SECRET}`)),
     });
     await port.revertTurn(RUN_ID, "undo");
     log.events.length = 0;
@@ -1043,7 +1053,7 @@ describe("registered Activity Log proofs", () => {
 
   it("proves coding-runtime.revert.refused", async () => {
     const { port, log } = subject({
-      stage: () => Promise.reject(new Error("stage failed")),
+      stage: () => Promise.reject(new RefusedRequest("stage failed")),
     });
     await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
     const [line] = log.events;
@@ -1330,7 +1340,7 @@ describe("undo and the Git index (U-34b)", () => {
 
   async function undoneIndexOnlyTurn(
     clear?: () => Promise<never>,
-  ): Promise<ReturnType<typeof subject> & { readonly root: string }> {
+  ): Promise<Subject & { readonly root: string }> {
     const { root, begun } = await stagedTurn({ editBeforeTurn: true });
     const made = subject({ root, files: [], ...(clear === undefined ? {} : { clear }) });
     made.run.turnIndex = begun;
@@ -1428,7 +1438,7 @@ describe("undo and the Git index (U-34b)", () => {
 
   it("puts the index back to the undone state when clearing the runtime's revert fails", async () => {
     const { port, root, log } = await undoneIndexOnlyTurn(() =>
-      Promise.reject(new Error("clear failed")),
+      Promise.reject(new RefusedRequest("clear failed")),
     );
 
     await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
@@ -1448,7 +1458,7 @@ describe("undo and the Git index (U-34b)", () => {
     const made = await undoneIndexOnlyTurn(() => {
       writeFileSync(join(root, "a.txt"), "staged by the person\n");
       gitIn(root, "add", "a.txt");
-      return Promise.reject(new Error("clear failed"));
+      return Promise.reject(new RefusedRequest("clear failed"));
     });
     root = made.root;
     // The restore moved the entry back first; the person then replaced it before the rollback.
@@ -1479,7 +1489,7 @@ describe("undo and the Git index (U-34b)", () => {
       if (clears > 1) return Promise.resolve() as Promise<never>;
       writeFileSync(join(root, "a.txt"), "staged by the person\n");
       gitIn(root, "add", "a.txt");
-      return Promise.reject(new Error("clear failed"));
+      return Promise.reject(new RefusedRequest("clear failed"));
     });
     root = made.root;
     await made.port.revertTurn(RUN_ID, "restore", CORRELATION_ID);
@@ -1505,7 +1515,9 @@ describe("undo and the Git index (U-34b)", () => {
   });
 
   it("retries a rollback that failed once, and keeps the index moves when the retry holds", async () => {
-    const made = await undoneIndexOnlyTurn(() => Promise.reject(new Error("clear failed")));
+    const made = await undoneIndexOnlyTurn(() =>
+      Promise.reject(new RefusedRequest("clear failed")),
+    );
     afterReapply.calls = 0;
     afterReapply.throwOnCalls = [2];
 
@@ -1525,7 +1537,9 @@ describe("undo and the Git index (U-34b)", () => {
   });
 
   it("keeps the failure on the log and the index outcome unavailable when the rollback throws", async () => {
-    const made = await undoneIndexOnlyTurn(() => Promise.reject(new Error("clear failed")));
+    const made = await undoneIndexOnlyTurn(() =>
+      Promise.reject(new RefusedRequest("clear failed")),
+    );
     afterReapply.calls = 0;
     afterReapply.throwOnCalls = [2, 3];
 
@@ -1587,5 +1601,655 @@ describe("undo and the Git index (U-34b)", () => {
     expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
     // A record that names nothing cannot be told from the person's own staging: never "restored".
     await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "partial" });
+  });
+});
+
+const TURN_RESULT = "turn result\n";
+const UNDONE = "as the undo left it\n";
+const HUMAN = "a human typed this\n";
+const HUMAN_LATER = "a human typed this after the runtime wrote\n";
+
+/** A scripted answer for one call of a runtime double, whatever the double's own typing says. */
+function scripted(double: ReturnType<typeof vi.fn>): {
+  mockImplementationOnce: (script: (...args: string[]) => unknown) => void;
+} {
+  return double;
+}
+
+/** The turn's native edits of `names`: admitted while the files hold their start, then settled. */
+async function admittedEdit(
+  run: OpenCodeRevertRun,
+  root: string,
+  names: readonly string[],
+  contents: Readonly<Record<string, string>>,
+  call = "call_admitted",
+): Promise<void> {
+  const key = openCodeNativeCallKey("msg_turn_reply", call);
+  noteOpenCodeEditTargets(run, key, names);
+  for (const name of names) writeFileSync(join(root, name), contents[name] ?? TURN_RESULT);
+  recordOpenCodeEditSettled(run, key, undefined);
+  await run.agentImages?.work;
+}
+
+/** A run whose Undo restored every file to UNDONE and whose Restore the caller scripts. */
+async function undoneRun(
+  files: Readonly<Record<string, string>> = { "a.txt": TURN_RESULT },
+): Promise<Subject & { readonly root: string }> {
+  const names = Object.keys(files);
+  // The turn started from UNDONE: the edits were admitted there, then wrote the turn's content.
+  const root = workspace(Object.fromEntries(names.map((name) => [name, UNDONE])));
+  const diffs = names.map((name) => diff(name));
+  const made = subject({ root, files: diffs });
+  await admittedEdit(made.run, root, names, files);
+  scripted(made.client.stageRevert).mockImplementationOnce(
+    (_session: string, messageId: string) => {
+      for (const name of Object.keys(files)) writeFileSync(join(root, name), UNDONE);
+      return Promise.resolve({ messageId, files: diffs });
+    },
+  );
+  await expect(made.port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+  made.log.events.length = 0;
+  return { ...made, root };
+}
+
+interface LoggedEvent {
+  readonly op: string;
+  readonly extra?: unknown;
+}
+
+function eventsOf(events: readonly LoggedEvent[], op: string): readonly LoggedEvent[] {
+  return events.filter((event) => event.op === op);
+}
+
+function settlements(events: readonly LoggedEvent[]): (string | undefined)[] {
+  return eventsOf(events, "coding-runtime.revert.applied").map(
+    (event) => (event.extra as { settlement?: string }).settlement,
+  );
+}
+
+const TWO_FILES = { "a.txt": TURN_RESULT, "b.txt": TURN_RESULT };
+
+/** A Restore whose native write reached `a.txt` only: neither state, so it cannot be settled. */
+async function partiallyRestored(): Promise<Subject & { readonly root: string }> {
+  const made = await undoneRun(TWO_FILES);
+  scripted(made.client.clearRevert).mockImplementationOnce(() => {
+    writeFileSync(join(made.root, "a.txt"), TURN_RESULT);
+    return Promise.reject(new Error("lost"));
+  });
+  await expect(made.port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+    ok: false,
+    reason: "outcome-uncertain",
+  });
+  return made;
+}
+
+describe("the runtime's own file write is gated and settled from the files (#4491)", () => {
+  it("lands a person's save made during the runtime's write after it, so the edit wins", async () => {
+    const { port, client, root } = await undoneRun();
+    let entered: () => void = () => undefined;
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let finish: () => void = () => undefined;
+    const release = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    scripted(client.clearRevert).mockImplementationOnce(async () => {
+      entered();
+      await release;
+      writeFileSync(join(root, "a.txt"), TURN_RESULT);
+    });
+
+    const restoring = port.revertTurn(RUN_ID, "restore", CORRELATION_ID);
+    await inFlight;
+    const saved = runHumanWorkspaceWrite(root, () => {
+      writeFileSync(join(root, "a.txt"), HUMAN);
+      return Promise.resolve();
+    });
+    // The save is queued behind the runtime's write: nothing of the person's is on the file yet.
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(UNDONE);
+    finish();
+    await expect(restoring).resolves.toMatchObject({ ok: true });
+    await saved;
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(HUMAN);
+  });
+
+  it("treats a Restore whose answer was lost after the write as applied, not as undone", async () => {
+    const { port, run, client, root, log } = await undoneRun();
+    scripted(client.clearRevert).mockImplementationOnce(() => {
+      writeFileSync(join(root, "a.txt"), TURN_RESULT);
+      return Promise.reject(new Error(`connection reset ${SECRET}`));
+    });
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: true,
+      fileCount: 1,
+      additions: 2,
+      deletions: 1,
+    });
+
+    expect(run.revert).toBeUndefined();
+    expect(settlements(log.events)).toEqual(["response-lost"]);
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({
+      reason: "nothing-staged",
+    });
+    expect(JSON.stringify(log.events)).not.toContain(SECRET);
+  });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "puts the closed kind of the last read failure on the unreadable refusal line",
+    async () => {
+      const { port, client, root, log } = await undoneRun();
+      scripted(client.clearRevert).mockImplementationOnce(() => {
+        chmodSync(join(root, "a.txt"), 0o000);
+        return Promise.resolve();
+      });
+
+      await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+        ok: false,
+        reason: "outcome-uncertain",
+      });
+      chmodSync(join(root, "a.txt"), 0o600);
+
+      expect(eventsOf(log.events, "coding-runtime.revert.refused")).toMatchObject([
+        {
+          correlationId: CORRELATION_ID,
+          errorKind: "unavailable",
+          extra: {
+            operation: "restore",
+            reason: "outcome-uncertain",
+            uncertainReason: "unreadable",
+          },
+        },
+      ]);
+    },
+  );
+
+  it("calls a Restore whose 200 reply wrote nothing uncertain: not applied, record kept", async () => {
+    const { port, run, client, root, log } = await undoneRun();
+    scripted(client.clearRevert).mockImplementationOnce(() => Promise.resolve());
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(UNDONE);
+    expect(run.revert?.uncertain).toMatchObject({
+      reason: "unexpected-content",
+      during: "restore",
+    });
+    expect(settlements(log.events)).toEqual([]);
+  });
+
+  it("leaves a file the stage reply names but the proof did not cover unverifiable", async () => {
+    const root = workspace({ "a.txt": TURN_RESULT, "extra.txt": "person's file\n" });
+    const { port, run, client } = subject({ root });
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) =>
+      Promise.resolve({ messageId, files: [diff("a.txt"), diff("extra.txt")] }),
+    );
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+
+    expect(run.revert?.witness?.get("a.txt")).toMatch(/^sha256:/u);
+    expect(run.revert?.witness?.get("extra.txt")).toBe("unverifiable");
+  });
+
+  it("keeps the undo staged and the files untouched when the request failed before any write", async () => {
+    const { port, run, client, root } = await undoneRun();
+    scripted(client.clearRevert).mockImplementationOnce(() =>
+      Promise.reject(new RefusedRequest("refused")),
+    );
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "revert-failed",
+    });
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(UNDONE);
+    expect(run.revert).toBeDefined();
+    scripted(client.clearRevert).mockImplementationOnce(() => {
+      writeFileSync(join(root, "a.txt"), TURN_RESULT);
+      return Promise.resolve();
+    });
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({ ok: true });
+  });
+
+  it("settles a partial write as uncertain, logs why, and never writes anything back", async () => {
+    const { run, root, log } = await partiallyRestored();
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(TURN_RESULT);
+    expect(readFileSync(join(root, "b.txt"), "utf8")).toBe(UNDONE);
+    expect(run.revert?.uncertain).toMatchObject({ reason: "partial-write", during: "restore" });
+    expect(eventsOf(log.events, "coding-runtime.revert.refused")).toMatchObject([
+      {
+        extra: {
+          operation: "restore",
+          reason: "outcome-uncertain",
+          uncertainReason: "partial-write",
+        },
+      },
+    ]);
+  });
+
+  it("leaves the person's later save alone: human, native write, human again ends on the last", async () => {
+    const { port, run, client, root } = await undoneRun();
+    scripted(client.clearRevert).mockImplementationOnce(() => {
+      writeFileSync(join(root, "a.txt"), HUMAN);
+      writeFileSync(join(root, "a.txt"), TURN_RESULT);
+      writeFileSync(join(root, "a.txt"), HUMAN_LATER);
+      return Promise.resolve();
+    });
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(HUMAN_LATER);
+    expect(run.revert?.uncertain).toMatchObject({ reason: "unexpected-content" });
+  });
+
+  it("settles an uncertain Restore as applied when the files later show the turn's content", async () => {
+    const { port, run, root, client } = await partiallyRestored();
+    writeFileSync(join(root, "b.txt"), TURN_RESULT);
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({ ok: true });
+
+    expect(run.revert).toBeUndefined();
+    expect(client.clearRevert).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles an uncertain Restore as not applied when the files went back, and restores again", async () => {
+    const { port, run, root, client } = await partiallyRestored();
+    writeFileSync(join(root, "a.txt"), UNDONE);
+    scripted(client.clearRevert).mockImplementationOnce(() => {
+      for (const name of ["a.txt", "b.txt"]) writeFileSync(join(root, name), TURN_RESULT);
+      return Promise.resolve();
+    });
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({ ok: true });
+
+    expect(run.revert).toBeUndefined();
+    expect(client.clearRevert).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses with workspace-changed while the files still show neither state, and writes nothing", async () => {
+    const { port, run, root, client } = await partiallyRestored();
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+
+    expect(client.clearRevert).toHaveBeenCalledTimes(1);
+    expect(run.revert?.uncertain).toBeDefined();
+    expect(readFileSync(join(root, "b.txt"), "utf8")).toBe(UNDONE);
+  });
+
+  it("settles an uncertain record as it is when a new turn begins, and logs it", async () => {
+    const { run, log } = await partiallyRestored();
+    log.events.length = 0;
+
+    await settleUncertainRevertOnTurn(log, run, CORRELATION_ID);
+
+    expect(run.revert).toBeUndefined();
+    expect(openCodeRevertBlocksTurn(run)).toBe(false);
+    expect(eventsOf(log.events, "coding-runtime.revert.refused")).toMatchObject([
+      {
+        extra: {
+          operation: "submit",
+          reason: "outcome-uncertain",
+          uncertainReason: "partial-write",
+        },
+      },
+    ]);
+  });
+
+  it("never commits an uncertain record blindly: the window reports it unsettled", async () => {
+    const { port, run, client, log } = await partiallyRestored();
+    log.events.length = 0;
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("unsettled");
+
+    expect(client.commitRevert).not.toHaveBeenCalled();
+    expect(run.revert?.uncertain).toBeDefined();
+    expect(eventsOf(log.events, "coding-runtime.revert.refused")).toMatchObject([
+      { extra: { operation: "commit", reason: "outcome-uncertain" } },
+    ]);
+  });
+
+  it("commits at window close once the files show the undone state again", async () => {
+    const { port, root, client } = await partiallyRestored();
+    writeFileSync(join(root, "a.txt"), UNDONE);
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("committed");
+    expect(client.commitRevert).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends an uncertain record at window close when the files show the Restore happened", async () => {
+    const { port, run, root, client } = await partiallyRestored();
+    writeFileSync(join(root, "b.txt"), TURN_RESULT);
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("none");
+    expect(client.commitRevert).not.toHaveBeenCalled();
+    expect(run.revert).toBeUndefined();
+  });
+});
+
+describe("the Undo's native write is gated and settled from the files (#4491)", () => {
+  async function lostUndo(): Promise<Subject & { readonly root: string }> {
+    const root = workspace({ "a.txt": TURN_RESULT });
+    const made = subject({ root });
+    scripted(made.client.stageRevert).mockImplementationOnce(() => {
+      writeFileSync(join(root, "a.txt"), UNDONE);
+      return Promise.reject(new Error(`connection reset ${SECRET}`));
+    });
+    await expect(made.port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+    return { ...made, root };
+  }
+
+  it("reports an Undo whose answer was lost after the write as uncertain, with the reason", async () => {
+    const { run, log } = await lostUndo();
+
+    expect(run.revert?.uncertain).toMatchObject({
+      reason: "call-failed-unknown",
+      during: "undo",
+    });
+    expect(eventsOf(log.events, "coding-runtime.revert.refused")).toMatchObject([
+      {
+        extra: {
+          operation: "undo",
+          reason: "outcome-uncertain",
+          uncertainReason: "call-failed-unknown",
+        },
+      },
+    ]);
+    expect(JSON.stringify(log.events)).not.toContain(SECRET);
+  });
+
+  it("refuses to restore or undo while the files show neither state, then settles on a new turn", async () => {
+    const { port, run, log } = await lostUndo();
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+    // An uncertain record never blocks by itself: the turn settles it or ends it as it is.
+    expect(openCodeRevertBlocksTurn(run)).toBe(false);
+    await settleUncertainRevertOnTurn(log, run, CORRELATION_ID);
+    expect(run.revert).toBeUndefined();
+  });
+
+  it("lets a later Undo go on once the files show the state before the write", async () => {
+    const { port, run, root, client } = await lostUndo();
+    writeFileSync(join(root, "a.txt"), TURN_RESULT);
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) => {
+      writeFileSync(join(root, "a.txt"), UNDONE);
+      return Promise.resolve({ messageId, files: [diff("a.txt")] });
+    });
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+    expect(run.revert?.uncertain).toBeUndefined();
+    // Nothing says what the runtime must leave in a file only a shell command changed, so a later
+    // Restore refuses it rather than writing the turn's content over what may be a person's edit.
+    expect(run.revert?.witness?.get("a.txt")).toBe("unverifiable");
+  });
+
+  it("commits nothing blindly and ends the record once the files went back", async () => {
+    const { port, run, root, client } = await lostUndo();
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("unsettled");
+    writeFileSync(join(root, "a.txt"), TURN_RESULT);
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("none");
+    expect(client.commitRevert).not.toHaveBeenCalled();
+    expect(run.revert).toBeUndefined();
+  });
+
+  it("calls a file the turn added that is still there after the stage uncertain", async () => {
+    const root = workspace({ "a.txt": TURN_RESULT });
+    const { port, run, client } = subject({ root, files: [{ ...diff("a.txt"), status: "added" }] });
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) =>
+      Promise.resolve({ messageId, files: [{ ...diff("a.txt"), status: "added" }] }),
+    );
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+    expect(run.revert?.uncertain).toMatchObject({ reason: "unexpected-content" });
+  });
+
+  it("clears the runtime's own staged revert before it drops an answered Undo whose files never moved", async () => {
+    const root = workspace({ "a.txt": TURN_RESULT });
+    const added = { ...diff("a.txt"), status: "added" as const };
+    const { port, run, client, log } = subject({ root, files: [added] });
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) =>
+      Promise.resolve({ messageId, files: [added] }),
+    );
+    await port.revertTurn(RUN_ID, "undo");
+    expect(run.revert?.uncertain).toMatchObject({ runtimeStaged: true });
+    log.events.length = 0;
+
+    // The files still show the proven state, yet the runtime answered: it holds a staged revert.
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "nothing-staged",
+    });
+
+    expect(client.clearRevert).toHaveBeenCalledTimes(1);
+    expect(run.revert).toBeUndefined();
+    expect(settlements(log.events)).toEqual(["clean"]);
+    expect(eventsOf(log.events, "coding-runtime.revert.applied")).toMatchObject([
+      {
+        correlationId: CORRELATION_ID,
+        extra: { action: "cleared", runId: RUN_ID, interrupted: false, settlement: "clean" },
+      },
+    ]);
+  });
+
+  it("keeps an answered Undo uncertain when the runtime's own clear fails", async () => {
+    const root = workspace({ "a.txt": TURN_RESULT });
+    const added = { ...diff("a.txt"), status: "added" as const };
+    const { port, run, client, log } = subject({ root, files: [added] });
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) =>
+      Promise.resolve({ messageId, files: [added] }),
+    );
+    await port.revertTurn(RUN_ID, "undo");
+    scripted(client.clearRevert).mockImplementationOnce(() => Promise.reject(new Error("reset")));
+    log.events.length = 0;
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+
+    expect(run.revert?.uncertain).toBeDefined();
+    const refused = eventsOf(log.events, "coding-runtime.revert.refused").map(
+      (event) => event.extra as { operation?: string; reason?: string },
+    );
+    expect(refused.some((x) => x.operation === "restore" && x.reason === "outcome-uncertain")).toBe(
+      true,
+    );
+    // The clear's own refusal line is the first one, under the request's correlation id.
+    expect(eventsOf(log.events, "coding-runtime.revert.refused")[0]).toMatchObject({
+      correlationId: CORRELATION_ID,
+      extra: {
+        operation: "restore",
+        reason: "outcome-uncertain",
+        uncertainReason: "unexpected-content",
+      },
+    });
+    expect(eventsOf(log.events, "coding-runtime.revert.applied")).toEqual([]);
+  });
+
+  it("refuses to take an external edit for the stage when the turn's start is known", async () => {
+    const root = workspace({ "a.txt": "original\n" });
+    const { port, run, client } = subject({ root });
+    await admittedEdit(run, root, ["a.txt"], { "a.txt": TURN_RESULT });
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) => {
+      // The runtime answered, but an external editor's text is on the file, not the turn's start.
+      writeFileSync(join(root, "a.txt"), "an external editor typed this\n");
+      return Promise.resolve({ messageId, files: [diff("a.txt")] });
+    });
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+
+    expect(run.revert?.uncertain).toMatchObject({
+      reason: "unexpected-content",
+      runtimeStaged: true,
+    });
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("an external editor typed this\n");
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({
+      reason: "outcome-uncertain",
+    });
+  });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "keeps a file unverifiable when its start could not be read at admission, even if the stage left it untouched",
+    async () => {
+      const root = workspace({ "a.txt": "original\n" });
+      const { port, run, client, log } = subject({ root });
+      const path = join(root, "a.txt");
+      const key = openCodeNativeCallKey("msg_turn_reply", "call_unreadable");
+      // The edit is admitted while the file cannot be read: its start is unknown, not absent.
+      chmodSync(path, 0o000);
+      noteOpenCodeEditTargets(run, key, ["a.txt"]);
+      chmodSync(path, 0o600);
+      writeFileSync(path, TURN_RESULT);
+      recordOpenCodeEditSettled(run, key, undefined);
+      await run.agentImages?.work;
+      // The stage answers and leaves the file as the turn did: with a known start that is a
+      // mismatch; with an unknown one nothing can check it, so nothing may prove it for a Restore.
+      scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) =>
+        Promise.resolve({ messageId, files: [diff("a.txt")] }),
+      );
+
+      await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      expect(run.revert?.witness?.get("a.txt")).toBe("unverifiable");
+      log.events.length = 0;
+
+      await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(client.clearRevert).not.toHaveBeenCalled();
+      expect(eventsOf(log.events, "coding-runtime.revert.refused")).toMatchObject([
+        {
+          correlationId: CORRELATION_ID,
+          extra: { operation: "restore", reason: "workspace-changed" },
+        },
+      ]);
+    },
+  );
+
+  it("proves a Restore of a file the stage left exactly as the turn started", async () => {
+    const root = workspace({ "a.txt": "original\n" });
+    const { port, run, client } = subject({ root });
+    await admittedEdit(run, root, ["a.txt"], { "a.txt": TURN_RESULT });
+    scripted(client.stageRevert).mockImplementationOnce((_session: string, messageId: string) => {
+      writeFileSync(join(root, "a.txt"), "original\n");
+      return Promise.resolve({ messageId, files: [diff("a.txt")] });
+    });
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+
+    expect(run.revert?.witness?.get("a.txt")).toMatch(/^sha256:/u);
+  });
+
+  it("calls an Undo request that timed out uncertain even though the files still equal the proven state, then settles a late sidecar write", async () => {
+    const root = workspace({ "a.txt": "original\n" });
+    const { port, run, client } = subject({ root });
+    await admittedEdit(run, root, ["a.txt"], { "a.txt": TURN_RESULT });
+    scripted(client.stageRevert).mockImplementationOnce(() =>
+      Promise.reject(new Error("request timed out")),
+    );
+
+    // The runtime may still be writing: the files show nothing yet, and that is not proof.
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+    expect(run.revert?.uncertain).toMatchObject({
+      reason: "call-failed-unknown",
+      runtimeStaged: true,
+    });
+
+    // The late sidecar write lands; the files now show neither state the record knows.
+    writeFileSync(join(root, "a.txt"), "original\n");
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+    // Back at the proven state, the runtime's own staged revert is cleared before the record ends.
+    writeFileSync(join(root, "a.txt"), TURN_RESULT);
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "nothing-staged",
+    });
+    expect(client.clearRevert).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls a Restore request that timed out uncertain, keeping the index moves", async () => {
+    const { port, run, client } = await undoneRun();
+    scripted(client.clearRevert).mockImplementationOnce(() =>
+      Promise.reject(new Error("request timed out")),
+    );
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toEqual({
+      ok: false,
+      reason: "outcome-uncertain",
+    });
+
+    expect(run.revert?.uncertain).toMatchObject({
+      reason: "call-failed-unknown",
+      during: "restore",
+    });
+  });
+
+  it("settles an uncertain record at the turn only after the files could not settle it", async () => {
+    const { port, run, log } = await partiallyRestored();
+    const { root } = { root: run.workspaceRoot };
+    writeFileSync(join(root, "a.txt"), UNDONE);
+
+    // The files went back: the record is an ordinary staged undo again and blocks the turn.
+    await settleUncertainRevertOnTurn(log, run, CORRELATION_ID);
+
+    expect(run.revert?.uncertain).toBeUndefined();
+    expect(openCodeRevertBlocksTurn(run)).toBe(true);
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: true });
+  });
+
+  it("reports an uncertain record as nothing staged", async () => {
+    const { port } = await partiallyRestored();
+
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: false, fileCount: 0 });
+  });
+
+  it("leaves nothing staged when an Undo request failed before any write", async () => {
+    const root = workspace({ "a.txt": TURN_RESULT });
+    const { port, run, client } = subject({ root });
+    scripted(client.stageRevert).mockImplementationOnce(() =>
+      Promise.reject(new RefusedRequest("refused")),
+    );
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toEqual({
+      ok: false,
+      reason: "revert-failed",
+    });
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe(TURN_RESULT);
+    expect(run.revert).toBeUndefined();
   });
 });

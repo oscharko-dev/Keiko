@@ -204,6 +204,19 @@ describe("the post-completion undo window", () => {
     });
   });
 
+  it("reports an undo it could not settle at warn, never as a quiet close", async () => {
+    const { window, log } = subject({ staged: "unsettled", stopped: true });
+    window.open(RUN_ID);
+
+    await window.close("expired");
+
+    expect(log.events.at(-1)).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      extra: { event: "closed", reason: "expired", stagedRevert: "unsettled", stopped: true },
+    });
+  });
+
   it("keeps a throwing stop body-free: frames and causes, never the error text", async () => {
     const { window, log } = subject({ stopFails: true });
     window.open(RUN_ID);

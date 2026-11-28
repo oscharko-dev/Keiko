@@ -20,12 +20,15 @@ export const CODING_RUNTIME_REVERT_REFUSALS = [
   "not-admitted",
   "nothing-staged",
   "nothing-to-undo",
+  "outcome-uncertain",
   "revert-failed",
   "run-unavailable",
   "turn-blocked",
   "turn-boundary-missing",
   "unsupported",
   "workspace-changed",
+  "write-gate-busy",
+  "write-gate-timeout",
 ] as const;
 
 export type CodingRuntimeRevertRefusal = (typeof CODING_RUNTIME_REVERT_REFUSALS)[number];
@@ -38,6 +41,13 @@ export type CodingRuntimeRevertRefusal = (typeof CODING_RUNTIME_REVERT_REFUSALS)
  */
 export type CodingRuntimeTurnOrigin =
   "verification-continuation" | "delivery-continuation" | "schedule-wake";
+
+/**
+ * What closing the undo window did with an undo left staged. `unsettled`: the record could not be
+ * settled from the files (neither the proven nor the expected state), so it was not committed; the
+ * window closes anyway and the run ends, which is a warning on the log, never a silent drop.
+ */
+export type CodingRuntimeStagedRevertOutcome = "committed" | "none" | "failed" | "unsettled";
 
 export interface CodingRuntimeRevertCounts {
   readonly fileCount: number;
@@ -74,6 +84,7 @@ const REVERT_REFUSAL_FAILURE_CODES = {
   "not-admitted": "authority-resolution-failed",
   "nothing-staged": "invalid-intent",
   "nothing-to-undo": "invalid-intent",
+  "outcome-uncertain": "runtime-failed",
   "revert-failed": "runtime-failed",
   "run-unavailable": "runtime-failed",
   "turn-blocked": "runtime-failed",
@@ -81,6 +92,8 @@ const REVERT_REFUSAL_FAILURE_CODES = {
   unsupported: "invalid-intent",
   "workspace-changed": "invalid-intent",
   "index-changed": "invalid-intent",
+  "write-gate-busy": "runtime-failed",
+  "write-gate-timeout": "runtime-failed",
 } as const satisfies Record<CodingRuntimeRevertRefusal, RevertFailureCode>;
 
 export function revertRefusalFailureCode(reason: CodingRuntimeRevertRefusal): RevertFailureCode {

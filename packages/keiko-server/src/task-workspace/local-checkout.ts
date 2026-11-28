@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { isNativeWorkspaceWriteRunning } from "../coding-runtime/nativeWriteGate.js";
+import { recordWriteGateBusy } from "../coding-runtime/opencodeRevert.js";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -350,8 +352,17 @@ function requireAvailableBranchObjects(root: string, branch: string): void {
     );
 }
 
-function switchLocalBranch(root: string, branch: string): void {
+function switchLocalBranch(root: string, branch: string, correlationId: string | undefined): void {
   if (currentBranch(root) === branch) return;
+  // The switch rewrites the worktree synchronously, so it cannot wait in the native-write gate: while
+  // a runtime revert write of this checkout is queued or running it refuses (retryable).
+  if (isNativeWorkspaceWriteRunning(root)) {
+    recordWriteGateBusy(undefined, correlationId);
+    throw new TaskWorkspaceError(
+      "BRANCH_CONFLICT",
+      "A Coding run is still writing these files. Try again in a moment.",
+    );
+  }
   if (hasExecutableFilters(root))
     throw new TaskWorkspaceError(
       "BRANCH_CONFLICT",
@@ -449,7 +460,7 @@ function activateLocalCheckout(
   // on it and its first commit is made through the verified-commit lane (#4491).
   if (!isUnbornCurrentBranch(request.root, request.branch)) {
     requireAvailableBranchObjects(request.root, request.branch);
-    switchLocalBranch(request.root, request.branch);
+    switchLocalBranch(request.root, request.branch, request.correlationId);
   }
   const head = verifiedLocalHead(request.root, identity);
   const atIso = new Date().toISOString();

@@ -34,6 +34,11 @@ import {
   type GitProcessResult,
   type GitProcessRunner,
 } from "../gitRoutes.js";
+import {
+  HumanWriteGateTimeoutError,
+  runHumanWorkspaceWrite,
+} from "../coding-runtime/nativeWriteGate.js";
+import { recordWriteGateTimeout } from "../coding-runtime/opencodeRevert.js";
 import { parsePorcelainV2Branch, type PorcelainV2Status } from "../gitPorcelainStatus.js";
 import { observedGitRunner } from "../gitProcessActivity.js";
 import { settleCapCutStatus, type BoundedStatusLog } from "../gitStatusBounded.js";
@@ -412,6 +417,32 @@ async function readPostState(
 }
 
 /**
+ * A pull rewrites the worktree: it waits for a runtime revert write in flight and never runs beside
+ * one (`busy` when that write does not end in time). A fetch touches no worktree file.
+ */
+async function runSyncNetworkGit(
+  operation: GitSyncOperation,
+  repoRoot: string,
+  seams: ReturnType<typeof normalizeSeams>,
+  remote: string | undefined,
+  report: Pick<GitDeliverySyncSeams, "activityLog" | "correlationId">,
+): Promise<Awaited<ReturnType<typeof runNetworkGit>> | "busy"> {
+  const run = (): ReturnType<typeof runNetworkGit> =>
+    runNetworkGit(repoRoot, seams, syncArgs(operation, remote), operation);
+  if (operation !== "pull") return run();
+  try {
+    return await runHumanWorkspaceWrite(repoRoot, run, undefined, {
+      onTimeout: (_side, waitedMs) => {
+        recordWriteGateTimeout(report.activityLog, waitedMs, report.correlationId);
+      },
+    });
+  } catch (error) {
+    if (error instanceof HumanWriteGateTimeoutError) return "busy";
+    throw error;
+  }
+}
+
+/**
  * Runs ONE bounded fetch/pull and classifies the outcome. Never governs (no kernel, no policy) — the
  * control surface is the fixed argv + hardened env of the reused runner. After a settled op the
  * branch/upstream/ahead/behind are re-read best-effort for the response.
@@ -429,7 +460,9 @@ export async function runSyncExecute(
   if (!(seams.beforeRemoteDispatch?.() ?? true)) return authorityStoppedResultFor(preview);
   // ONLY the network fetch/pull uses the credential-capable runner; the post-state re-read below
   // stays on the hardened local read runner.
-  const result = await runNetworkGit(repoRoot, normalized, syncArgs(operation, remote), operation);
+  const result = await runSyncNetworkGit(operation, repoRoot, normalized, remote, seams);
+  // A Coding run is still writing the files: nothing was started, the person retries.
+  if (result === "busy") return { outcome: "git-error", truncated: false };
   const outcome = classifyOutcome(operation, result);
   if (!isSettledOk(outcome)) {
     return { outcome, truncated: result.truncated };

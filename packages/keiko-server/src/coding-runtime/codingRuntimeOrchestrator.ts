@@ -107,7 +107,11 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import type { CodingRuntimeInboxItems } from "./codingRuntimeInbox.js";
-import type { CodingRuntimeRevertState, CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import type {
+  CodingRuntimeRevertState,
+  CodingRuntimeStagedRevertOutcome,
+  CodingRuntimeTurnOrigin,
+} from "./codingRuntimeRevert.js";
 import {
   narrowerMode,
   type ScheduledWakeBlock,
@@ -2428,7 +2432,7 @@ export class CodingRuntimeOrchestrator {
         deps.taskDispatcher.revertState?.(runId),
       hold: async (runId, outcome): Promise<CodingRuntimeHoldResult> =>
         (await deps.manager.hold?.(runId, outcome)) ?? deps.manager.stop(runId, outcome),
-      commitStagedRevert: async (runId): Promise<"committed" | "none" | "failed"> =>
+      commitStagedRevert: async (runId): Promise<CodingRuntimeStagedRevertOutcome> =>
         (await deps.taskDispatcher.commitRevert?.(runId)) ?? "none",
       stop: async (runId): Promise<boolean> => (await deps.manager.stop(runId, "succeeded")).ok,
       expire: (close): void => {

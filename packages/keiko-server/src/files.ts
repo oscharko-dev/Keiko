@@ -70,6 +70,11 @@ import { errorBody } from "./route-error.js";
 import { STREAMING } from "./route-outcome.js";
 import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import {
+  HumanWriteGateTimeoutError,
+  runHumanWorkspaceWrite,
+} from "./coding-runtime/nativeWriteGate.js";
+import { recordWriteGateTimeout } from "./coding-runtime/opencodeRevert.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
@@ -181,6 +186,32 @@ export class FilesError extends Error {
   ) {
     super(message);
     this.name = "FilesError";
+  }
+}
+
+export const CODING_RUN_WRITING_MESSAGE =
+  "A Coding run is still writing these files. Try again in a moment.";
+
+/**
+ * Runs a write a person made once no runtime revert write of the workspace is running
+ * (`nativeWriteGate.ts`). When the runtime write does not end in time the write does not run and the
+ * route answers with a retryable refusal, never a silent concurrent write.
+ */
+export async function runHumanWriteOrBusy<Result>(
+  root: string,
+  write: () => Promise<Result>,
+  correlationId?: string,
+): Promise<Result> {
+  try {
+    return await runHumanWorkspaceWrite(root, write, undefined, {
+      onTimeout: (_side, waitedMs) => {
+        recordWriteGateTimeout(undefined, waitedMs, correlationId);
+      },
+    });
+  } catch (error) {
+    if (error instanceof HumanWriteGateTimeoutError)
+      throw new FilesError(409, "BUSY", CODING_RUN_WRITING_MESSAGE);
+    throw error;
   }
 }
 
@@ -2199,6 +2230,7 @@ async function writeResolvedFilesContent(args: {
   readonly beforeWrite?:
     | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
     | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesContentResponse> {
   if (!args.target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
@@ -2229,9 +2261,12 @@ async function writeResolvedFilesContent(args: {
   // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
   // conflict checks are untouched and still do the deciding.
   args.testControl?.onQueued?.();
-  const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
-    fileWriteKeys(args.target.path),
-    () => verifyThenWrite(args),
+  // A save waits for a runtime revert write in flight in this workspace and lands right after it,
+  // so the person's edit is the newer one (`nativeWriteGate.ts`).
+  const { localHistoryProtection, updatedStats } = await runHumanWriteOrBusy(
+    args.target.realRoot,
+    () => fileWriteMutex.runExclusive(fileWriteKeys(args.target.path), () => verifyThenWrite(args)),
+    args.correlationId,
   );
   return {
     ...base,
@@ -2254,6 +2289,7 @@ export async function writeFilesContent(args: {
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesContentResponse> {
   const target = await resolveInsideRoot(
     args.store,
@@ -2268,6 +2304,7 @@ export async function writeFilesContent(args: {
     expectedModifiedAt: args.expectedModifiedAt,
     baseVersion: args.baseVersion,
     testControl: args.testControl,
+    correlationId: args.correlationId,
   });
 }
 
@@ -2460,6 +2497,10 @@ async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise
   return current;
 }
 
+function assertStillTheSameKind(current: Stats, kind: FilesEntryKind): void {
+  if ((kind === "directory") !== current.isDirectory()) throw stalePathError();
+}
+
 function assertCreatedEntryKind(current: WorkspaceStat, kind: FilesEntryKind): void {
   if (current.isSymbolicLink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be created here.");
@@ -2649,6 +2690,7 @@ export async function createFilesEntry(args: {
   readonly kind: FilesEntryKind;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesMutationResponse> {
   if (args.kind !== "file" && args.kind !== "directory") {
     throw new FilesError(400, "BAD_REQUEST", "A new entry must be a file or a directory.");
@@ -2660,16 +2702,23 @@ export async function createFilesEntry(args: {
     args.redactor ?? staticFilesMetadataRedactor,
     args.resolvedRoot,
   );
-  assertCreationParentStillContained(target);
   try {
-    if (args.kind === "directory") {
-      // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
-      await mkdir(target.path);
-    } else {
-      // `wx` = O_CREAT | O_EXCL: atomically refuse to overwrite an existing entry AND refuse to
-      // follow a final symlink, closing the create-time TOCTOU/symlink window.
-      await writeFile(target.path, "", { flag: "wx" });
-    }
+    await runHumanWriteOrBusy(
+      target.realRoot,
+      async () => {
+        // Proven after the gate wait, which can last long: a parent swapped meanwhile is refused.
+        assertCreationParentStillContained(target);
+        if (args.kind === "directory") {
+          // Non-recursive: the parent was just verified, and EEXIST surfaces as a clean 409.
+          await mkdir(target.path);
+        } else {
+          // `wx` = O_CREAT | O_EXCL: atomically refuse to overwrite an existing entry AND refuse to
+          // follow a final symlink, closing the create-time TOCTOU/symlink window.
+          await writeFile(target.path, "", { flag: "wx" });
+        }
+      },
+      args.correlationId,
+    );
   } catch (error) {
     throw mapNodeFsError(error);
   }
@@ -2711,6 +2760,7 @@ interface RenameFilesEntryArgs {
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 interface RenameFilesPlan {
@@ -2782,7 +2832,16 @@ async function executeContainedRename(
 
 export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
   const { source, target, kind } = await resolveRenameFilesPlan(args);
-  await executeContainedRename(source, target, kind);
+  await runHumanWriteOrBusy(
+    source.realRoot,
+    async () => {
+      // The plan was made before the wait: the entry is proven again, kind included, inside the gate.
+      assertStillTheSameKind(await assertResolvedTargetStillCurrent(source), kind);
+      assertCreationParentStillContained(target);
+      await executeContainedRename(source, target, kind);
+    },
+    args.correlationId,
+  );
   // LSP spec pair for a rename: the old path is Deleted, the new path is Created.
   notifyHostLspWorkspaceFileChanged(source.realRoot, source.path, 3);
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
@@ -2803,6 +2862,7 @@ export async function deleteFilesEntry(args: {
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesMutationResponse> {
   const target = await resolveInsideRoot(
     args.store,
@@ -2826,12 +2886,39 @@ export async function deleteFilesEntry(args: {
   // bound the blast radius to inside the selected root and away from .git/node_modules/secrets, and
   // symlinks are rejected above so `rm` never recurses THROUGH a link out of the root.
   try {
-    await rm(target.path, { recursive: kind === "directory", force: false });
+    await runHumanWriteOrBusy(
+      target.realRoot,
+      async () => {
+        // Proven again, kind included, inside the gate: `recursive` follows what is there now.
+        const current = await assertResolvedTargetStillCurrent(target);
+        assertStillTheSameKind(current, kind);
+        await rm(target.path, { recursive: kind === "directory", force: false });
+      },
+      args.correlationId,
+    );
   } catch (error) {
     throw mapNodeFsError(error);
   }
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 3);
   return { root: target.root, path: target.relativePath, kind };
+}
+
+/** The copy itself, inside the gate: the entry is proven again, kind included, after the wait. */
+function copyInsideGate(
+  source: ResolvedTarget,
+  target: ResolvedCreationTarget,
+  kind: FilesEntryKind,
+  correlationId: string | undefined,
+): Promise<void> {
+  return runHumanWriteOrBusy(
+    target.realRoot,
+    async () => {
+      assertStillTheSameKind(await assertResolvedTargetStillCurrent(source), kind);
+      assertCreationParentStillContained(target);
+      await copyContainedEntry(source, target, kind, correlationId);
+    },
+    correlationId,
+  );
 }
 
 export async function copyFilesEntry(args: {
@@ -2875,7 +2962,7 @@ export async function copyFilesEntry(args: {
   }
   await assertResolvedTargetStillCurrent(source);
   assertCreationParentStillContained(target);
-  await copyContainedEntry(source, target, kind, args.correlationId);
+  await copyInsideGate(source, target, kind, args.correlationId);
   // The copy created a new watched file at the destination; the source is untouched and needs no
   // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
@@ -3229,6 +3316,7 @@ async function writeFilesContentRoute(
       fields.historyOrigin === "pre-restore"
         ? createPreRestoreCapture(deps, target, ctx.correlationId)
         : undefined,
+    correlationId: ctx.correlationId,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
   const localHistoryProtection = captureNormalFileSave(deps, target, fields, ctx.correlationId);
@@ -3281,6 +3369,7 @@ export async function handleFilesCreate(
         kind,
         redactor: deps.redactor,
         resolvedRoot,
+        correlationId: ctx.correlationId,
       }),
     };
   });
@@ -3405,6 +3494,7 @@ export async function handleFilesRename(
       baseVersion: baseVersion.version,
       redactor: deps.redactor,
       resolvedRoot,
+      correlationId: ctx.correlationId,
     });
     if (result.previousPath !== undefined) {
       // Deliberately NOT awaited (Codex P1 on PR #3141): the synchronous prefix — computing the
@@ -3470,6 +3560,7 @@ export async function handleFilesDelete(
         baseVersion: baseVersion.version,
         redactor: deps.redactor,
         resolvedRoot,
+        correlationId: ctx.correlationId,
       }),
     };
   });

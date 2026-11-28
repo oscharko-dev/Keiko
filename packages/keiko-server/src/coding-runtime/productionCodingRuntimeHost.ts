@@ -16,6 +16,7 @@ import type { CodingRuntimeInboxItems, CodingRuntimeInboxResult } from "./coding
 import type {
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
+  CodingRuntimeStagedRevertOutcome,
   CodingRuntimeTurnOrigin,
 } from "./codingRuntimeRevert.js";
 
@@ -151,7 +152,8 @@ export interface CodingRuntimeTaskDispatcher {
    * Commits an undo left staged in a held run when its post-completion undo window closes (#3904
    * AC3); `none` when nothing is staged. Never rejects.
    */
-  readonly commitRevert?: ((runId: string) => Promise<"committed" | "none" | "failed">) | undefined;
+  readonly commitRevert?:
+    ((runId: string) => Promise<CodingRuntimeStagedRevertOutcome>) | undefined;
   /**
    * The messages the operator sent into the running turn that the runtime has not handed to the
    * model yet, or `undefined` when the run offers none (S07). Never rejects; the run port records

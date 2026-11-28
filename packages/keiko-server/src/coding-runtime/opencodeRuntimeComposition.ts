@@ -192,6 +192,7 @@ import {
   noteOpenCodeEditTargets,
   openCodeNativeCallKey,
   openCodeRevertBlocksTurn,
+  settleUncertainRevertOnTurn,
   recordOpenCodeEditSettled,
   recordOpenCodeTurnImage,
   recordRevertTurnBlocked,
@@ -1433,6 +1434,13 @@ function createSubmitTask(
     // Before the baseline is read and the turn armed: a refused agent leaves nothing to undo, and
     // the switch message the runtime records is part of the baseline the turn is measured from.
     if (!(await selectPrimaryAgent(run, agent, selectableAgents, diagnostics, activityLog))) {
+      return false;
+    }
+    // The turn is admitted from here: an uncertain revert record is settled from the files, or ended
+    // as it is, and a record that became an ordinary staged undo blocks the turn like any other.
+    await settleUncertainRevertOnTurn(activityLog, run, runId);
+    if (openCodeRevertBlocksTurn(run)) {
+      recordRevertTurnBlocked(activityLog, runId);
       return false;
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
