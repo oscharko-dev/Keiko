@@ -479,15 +479,15 @@ describe("stream fairness between documents and priorities", () => {
     await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS - 1);
     expect(onWaiting).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(onWaiting.mock.calls).toEqual([[true]]);
+    expect(onWaiting.mock.calls).toEqual([[true, false]]);
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(onWaiting.mock.calls).toEqual([[true]]);
+    expect(onWaiting.mock.calls).toEqual([[true, false]]);
     const messages = (): string[] => writer.mock.calls.map(([message]) => String(message));
     expect(messages().filter((message) => message.includes("waiting for origin"))).toHaveLength(1);
     expect(messages().filter((message) => message.includes("acquisition unavailable"))).toEqual([]);
     holders[0]?.release();
     await vi.advanceTimersByTimeAsync(0);
-    expect(onWaiting.mock.calls).toEqual([[true], [false]]);
+    expect(onWaiting.mock.calls).toEqual([[true, false], [false]]);
     expect(messages().filter((message) => message.includes("admitted after waiting"))).toHaveLength(
       1,
     );
@@ -745,7 +745,7 @@ describe("non-replayable streams and the replayable ones that make way", () => {
     const waiter = admitDirectBrowserStream(vi.fn(), { onWaiting, nonReplayable: true });
     await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS + 60_000);
     expect(holders.every((holder) => holder.yielded.mock.calls.length === 0)).toBe(true);
-    expect(onWaiting.mock.calls).toEqual([[true]]);
+    expect(onWaiting.mock.calls).toEqual([[true, false]]);
     waiter.release();
     holders.forEach((holder) => holder.admission.release());
   });
@@ -768,5 +768,125 @@ describe("non-replayable streams and the replayable ones that make way", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(hidden.admitted).toHaveBeenCalledOnce();
     [...holders, hidden, visible].forEach((probe) => probe.admission.release());
+  });
+});
+
+// #4491: among replayable streams the one that matters more displaces the one that matters less,
+// never an equal or a higher one, so the run stream always gets a slot ahead of activity and the
+// run events, and a visible tab's waiting stream is the least valuable one.
+describe("rank priority among replayable streams", () => {
+  function setVisibility(state: "visible" | "hidden"): void {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  }
+
+  function admitProbe(options: DirectStreamOptions): {
+    readonly admitted: ReturnType<typeof vi.fn>;
+    readonly yielded: ReturnType<typeof vi.fn>;
+    readonly waiting: ReturnType<typeof vi.fn>;
+    readonly admission: DirectStreamAdmission;
+  } {
+    const admitted = vi.fn();
+    const yielded = vi.fn();
+    const waiting = vi.fn();
+    const admission = admitDirectBrowserStream(admitted, {
+      ...options,
+      onYield: yielded,
+      onWaiting: waiting,
+    });
+    return { admitted, yielded, waiting, admission };
+  }
+
+  function useLocks(): void {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    setVisibility("visible");
+  }
+
+  it("keeps bridge, verification, run and activity and leaves the run events waiting", async () => {
+    useLocks();
+    const bridge = admitProbe({ nonReplayable: true });
+    const verification = admitProbe({ nonReplayable: true });
+    const runEvents = admitProbe({ replayRank: 0 });
+    const activity = admitProbe({ replayRank: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    const run = admitProbe({ replayRank: 2 });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(run.admitted).toHaveBeenCalledOnce();
+    expect(runEvents.yielded).toHaveBeenCalledOnce();
+    expect(activity.yielded).not.toHaveBeenCalled();
+    expect(bridge.yielded).not.toHaveBeenCalled();
+    expect(verification.yielded).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS + 20_000);
+    expect(runEvents.waiting.mock.calls[0]?.[0]).toBe(true);
+    expect(run.waiting).not.toHaveBeenCalled();
+    [bridge, verification, runEvents, activity, run].forEach((p) => p.admission.release());
+  });
+
+  it("leaves the lowest rank waiting when it is the one that arrives last", async () => {
+    useLocks();
+    const bridge = admitProbe({ nonReplayable: true });
+    const verification = admitProbe({ nonReplayable: true });
+    const run = admitProbe({ replayRank: 2 });
+    const activity = admitProbe({ replayRank: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    const runEvents = admitProbe({ replayRank: 0 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect([bridge, verification, run, activity].map((p) => p.yielded.mock.calls.length)).toEqual([
+      0, 0, 0, 0,
+    ]);
+    expect(runEvents.admitted).not.toHaveBeenCalled();
+    expect(runEvents.waiting.mock.calls[0]?.[0]).toBe(true);
+    [bridge, verification, run, activity, runEvents].forEach((p) => p.admission.release());
+  });
+
+  it("makes a waiting higher rank displace exactly one holder of a lower rank", async () => {
+    useLocks();
+    const holders = Array.from({ length: 4 }, () => admitProbe({ replayRank: 0 }));
+    await vi.advanceTimersByTimeAsync(0);
+    const waiter = admitProbe({ replayRank: 2 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(waiter.admitted).toHaveBeenCalledOnce();
+    expect(holders.reduce((sum, p) => sum + p.yielded.mock.calls.length, 0)).toBe(1);
+    [...holders, waiter].forEach((p) => p.admission.release());
+  });
+
+  it("never lets streams of an equal rank displace each other", async () => {
+    useLocks();
+    const holders = Array.from({ length: 4 }, () => admitProbe({ replayRank: 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    const waiter = admitProbe({ replayRank: 1 });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(holders.every((p) => p.yielded.mock.calls.length === 0)).toBe(true);
+    expect(waiter.admitted).not.toHaveBeenCalled();
+    [...holders, waiter].forEach((p) => p.admission.release());
+  });
+
+  it("makes a holder yield within a second of a higher waiter announcing itself, not at the next check", async () => {
+    useLocks();
+    const holders = Array.from({ length: 4 }, () => admitProbe({ replayRank: 0 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const waiter = admitProbe({ replayRank: 2 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(waiter.admitted).toHaveBeenCalledOnce();
+    [...holders, waiter].forEach((p) => p.admission.release());
+  });
+
+  it("tells a waiting stream that another document holds connections, and says nothing when its own do", async () => {
+    useLocks();
+    const own = Array.from({ length: 4 }, () => admitProbe({ nonReplayable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    const ownWaiting = vi.fn();
+    const first = admitDirectBrowserStream(vi.fn(), { onWaiting: ownWaiting });
+    await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS + 100);
+    expect(ownWaiting.mock.calls).toEqual([[true, false]]);
+    first.release();
+    // Another document starts its own counters, not its locks: the four slots are now foreign.
+    resetBrowserStreamCapacityForTests();
+    const foreignWaiting = vi.fn();
+    const second = admitDirectBrowserStream(vi.fn(), { onWaiting: foreignWaiting });
+    await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS + 100);
+    expect(foreignWaiting.mock.calls).toEqual([[true, true]]);
+    second.release();
+    own.forEach((p) => p.admission.release());
   });
 });

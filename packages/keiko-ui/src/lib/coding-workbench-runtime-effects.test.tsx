@@ -867,7 +867,7 @@ describe("useCodingWorkbenchRuntimeStream capacity wait reporting", () => {
     public removeEventListener = vi.fn();
   }
 
-  it("projects a long wait for a free connection as a status and clears it once admitted", () => {
+  it("projects a long wait for a free connection as a status and clears it once admitted", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("EventSource", QuietEventSource);
     resetBrowserStreamCapacityForTests();
@@ -885,19 +885,28 @@ describe("useCodingWorkbenchRuntimeStream capacity wait reporting", () => {
           setStreamEpoch: vi.fn(),
         });
       });
-      act(() => {
-        vi.advanceTimersByTime(STREAM_WAITING_THRESHOLD_MS);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS);
       });
-      expect(dispatch).toHaveBeenCalledWith({ kind: "stream-capacity-waiting", waiting: true });
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "stream-capacity-waiting",
+        waiting: true,
+        heldElsewhere: false,
+      });
       expect(dispatch).not.toHaveBeenCalledWith({
         kind: "stream-capacity-waiting",
         waiting: false,
+        heldElsewhere: false,
       });
       held[0]?.release();
-      act(() => {
-        vi.advanceTimersByTime(60_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
       });
-      expect(dispatch).toHaveBeenCalledWith({ kind: "stream-capacity-waiting", waiting: false });
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "stream-capacity-waiting",
+        waiting: false,
+        heldElsewhere: false,
+      });
     } finally {
       held.forEach((admission) => admission.release());
       resetBrowserStreamCapacityForTests();

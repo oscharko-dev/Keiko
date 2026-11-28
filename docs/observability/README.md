@@ -821,16 +821,25 @@ background holder gives its slot up only to a waiter a person can see (a visible
 essential stream or shared-pool consumer, or a waiter of its own document), never to another
 background stream and never to a hidden document's waiter. An essential stream of a hidden document
 that is replayable (the run events, the Workbench activity stream and the Workbench run stream,
-which reopen from a fresh snapshot) yields to a visible document's essential waiter while its own
-document is hidden, and to a waiting non-replayable stream of any visible document (its own
-included), lowest rank first: run events, then activity, then the run stream, because the run
-stream carries the run state and pending approvals and loses the most when it is late. It reopens
-when a slot frees and shows the waiting status meanwhile. The editor verification stream and the
-editor agent bridge never yield, because their servers keep no replay; one document holds at most
-two of them, so a single visible tab never starves. The remaining limit: two or more hidden tabs that
-each hold a bridge and a verification stream fill all four slots, and a visible tab then shows the
-waiting status (also for a verification run that is starting or reconnecting) until one of them
-ends; Keiko does not close another tab's non-replayable stream. The shared pool always keeps one
+which reopen from a fresh snapshot or cursor) yields to a visible document's essential waiter while
+its own document is hidden. A replayable holder also yields to a waiting stream that matters more:
+a non-replayable one of any visible document, or the waiting document's own, or a replayable one of
+a higher rank, lowest rank first. The ranks are run events (lowest), activity, then the run stream,
+because the run stream carries the run state and pending approvals and loses the most when it is
+late; equal ranks never displace each other. A yielding stream is checked at once when the waiter
+announces itself in the same document, otherwise at the next five-second check of its holder; it
+shows the reconnecting state at once, reopens when a slot frees and shows the waiting status
+meanwhile, with a hint when another Keiko window holds connections. The editor verification stream
+and the editor agent bridge never yield, because their servers keep no replay. The four slots are
+shared by every document of the origin, so what a visible tab can hold shrinks with every
+non-replayable stream another (hidden) document holds: with only its own, one document holds at most
+two of them and its replayable streams fit in the other two, but a visible tab beside one hidden tab
+that holds a bridge and a verification stream has two slots left, and its lowest-ranked replayable
+streams wait, with the waiting status, until those streams end. Two hidden tabs that each hold both
+fill all four slots, and a visible tab then waits for everything (also for a verification run that
+is starting or reconnecting). Keiko does not close another tab's non-replayable stream. "A single
+visible tab never starves" therefore holds only while no other document holds non-replayable
+streams. The shared pool always keeps one
 connection. Without Web Locks the ceiling holds for the current document only.
 
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across

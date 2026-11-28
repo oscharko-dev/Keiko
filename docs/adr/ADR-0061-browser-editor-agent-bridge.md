@@ -42,8 +42,9 @@ Accepted
 > bridge as an unavailable session, an action issued during a gap would find no bridge, and the
 > stream has no replay for the frames a gap would lose.
 > It is a non-replayable stream: while it waits for a slot, replayable streams of a visible
-> document yield to it. The limit of this rule (two hidden tabs each holding a bridge and a
-> verification stream fill all four slots) is named in `docs/observability/README.md`.
+> document (or of its own document) yield to it. The four slots are shared by every document of
+> the origin, so non-replayable streams another, hidden document holds reduce what a visible tab
+> can hold; the exact limit is named in `docs/observability/README.md`.
 
 ## Context
 

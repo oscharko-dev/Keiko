@@ -1725,6 +1725,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.runRefreshFailed": "Run could not be refreshed.",
   "codingWorkbench.alert.eventStreamRefreshFailed": "Event stream could not be refreshed.",
   "codingWorkbench.status.eventStreamWaitingForConnection": "Waiting for a free connection.",
+  "codingWorkbench.status.eventStreamWaitingForConnectionElsewhere":
+    "Waiting for a free connection. Another Keiko window is holding connections.",
   "codingWorkbench.status.eventStreamReconnecting":
     "Live updates were interrupted. Reconnecting to the event stream…",
   "codingWorkbench.issue.resolving": "Reading linked issue…",

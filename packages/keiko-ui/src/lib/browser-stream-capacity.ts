@@ -86,7 +86,7 @@ export interface DirectStreamOptions {
    * the surface can say the stream waits for a connection another tab uses; `false` once the
    * stream is admitted or released.
    */
-  readonly onWaiting?: (waiting: boolean) => void;
+  readonly onWaiting?: (waiting: boolean, heldByAnotherDocument?: boolean) => void;
   readonly correlationId?: string;
 }
 
@@ -201,8 +201,30 @@ function startWaitEpisode(state: DirectStreamState, options: DirectStreamOptions
       "[keiko] persistent stream waiting for origin capacity (priority=essential)",
       { correlationId: options.correlationId, errorKind: "timeout" },
     );
-    options.onWaiting?.(true);
+    void heldByAnotherDocument().then((elsewhere) => {
+      if (state.settled || state.admitted || !state.waiting) return;
+      options.onWaiting?.(true, elsewhere);
+    });
   }, STREAM_WAITING_THRESHOLD_MS);
+}
+
+// More persistent connections are held origin-wide than this document holds itself. The count is
+// read from the lock manager that already coordinates the slots; no new cross-tab signal exists.
+async function heldByAnotherDocument(): Promise<boolean> {
+  if (typeof navigator === "undefined" || navigator.locks === undefined) return false;
+  try {
+    const snapshot = await navigator.locks.query();
+    const held = (snapshot.held ?? []).filter((lock) =>
+      /^keiko:persistent-stream:\d+$/u.test(lock.name ?? ""),
+    );
+    return held.length > localHeldLeases;
+  } catch {
+    // The hint is optional: without it the plain waiting status is shown. Once per wait episode.
+    reportClientDiagnostic("[keiko] persistent stream contention query unavailable", {
+      errorKind: "unavailable",
+    });
+    return false;
+  }
 }
 
 function endWaitEpisode(
@@ -398,7 +420,9 @@ export function resetBrowserStreamCapacityForTests(): void {
   admittedDirectStreams = 0;
   listeners.clear();
   localWaiters.clear();
-  localStrongWaiters.clear();
+  localMarkers.clear();
+  localHolders.clear();
+  localHeldLeases = 0;
   nextPersistentSlot = 0;
   unsupportedCapacityReported = false;
 }
@@ -425,6 +449,9 @@ interface PersistentCapacityOptions {
 // `handed-on`: the slot was granted, then passed on at once to a waiter a person can see.
 type PersistentReleaseReason = "expired" | "cancelled" | "unavailable" | "handed-on";
 
+const localHolders = new Set<() => void>();
+let localHeldLeases = 0;
+
 interface PersistentLease {
   readonly abort: AbortController;
   readonly onGranted: () => void;
@@ -439,6 +466,7 @@ interface PersistentLease {
   leaseTimer: number | undefined;
   staggerTimer: number | undefined;
   finish: (() => void) | undefined;
+  unregister: (() => void) | undefined;
 }
 
 function releaseLease(lease: PersistentLease, reason: PersistentReleaseReason): void {
@@ -454,6 +482,7 @@ function releaseLease(lease: PersistentLease, reason: PersistentReleaseReason): 
       errorKind: "timeout",
     });
   }
+  lease.unregister?.();
   lease.onReleased(reason);
   lease.finish?.();
 }
@@ -478,7 +507,9 @@ function staggerLeaseCheck(name: string, lease: PersistentLease): Promise<void> 
 const WAITING_MARKER_SUFFIX = ":waiting:visible";
 const STRONG_MARKER_SUFFIX = ":nonreplayable";
 const localWaiters = new Map<string, number>();
-const localStrongWaiters = new Map<string, number>();
+// Every marker this document's own waiters hold, by marker name: its own waiters count even while
+// the document is hidden and holds no origin-wide marker.
+const localMarkers = new Map<string, number>();
 
 function waitingMarker(slot: string): string {
   return `${slot}${WAITING_MARKER_SUFFIX}`;
@@ -501,8 +532,34 @@ function countLocalWaiter(
   }
 }
 
+function markerPresent(snapshot: LockManagerSnapshot, marker: string): boolean {
+  return lockPresent(snapshot, marker) || (localMarkers.get(marker) ?? 0) > 0;
+}
+
 function strongWaiterPresent(snapshot: LockManagerSnapshot, name: string): boolean {
-  return lockPresent(snapshot, strongMarker(name)) || (localStrongWaiters.get(name) ?? 0) > 0;
+  return markerPresent(snapshot, strongMarker(name));
+}
+
+// A replayable waiter holds a marker named after its rank: a holder of a LOWER rank makes way for
+// it, one of an equal or higher rank never does, so streams of one rank cannot displace each other.
+const MAX_REPLAY_RANK = 8;
+
+function rankMarker(slot: string, rank: number): string {
+  return `${waitingMarker(slot)}:rank:${String(rank)}`;
+}
+
+// What this lease's waiter announces besides the plain visible marker, if anything.
+function extraMarker(options: PersistentCapacityOptions, slot: string): string | undefined {
+  if (options.nonReplayable === true) return strongMarker(slot);
+  return options.replayRank === undefined ? undefined : rankMarker(slot, options.replayRank);
+}
+
+function higherWaiterPresent(snapshot: LockManagerSnapshot, name: string, rank: number): boolean {
+  if (strongWaiterPresent(snapshot, name)) return true;
+  for (let higher = rank + 1; higher <= MAX_REPLAY_RANK; higher += 1) {
+    if (markerPresent(snapshot, rankMarker(name, higher))) return true;
+  }
+  return false;
 }
 
 function lockPresent(snapshot: LockManagerSnapshot, name: string): boolean {
@@ -530,7 +587,9 @@ function holderShouldYield(
     return lockPresent(snapshot, waitingMarker(name)) || (localWaiters.get(name) ?? 0) > 0;
   }
   if (documentHidden() && lockPresent(snapshot, waitingMarker(name))) return true;
-  return options.replayRank !== undefined && strongWaiterPresent(snapshot, name);
+  return (
+    options.replayRank !== undefined && higherWaiterPresent(snapshot, name, options.replayRank)
+  );
 }
 
 // An essential holder looks for waiters only while its document is hidden.
@@ -561,7 +620,7 @@ function reportWaiterQueryFailureOnce(lease: PersistentLease): void {
 
 // Replayable streams yield lowest rank first: a higher rank waits for the lower ones to act and
 // keeps its slot if the waiter has been served meanwhile.
-const REPLAY_RANK_DELAY_MS = 1_500;
+const REPLAY_RANK_DELAY_MS = 300;
 
 async function lowerRankYieldedFirst(
   locks: LockManager,
@@ -618,7 +677,7 @@ function visibleWaiterNeedsSlot(
   return (
     options.replayRank !== undefined &&
     options.nonReplayable !== true &&
-    strongWaiterPresent(snapshot, name)
+    higherWaiterPresent(snapshot, name, options.replayRank)
   );
 }
 
@@ -646,11 +705,18 @@ async function holdLease(locks: LockManager, name: string, lease: PersistentLeas
   const held = new Promise<void>((resolve) => {
     lease.finish = resolve;
   });
+  localHeldLeases += 1;
+  const recheck = (): void => {
+    void checkLeaseWaiters(locks, name, lease);
+  };
   if (leaseChecksWaiters(lease.options)) {
-    lease.leaseTimer = window.setInterval(() => {
-      void checkLeaseWaiters(locks, name, lease);
-    }, PERSISTENT_STREAM_LEASE_MS);
+    lease.leaseTimer = window.setInterval(recheck, PERSISTENT_STREAM_LEASE_MS);
+    localHolders.add(recheck);
   }
+  lease.unregister = (): void => {
+    localHolders.delete(recheck);
+    localHeldLeases = Math.max(0, localHeldLeases - 1);
+  };
   window.clearTimeout(lease.acquisitionTimer);
   lease.onGranted();
   await held;
@@ -740,9 +806,9 @@ function announceWaiter(
   lease: PersistentLease,
   waiting: AbortSignal,
 ): void {
-  const strong = lease.options.nonReplayable === true;
+  const extras = names.flatMap((name) => extraMarker(lease.options, name) ?? []);
   countLocalWaiter(localWaiters, names, 1);
-  if (strong) countLocalWaiter(localStrongWaiters, names, 1);
+  countLocalWaiter(localMarkers, extras, 1);
   let visible: AbortController | undefined;
   const sync = (): void => {
     if (waiting.aborted) return;
@@ -757,10 +823,13 @@ function announceWaiter(
     visible = own;
     for (const name of names) {
       void holdMarker(locks, waitingMarker(name), own.signal);
-      if (strong) void holdMarker(locks, strongMarker(name), own.signal);
+      const extra = extraMarker(lease.options, name);
+      if (extra !== undefined) void holdMarker(locks, extra, own.signal);
     }
   };
   sync();
+  // The holders of this document look at once instead of at their next five-second check.
+  for (const check of [...localHolders]) check();
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", sync);
   waiting.addEventListener(
     "abort",
@@ -768,7 +837,7 @@ function announceWaiter(
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", sync);
       visible?.abort();
       countLocalWaiter(localWaiters, names, -1);
-      if (strong) countLocalWaiter(localStrongWaiters, names, -1);
+      countLocalWaiter(localMarkers, extras, -1);
     },
     { once: true },
   );
@@ -826,6 +895,7 @@ export function acquirePersistentBrowserStreamCapacity(
     leaseTimer: undefined,
     staggerTimer: undefined,
     finish: undefined,
+    unregister: undefined,
   };
   // An essential stream keeps its place in the queue and reports a long wait instead of giving up
   // and queueing again behind everything that arrived meanwhile.

@@ -495,8 +495,8 @@ export function useCodingWorkbenchRuntimeStream({
     onReconnecting: () => {
       dispatch({ kind: "stream-reconnecting" });
     },
-    onCapacityWaiting: (waiting) => {
-      dispatch({ kind: "stream-capacity-waiting", waiting });
+    onCapacityWaiting: (waiting, heldElsewhere = false) => {
+      dispatch({ kind: "stream-capacity-waiting", waiting, heldElsewhere });
     },
     onError: (error) => {
       const mapped = codingWorkbenchRuntimeApiError(error);

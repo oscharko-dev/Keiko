@@ -204,6 +204,8 @@ export interface CodingWorkbenchRuntimeState {
    * admitted; it only explains the wait and never changes what the run may do.
    */
   readonly streamCapacityWaiting: boolean;
+  /** Another Keiko window holds connections while this stream waits (a hint, never required). */
+  readonly streamCapacityHeldElsewhere: boolean;
   readonly mutation: CodingWorkbenchMutationState;
   /**
    * Whether the last completed source read admitted the model. A read that is merely in flight or
@@ -241,7 +243,11 @@ export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "run-set"; readonly snapshot: CodingWorkbenchRuntimeSnapshot }
   | { readonly kind: "stream-set"; readonly stream: CodingWorkbenchStreamProjection }
   | { readonly kind: "stream-reconnecting" }
-  | { readonly kind: "stream-capacity-waiting"; readonly waiting: boolean }
+  | {
+      readonly kind: "stream-capacity-waiting";
+      readonly waiting: boolean;
+      readonly heldElsewhere?: boolean;
+    }
   | {
       readonly kind: "resource-failed";
       readonly resource: CodingWorkbenchResourceKey;
@@ -314,6 +320,7 @@ export function createInitialCodingWorkbenchRuntimeState(
     run: emptyResource(),
     stream: emptyResource(),
     streamCapacityWaiting: false,
+    streamCapacityHeldElsewhere: false,
     mutation: IDLE_MUTATION,
     confirmedSourceAdmitted: false,
     events: [],
@@ -842,10 +849,17 @@ const runtimeActionHandlers = {
   "stream-set": (state, action): CodingWorkbenchRuntimeState =>
     acceptStreamProjection(state, action.stream),
   "stream-reconnecting": (state): CodingWorkbenchRuntimeState => markStreamReconnecting(state),
-  "stream-capacity-waiting": (state, action): CodingWorkbenchRuntimeState =>
-    state.streamCapacityWaiting === action.waiting
+  "stream-capacity-waiting": (state, action): CodingWorkbenchRuntimeState => {
+    const heldElsewhere = action.waiting && action.heldElsewhere === true;
+    return state.streamCapacityWaiting === action.waiting &&
+      state.streamCapacityHeldElsewhere === heldElsewhere
       ? state
-      : { ...state, streamCapacityWaiting: action.waiting },
+      : {
+          ...state,
+          streamCapacityWaiting: action.waiting,
+          streamCapacityHeldElsewhere: heldElsewhere,
+        };
+  },
   "mutation-start": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
