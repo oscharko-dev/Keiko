@@ -383,6 +383,8 @@ function consumeApprovedAction(
 ): boolean {
   if (!matchesApprovedAction(approved, input)) return false;
   const key = requestBindingKey(input.runId, input.request);
+  // A digest an earlier spent approval left behind belongs to that approval, never to this one.
+  consumedPlans.delete(key);
   if (!carryPlan(approved.get(key), consumedPlans, key)) return false;
   approved.delete(key);
   return true;

@@ -496,11 +496,16 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
     bridge: ReturnType<typeof createCodingToolApprovalBridge>,
     askedAs: string,
     plan: { readonly planShown?: boolean; readonly planDigest?: string },
+    time: { readonly nowMs: number; readonly expiresAt: string } = {
+      nowMs: NOW_MS,
+      expiresAt: EXPIRES_AT,
+    },
   ): boolean {
+    const requestId = `permission-${askedAs}-${String(time.nowMs)}`;
     const asked = request(askedAs);
     const observed = bridge.observePermission({
       runId: RUN_ID,
-      requestId: `permission-${askedAs}`,
+      requestId,
       action: "verification",
       actionId: asked.actionId,
       idempotencyKey: asked.idempotencyKey,
@@ -509,18 +514,18 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
         approvalId: asked.actionId,
         approvalDigest: codingToolApprovalBindingDigest(RUN_ID, asked),
       },
-      expiresAt: EXPIRES_AT,
-      nowMs: NOW_MS,
+      expiresAt: time.expiresAt,
+      nowMs: time.nowMs,
       ...plan,
     });
     return (
       observed &&
       bridge.activatePermission({
         runId: RUN_ID,
-        requestId: `permission-${askedAs}`,
+        requestId,
         approvalAuthorityDigest: "a".repeat(64),
-        expiresAtMs: Date.parse(EXPIRES_AT),
-        nowMs: NOW_MS,
+        expiresAtMs: Date.parse(time.expiresAt),
+        nowMs: time.nowMs,
       })
     );
   }
@@ -543,6 +548,20 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
     expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: NOW_MS })).toBe(true);
     expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBe(
       "d".repeat(64),
+    );
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBeUndefined();
+  });
+
+  it("does not carry a spent approval's digest over to a later approval without a plan", () => {
+    const bridge = createCodingToolApprovalBridge();
+    expect(approve(bridge, "call-1", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
+    // The first approval is spent but its digest is never taken (the call died before the check).
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: NOW_MS })).toBe(true);
+    // The spent binding is remembered only until it expires; the same ask is then approved anew.
+    const later = { nowMs: NOW_MS + 600_000, expiresAt: "2026-08-03T12:15:00.000Z" };
+    expect(approve(bridge, "call-1", {}, later)).toBe(true);
+    expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: later.nowMs })).toBe(
+      true,
     );
     expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBeUndefined();
   });
