@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a0ccef75d3f46dcf8bdef10af2232f9030cf64a0cfdd626a1a81e2d2e4915d07",
+    "catalogDigest": "2606f58874460a4f5f10e07fed2aea1d9c5f1b5842a8a46f5f307b80260e9b70",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16424,7 +16424,7 @@
         "proofIds": ["coding-runtime.revert.applied.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:80",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:956"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:991"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16557,7 +16557,7 @@
         "proofIds": ["coding-runtime.revert.refused.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:118",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:987"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:1022"]
       },
       {
         "contractKind": "activity-log-operation",
