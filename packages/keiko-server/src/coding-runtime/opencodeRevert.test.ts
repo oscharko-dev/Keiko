@@ -17,8 +17,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // person's edit lands in the window the index transaction opened.
 const afterReapply = vi.hoisted(() => ({
   run: undefined as (() => void) | undefined,
-  /** The call (1-based, counted from the reset) that throws instead of answering. */
-  throwOnCall: undefined as number | undefined,
+  /** The calls (1-based, counted from the reset) that throw instead of answering. */
+  throwOnCalls: [] as number[],
   calls: 0,
 }));
 vi.mock("./opencodeTurnIndex.js", async (importOriginal) => {
@@ -29,7 +29,7 @@ vi.mock("./opencodeTurnIndex.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.reapplyTurnIndexMoves>
     ): ReturnType<typeof actual.reapplyTurnIndexMoves> => {
       afterReapply.calls += 1;
-      if (afterReapply.calls === afterReapply.throwOnCall)
+      if (afterReapply.throwOnCalls.includes(afterReapply.calls))
         throw new Error("index transaction failed");
       const result = await actual.reapplyTurnIndexMoves(...args);
       afterReapply.run?.();
@@ -83,7 +83,7 @@ const roots: string[] = [];
 
 afterEach(() => {
   afterReapply.run = undefined;
-  afterReapply.throwOnCall = undefined;
+  afterReapply.throwOnCalls = [];
   afterReapply.calls = 0;
   resetGovernedIndexPaths(RUN_ID);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -1493,16 +1493,41 @@ describe("undo and the Git index (U-34b)", () => {
       ok: true,
     });
 
+    // The Restore of the files says the index part was not restored.
+    expect(made.log.events.at(-1)).toMatchObject({
+      op: "coding-runtime.revert.applied",
+      extra: { action: "restore", indexOutcome: "changed-after-turn" },
+    });
     expect(made.client.clearRevert).toHaveBeenCalledTimes(2);
     expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
     expect(refusals(made.log.events)).toHaveLength(2);
     await expect(made.port.revertState(RUN_ID)).resolves.toMatchObject({ staged: false });
   });
 
+  it("retries a rollback that failed once, and keeps the index moves when the retry holds", async () => {
+    const made = await undoneIndexOnlyTurn(() => Promise.reject(new Error("clear failed")));
+    afterReapply.calls = 0;
+    afterReapply.throwOnCalls = [2];
+
+    await expect(made.port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "revert-failed",
+    });
+
+    // Only the clear failed: the index is back at the undone state and a later Restore can retry.
+    expect(gitIn(made.root, "diff", "--cached", "--name-only")).toBe("");
+    await expect(made.port.revertState(RUN_ID)).resolves.toMatchObject({
+      staged: true,
+      index: "restored",
+      indexPathCount: 1,
+    });
+    expect(refusals(made.log.events)).toHaveLength(1);
+  });
+
   it("keeps the failure on the log and the index outcome unavailable when the rollback throws", async () => {
     const made = await undoneIndexOnlyTurn(() => Promise.reject(new Error("clear failed")));
     afterReapply.calls = 0;
-    afterReapply.throwOnCall = 2;
+    afterReapply.throwOnCalls = [2, 3];
 
     await expect(made.port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
       ok: false,

@@ -480,10 +480,23 @@ async function restoreUndo(
     ok: true,
     interrupted: false,
     ...countsOf(staged),
-    ...(moved === "restored" && staged.indexMoves !== undefined
-      ? { index: "restored" as const, indexPathCount: staged.indexMoves.entries.length }
-      : {}),
+    ...restoredIndex(moved, staged),
   };
+}
+
+/**
+ * What the index part of a Restore reports: `restored` when its moves were made again, otherwise the
+ * outcome the retained undo kept when the index could not be put back (a dropped rollback), so the
+ * result never reads as a complete restore of an index that may mix the turn's and the person's.
+ */
+function restoredIndex(
+  moved: "restored" | "none",
+  staged: OpenCodeStagedRevert,
+): Pick<AppliedRevert, "index" | "indexPathCount"> {
+  if (moved === "restored" && staged.indexMoves !== undefined)
+    return { index: "restored", indexPathCount: staged.indexMoves.entries.length };
+  const kept = staged.index;
+  return kept === "changed-after-turn" || kept === "unavailable" ? { index: kept } : {};
 }
 
 /**
@@ -557,14 +570,7 @@ async function rollBackIndex(
   const moves = staged.indexMoves;
   if (moves === undefined) return;
   try {
-    const result = await reapplyTurnIndexMoves(
-      run.workspaceRoot,
-      {
-        headSha: moves.headSha,
-        entries: moves.entries.map(({ path, from, to }) => ({ path, from: to, to: from })),
-      },
-      correlationId,
-    );
+    const result = await reapplyInverse(run.workspaceRoot, moves, correlationId);
     if (result === "restored") return;
     staged.index = result === "changed-after-turn" ? "changed-after-turn" : "unavailable";
     staged.indexMoves = undefined;
@@ -579,6 +585,35 @@ async function rollBackIndex(
     staged.index = "unavailable";
     staged.indexMoves = undefined;
     reportIndexFailure(ports, run, error, correlationId, "restore");
+  }
+}
+
+/** Attempts at the rollback: one transient failure (a busy `index.lock`) is retried once. */
+const ROLLBACK_ATTEMPTS = 2;
+const ROLLBACK_RETRY_MS = 50;
+
+/**
+ * Makes the undo's index moves in reverse. An index that is busy or cannot be changed for a moment
+ * (`unavailable`, or a throw) gets one more attempt after a short pause; a refusal because a person
+ * restaged a path is final, and the last attempt's failure propagates to the caller.
+ */
+async function reapplyInverse(
+  root: string,
+  moves: TurnIndexMoves,
+  correlationId: string,
+): Promise<"restored" | "changed-after-turn" | "unavailable"> {
+  const inverse = {
+    headSha: moves.headSha,
+    entries: moves.entries.map(({ path, from, to }) => ({ path, from: to, to: from })),
+  };
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const result = await reapplyTurnIndexMoves(root, inverse, correlationId);
+      if (result !== "unavailable" || attempt >= ROLLBACK_ATTEMPTS) return result;
+    } catch (error) {
+      if (attempt >= ROLLBACK_ATTEMPTS) throw error;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, ROLLBACK_RETRY_MS));
   }
 }
 

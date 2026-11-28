@@ -42,7 +42,12 @@ const GIT_TIMEOUT_MS = 60_000;
 const RESTORE_BATCH = 200;
 /** Characters one Git invocation may carry (Windows caps a command line at 32,767). */
 const ARGV_BUDGET_CHARS = 16_000;
-/** Paths a turn may leave staged and still be restored one by one (`update-index --cacheinfo`). */
+/**
+ * The explicit index entries (paths whose turn-start state is a person's own staging, not HEAD's)
+ * one undo puts back; the rest is reported as `partial`. Each one becomes a move a Restore makes
+ * again, so this bounds what the undo keeps in memory and retries. It is not a process bound:
+ * the entries are written in batches (`runInBatches`).
+ */
 const EXPLICIT_RESTORE_MAX = 64;
 
 export interface TurnIndexImage {
@@ -683,6 +688,7 @@ async function moveCopy(
   // end-of-turn index is no proof of what Keiko wrote).
   if (inside.headSha !== plan.headSha) return "changed";
   for (const [path, state] of plan.expected) if (stateOf(inside, path) !== state) return "changed";
+  if (collidesOutsidePlan(inside, plan)) return "changed";
   if (!(await applyTargetState(run, plan))) return "failed";
   return judgeAppliedCopy(inside, await readIndexImage(run), plan);
 }
@@ -728,10 +734,37 @@ function explicitEntry(path: string, state: string): ExplicitEntry | undefined {
 }
 
 /**
+ * Whether a planned entry would share its place in the index with a person's staged entry outside
+ * the plan: a file where the person staged something below the same name, or something below a name
+ * where the person staged a file. Git cannot hold both, so the plan is drift with the person's
+ * staging, and nothing of theirs is removed to make room.
+ */
+function collidesOutsidePlan(inside: TurnIndexImage, plan: MovePlan): boolean {
+  const staged = new Set<string>();
+  const directories = new Set<string>();
+  for (const [path, state] of inside.staged) {
+    if (plan.target.has(path) || state.startsWith(`${ABSENT_MODE} `)) continue;
+    staged.add(path);
+    for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1))
+      directories.add(path.slice(0, at));
+  }
+  return [...plan.target].some(([path, state]) => {
+    if (state.startsWith(`${ABSENT_MODE} `)) return false;
+    if (directories.has(path)) return true;
+    for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1))
+      if (staged.has(path.slice(0, at))) return true;
+    return false;
+  });
+}
+
+/**
  * Applies the plan's target states to the private copy in a fixed order: entries leaving the index
- * first, then the paths Git puts back from HEAD, then the entries written explicitly. A removal
- * before an addition is what lets a file replace a directory (or the reverse) in one plan. Each
- * step runs in bounded batches (`inBatches`), never one process per path.
+ * first, then the entries written explicitly. A removal before an addition is what lets a file
+ * replace a directory (or the reverse) in one plan. A path whose target is HEAD's own entry is
+ * resolved against HEAD first (`headEntries`) and then written like any other entry, or removed when
+ * HEAD has none: `git restore --staged` over a batch that mixes a file with its former children
+ * fails on the child HEAD does not hold. Each step runs in bounded batches, never one process per
+ * path.
  */
 async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
   const atHead: string[] = [];
@@ -747,7 +780,13 @@ async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
     if (entry.mode === ABSENT_MODE) removals.push(path);
     else additions.push(entry);
   }
-  const source = `--source=${plan.headSha}`;
+  const held = await headEntries(run, plan.headSha, atHead);
+  if (held === undefined) return false;
+  for (const path of atHead) {
+    const entry = held.get(path);
+    if (entry === undefined) removals.push(path);
+    else additions.push(entry);
+  }
   return (
     (await runInBatches(
       removals,
@@ -755,7 +794,6 @@ async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
       (path) => [path],
       run,
     )) &&
-    (await runInBatches(atHead, ["restore", "--staged", source, "--"], (path) => [path], run)) &&
     (await runInBatches(
       additions,
       ["update-index", "--add"],
@@ -765,37 +803,74 @@ async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
   );
 }
 
+/** HEAD's own entry for each path it holds as a file (or submodule); a path HEAD lacks is absent. */
+async function headEntries(
+  run: GitRun,
+  headSha: string,
+  paths: readonly string[],
+): Promise<ReadonlyMap<string, ExplicitEntry> | undefined> {
+  const found = new Map<string, ExplicitEntry>();
+  const wanted = new Set(paths);
+  for (const batch of splitBatches(paths, ["ls-tree", "-z", headSha, "--"], (path) => [path])) {
+    const listed = await run(["ls-tree", "-z", headSha, "--", ...batch]);
+    if (!succeeded(listed)) return undefined;
+    for (const record of listed.stdout.split("\0")) {
+      const tab = record.indexOf("\t");
+      const [mode, type, oid] = record.slice(0, Math.max(tab, 0)).split(" ");
+      const path = record.slice(tab + 1);
+      if (
+        tab < 0 ||
+        type === "tree" ||
+        !wanted.has(path) ||
+        mode === undefined ||
+        oid === undefined
+      )
+        continue;
+      found.set(path, { path, mode, cacheInfo: `${mode},${oid},${path}` });
+    }
+  }
+  return found;
+}
+
 /**
- * Runs one Git command over `items` in batches. A batch ends at RESTORE_BATCH items or when its
+ * Splits `items` into batches for one Git command. A batch ends at RESTORE_BATCH items or when its
  * whole command line, the `fixed` leading tokens and every item's tokens, would pass
- * ARGV_BUDGET_CHARS.
- * The count is the characters plus one separator per token: a bound, not the exact length the
- * operating system measures. An item larger than the budget still runs, alone.
+ * ARGV_BUDGET_CHARS. The count is the characters plus one separator per token: a bound, not the
+ * exact length the operating system measures. An item larger than the budget runs alone.
  */
+function splitBatches<T>(
+  items: readonly T[],
+  fixed: readonly string[],
+  tokens: (item: T) => readonly string[],
+): readonly (readonly T[])[] {
+  const weigh = (parts: readonly string[]): number =>
+    parts.reduce((sum, part) => sum + part.length + 1, 0);
+  const base = weigh(fixed);
+  const batches: T[][] = [];
+  let chars = base;
+  for (const item of items) {
+    const cost = weigh(tokens(item));
+    const last = batches.at(-1);
+    if (last === undefined || last.length >= RESTORE_BATCH || chars + cost > ARGV_BUDGET_CHARS) {
+      batches.push([item]);
+      chars = base + cost;
+    } else {
+      last.push(item);
+      chars += cost;
+    }
+  }
+  return batches;
+}
+
+/** Runs one Git command per batch of `items` (see `splitBatches`); stops at the first failure. */
 async function runInBatches<T>(
   items: readonly T[],
   fixed: readonly string[],
   tokens: (item: T) => readonly string[],
   run: GitRun,
 ): Promise<boolean> {
-  const weigh = (parts: readonly string[]): number =>
-    parts.reduce((sum, part) => sum + part.length + 1, 0);
-  const base = weigh(fixed);
-  let batch: T[] = [];
-  let chars = base;
-  const flush = async (): Promise<boolean> => {
-    if (batch.length === 0) return true;
-    const ok = succeeded(await run([...fixed, ...batch.flatMap(tokens)]));
-    batch = [];
-    chars = base;
-    return ok;
-  };
-  for (const item of items) {
-    const cost = weigh(tokens(item));
-    const full = batch.length >= RESTORE_BATCH || chars + cost > ARGV_BUDGET_CHARS;
-    if (batch.length > 0 && full && !(await flush())) return false;
-    batch.push(item);
-    chars += cost;
+  for (const batch of splitBatches(items, fixed, tokens)) {
+    if (!succeeded(await run([...fixed, ...batch.flatMap(tokens)]))) return false;
   }
-  return await flush();
+  return true;
 }

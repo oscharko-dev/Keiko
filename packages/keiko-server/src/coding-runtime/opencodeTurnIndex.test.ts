@@ -611,33 +611,36 @@ describe("Restore makes the recorded index moves again", () => {
     expect(git(root, "ls-files", "-s")).toBe(turnEnd);
   });
 
-  it("bounds a batch by the whole command line when the paths are long", async () => {
-    if (process.platform === "win32") return;
-    const root = repository();
-    const directory = join("long", "d".repeat(100));
-    mkdirSync(join(root, directory), { recursive: true });
-    const names = Array.from({ length: 150 }, (_unused, index) =>
-      join(directory, `${"f".repeat(100)}-${String(index)}.txt`),
-    );
-    for (const name of names) writeFileSync(join(root, name), "one\n");
-    commit(root);
-    const record = await turn(
-      root,
-      () => {
-        for (const name of names) writeFileSync(join(root, name), "two\n");
-        git(root, "add", "long");
-      },
-      names,
-    );
-    const { moves } = await undone(root, record);
+  // Windows limits a whole path to 260 characters, which these paths exceed on purpose.
+  it.skipIf(process.platform === "win32")(
+    "bounds a batch by the whole command line when the paths are long",
+    async () => {
+      const root = repository();
+      const directory = join("long", "d".repeat(100));
+      mkdirSync(join(root, directory), { recursive: true });
+      const names = Array.from({ length: 150 }, (_unused, index) =>
+        join(directory, `${"f".repeat(100)}-${String(index)}.txt`),
+      );
+      for (const name of names) writeFileSync(join(root, name), "one\n");
+      commit(root);
+      const record = await turn(
+        root,
+        () => {
+          for (const name of names) writeFileSync(join(root, name), "two\n");
+          git(root, "add", "long");
+        },
+        names,
+      );
+      const { moves } = await undone(root, record);
 
-    gitProcesses.widestArgv = 0;
-    await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("restored");
+      gitProcesses.widestArgv = 0;
+      await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("restored");
 
-    // 150 paths of about 270 characters each with their `--cacheinfo` token: one batch by count,
-    // several by the command line.
-    expect(gitProcesses.widestArgv).toBeLessThan(16_500);
-  });
+      // 150 paths of about 270 characters each with their `--cacheinfo` token: one batch by count,
+      // several by the command line.
+      expect(gitProcesses.widestArgv).toBeLessThan(16_500);
+    },
+  );
 
   it("writes many paths in a few bounded Git runs and still refuses one a person restaged", async () => {
     const root = repository();
@@ -680,6 +683,7 @@ describe("a staged entry outside the plan is never taken out of the index", () =
     git(root, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "shape");
   };
   const child = "shape/child.txt";
+  const blobId = (root: string): string => git(root, "hash-object", "-w", "a.txt").trim();
 
   function replaceWithDirectory(root: string): void {
     rmSync(join(root, "shape"), { force: true });
@@ -724,7 +728,11 @@ describe("a staged entry outside the plan is never taken out of the index", () =
     expect(git(root, "ls-files", "-s")).toBe(before);
   });
 
-  it("refuses a Restore that would put a file over the person's staged child", async () => {
+  // Git itself refuses to write a file over a staged directory of the same name, and a child under a
+  // staged file (the `toThrow` lines). The plan check reaches the collision first and answers
+  // `changed-after-turn`, as for Undo; were it absent, `update-index --add` would still refuse
+  // (`unavailable`) and the person's entry would still stay.
+  it("refuses (changed-after-turn) a Restore that would put a file over the person's staged child", async () => {
     const root = repository();
     const record = await turn(root, () => {
       writeFileSync(join(root, "shape"), "turn\n");
@@ -740,11 +748,14 @@ describe("a staged entry outside the plan is never taken out of the index", () =
 
     const result = await reapplyTurnIndexMoves(root, moves);
 
-    expect(result).not.toBe("restored");
+    expect(() =>
+      git(root, "update-index", "--add", "--cacheinfo", `100644,${blobId(root)},shape`),
+    ).toThrow();
+    expect(result).toBe("changed-after-turn");
     expect(git(root, "ls-files", "-s")).toBe(before);
   });
 
-  it("refuses a Restore that would put a child under the person's staged file", async () => {
+  it("refuses (changed-after-turn) a Restore that would put a child under the person's staged file", async () => {
     const root = repository();
     const record = await turn(root, () => {
       mkdirSync(join(root, "shape"));
@@ -761,8 +772,29 @@ describe("a staged entry outside the plan is never taken out of the index", () =
 
     const result = await reapplyTurnIndexMoves(root, moves);
 
-    expect(result).not.toBe("restored");
+    expect(() =>
+      git(root, "update-index", "--add", "--cacheinfo", `100644,${blobId(root)},${child}`),
+    ).toThrow();
+    expect(result).toBe("changed-after-turn");
     expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+
+  it("restores a file over a former child that is part of the same plan", async () => {
+    const root = repository();
+    writeFileSync(join(root, "shape"), "head\n");
+    commit(root);
+    const record = await turn(root, () => {
+      git(root, "rm", "-q", "--", "shape");
+      mkdirSync(join(root, "shape"));
+      writeFileSync(join(root, child), "turn\n");
+      git(root, "add", child);
+    }, ["shape", child]);
+
+    const result = await restoreTurnIndex(root, record, governedOf(record));
+
+    expect(result).toEqual({ outcome: "restored", restoredCount: 2 });
+    expect(staged(root)).toEqual([]);
+    expect(git(root, "ls-files", "-s", "shape")).toContain("shape");
   });
 });
 
