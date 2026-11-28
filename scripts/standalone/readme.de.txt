@@ -49,6 +49,12 @@ Wenn Keiko nicht startet
   oder Windows meldet "Der Computer wurde durch Windows geschützt": Diese Kopie
   trägt noch die Markierung eines Internet-Downloads. Nimm den Ordner von dem
   Ort, den dein Administrator genannt hat, oder frage deinen Administrator.
+- Windows 11 zeigt eine Meldung von Smart App Control (intelligente
+  App-Steuerung), oder das Fenster meldet "Windows Smart App Control is on":
+  Smart App Control sperrt Programmdateien ohne Signatur, und diese Version von
+  Keiko ist noch nicht signiert. "Trotzdem ausführen" gibt es dafür nicht.
+  Nutze einen Computer, auf dem Smart App Control aus ist, oder frag deinen
+  Administrator.
 - Das Fenster meldet, dass Keiko nicht starten konnte: Lies die Meldung im
   Fenster und starte Keiko erneut. Bleibt es dabei, gib die Meldung an deinen
   Administrator weiter.

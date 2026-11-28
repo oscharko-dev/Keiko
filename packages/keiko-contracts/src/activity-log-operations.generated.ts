@@ -39981,6 +39981,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["written", "not-requested", "failed"],
       },
+      smartAppControl: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["on", "evaluation", "off", "unknown", "not-windows"],
+      },
     },
     causal: "none",
     lifecycle: "failure",

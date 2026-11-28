@@ -46,6 +46,10 @@ If Keiko does not start
   "Windows protected your PC": this copy still carries the mark of an internet
   download. Take the folder from the place your administrator named, or ask
   your administrator.
+- Windows 11 shows a Smart App Control message, or the window says "Windows Smart
+  App Control is on": Smart App Control blocks program files that are not signed,
+  and this version of Keiko is not signed yet. "Run anyway" does not exist for it.
+  Use a computer where Smart App Control is off, or ask your administrator.
 - The window says that Keiko could not start: read the message in the window,
   then start Keiko again. If it stays, tell your administrator what it says.
 - Keiko asks for a gateway address and an API token: your administrator has

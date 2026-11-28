@@ -187,6 +187,6 @@ error, that message is the real finding and the console flash was only hiding it
 **Related**
 
 - [Portable Launch And Setup Troubleshooting](./portable-launch-setup.md) — SmartScreen/Gatekeeper
-  blocks, managed install-root refusals, manual-update refusals, and local port failures.
+  blocks, [Smart App Control](./portable-launch-setup.md#smart-app-control) blocks, managed install-root refusals, manual-update refusals, and local port failures.
 - [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the same first-launch
   class on macOS.

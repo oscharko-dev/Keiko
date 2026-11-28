@@ -59,6 +59,11 @@ import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot } from "./state-paths.js";
+import {
+  readSmartAppControlState,
+  SMART_APP_CONTROL_BLOCK_MESSAGE,
+  type SmartAppControlState,
+} from "./windows-smart-app-control.js";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 type LifecycleFn = (
@@ -129,6 +134,8 @@ export interface PortableSetupDeps {
   readonly lifecycleFn?: LifecycleFn | undefined;
   readonly activateMacosRuntimeFn?: MacosRuntimeActivationFn | undefined;
   readonly notifyFailureFn?: PortableFailureNotifierFn | undefined;
+  /** Reads the Windows Smart App Control state after a failed start (#4569). */
+  readonly smartAppControlStateFn?: ((env: EnvSource) => SmartAppControlState) | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
   readonly recoverNormalStartupFn?: PortableNormalStartupRecoveryFn | undefined;
   readonly encodeRecoveredLaunchFn?:
@@ -456,6 +463,11 @@ async function upgradeManagedFromClickedPackage(
   }
 }
 
+function emitUpgradeFailed(sink: SecurityLogSink | undefined, env: EnvSource): void {
+  const smartAppControl = readSmartAppControlState(process.platform, env);
+  emitPortableLaunchFailed(sink, "upgrade-failed", "not-requested", smartAppControl);
+}
+
 async function upgradeManagedWhileLocked(
   options: PortableCliOptions,
   source: ValidatedPortableRoot,
@@ -495,7 +507,7 @@ async function upgradeManagedWhileLocked(
     // would otherwise keep of it. The recorder gets no `upgrade-failed` here on purpose: if the
     // relaunch then fails too, the reason the person must act on is the relaunch's (Keiko does not
     // run at all), and the first reason recorded is the one the box and the final line carry.
-    emitPortableLaunchFailed(options.securityLogSink, "upgrade-failed", "not-requested");
+    emitUpgradeFailed(options.securityLogSink, env);
     return launchManaged(
       {
         target: current.manifest.platformTarget,
@@ -874,6 +886,26 @@ function leaveLaunchFailureNote(
   }
 }
 
+// Smart App Control blocks unsigned files with no per-file override, so a start it stopped looks
+// like any other failure unless the cause is named (#4569). Read only once a start has failed: a
+// healthy start never pays for the query, and a state that cannot be read changes nothing.
+function smartAppControlForFailure(
+  env: EnvSource,
+  io: CliIo,
+  deps: PortableSetupDeps,
+): SmartAppControlState {
+  const read =
+    deps.smartAppControlStateFn ??
+    ((readEnv: EnvSource): SmartAppControlState =>
+      readSmartAppControlState(
+        (deps.platform ?? ((): NodeJS.Platform => process.platform))(),
+        readEnv,
+      ));
+  const state = read(env);
+  if (state === "on") io.err(SMART_APP_CONTROL_BLOCK_MESSAGE);
+  return state;
+}
+
 function notifyPortableFailureIfNeeded(
   code: number,
   message: string,
@@ -890,7 +922,8 @@ function notifyPortableFailureIfNeeded(
     options.launchFailure?.reason ??
     (options.command === "setup" ? "setup-failed" : "launch-error");
   const note = leaveLaunchFailureNote(env, reason, io);
-  emitPortableLaunchFailed(options.securityLogSink, reason, note);
+  const smartAppControl = smartAppControlForFailure(env, io, deps);
+  emitPortableLaunchFailed(options.securityLogSink, reason, note, smartAppControl);
   const notify =
     deps.notifyFailureFn ??
     ((failureMessage: string, notifyEnv: EnvSource): void => {

@@ -3406,6 +3406,70 @@ describe("runPortableCli", () => {
       return note;
     }
 
+    // #4569: Smart App Control blocks unsigned files with no "Run anyway", so a start it stopped
+    // must name that cause on the console and in the closed line, and a start without it must not.
+    it("names an enforcing Smart App Control on the console and in the failure line", async () => {
+      const run = async (
+        state: "on" | "off",
+      ): Promise<{ code: number; logged: SecurityLogEvent[]; err: string }> => {
+        const root = tempRoot();
+        const home = join(root, "home");
+        const stateDir = join(root, "state");
+        const target: PortableTarget = "windows-x64";
+        const managedRoot = managedRootForTarget(home, target);
+        const env = windowsPortableEnv(home);
+        const source = writePortableFixture(join(root, "bootstrap"), target, "0.2.11");
+        await runPortableCli(
+          portableLaunchArgs(target, source, managedRoot, stateDir),
+          capture().io,
+          env,
+          {
+            homedir: () => home,
+            now: () => NOW,
+            spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+          },
+        );
+        const logged: SecurityLogEvent[] = [];
+        const output = capture();
+        const code = await runPortableCli(
+          portableLaunchArgs(target, managedRoot, managedRoot, stateDir),
+          output.io,
+          env,
+          {
+            homedir: () => home,
+            now: () => NOW,
+            securityLogSinkFactory: () => ({ write: (event): void => void logged.push(event) }),
+            spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+            notifyFailureFn: () => undefined,
+            smartAppControlStateFn: () => state,
+            lifecycleFn: (_command, _args, _io, _env, deps) => {
+              deps.recordFailure?.("process-exited");
+              return Promise.resolve(1);
+            },
+          },
+        );
+        return { code, logged, err: output.err() };
+      };
+
+      const blocked = await run("on");
+      expect(blocked.code).toBe(1);
+      expect(blocked.err).toContain("Windows Smart App Control is on");
+      expect(
+        blocked.logged
+          .filter((event) => event.op === "portable.launch.failed")
+          .map((event) => [event.extra?.reason, event.extra?.smartAppControl]),
+      ).toEqual([["process-exited", "on"]]);
+
+      const other = await run("off");
+      expect(other.code).toBe(1);
+      expect(other.err).not.toContain("Smart App Control");
+      expect(
+        other.logged
+          .filter((event) => event.op === "portable.launch.failed")
+          .map((event) => event.extra?.smartAppControl),
+      ).toEqual(["off"]);
+    });
+
     it("leaves the reason in the launcher's note and one log line, and starts no process", async () => {
       const note = uniqueNote();
 

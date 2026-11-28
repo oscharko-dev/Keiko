@@ -96,7 +96,8 @@ started in place.
    Windows), or builds the package with `scripts/build-standalone-package.mjs`, whose output
    carries none; see [The Download Mark](../release/standalone-folder-package.md#the-download-mark).
    If the organization's application control blocks Keiko, only that organization can allow it.
-   Do not disable Gatekeeper or SmartScreen.
+   Do not disable Gatekeeper or SmartScreen. With Windows Smart App Control on, a clean copy does
+   not help either: read [Smart App Control](./portable-launch-setup.md#smart-app-control).
 2. Delete the folder and extract the whole archive again. Start Keiko from the extracted folder
    and leave `system` as it is.
 3. Stop the other Keiko with its own `Stop Keiko`, or end the other program, and start again.

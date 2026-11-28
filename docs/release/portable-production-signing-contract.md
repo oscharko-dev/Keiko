@@ -430,6 +430,19 @@ Microsoft SmartScreen reputation or warning-free first launch for every new file
 requires the approved verified publisher, SHA-256 signature, RFC 3161 timestamp, and local verification;
 SmartScreen reputation is observed but is not asserted as a Keiko-controlled outcome.
 
+## Smart App Control limitation
+
+Windows 11 Smart App Control runs or loads a program file only when it is signed by a trusted
+certificate or has good cloud reputation, and it has no per-file override (#4569). Until the Windows
+release ships the signed artifacts this contract describes, Keiko's own Windows files (`Keiko.exe`,
+`keiko-runtime-supervisor.exe`, `keiko-secure-workspace-read.exe`, `rg.exe`, `usearch.node`) are
+unsigned, and Keiko cannot start on a computer with Smart App Control on. A failed start reports the
+Smart App Control state in `portable.launch.failed` and on the console; the person-facing guidance is
+the [Smart App Control](../troubleshooting/portable-launch-setup.md#smart-app-control) entry. Whether
+to sign every native Windows file, and with which certificate path, is an owner decision; a signed
+release must cover every executable and loadable native module in the payload, because one unsigned
+helper is enough for Smart App Control to stop the start.
+
 Runtime point-of-use checks invoke the fixed Windows system PowerShell path with a closed environment
 and compare each attestation carrier or privileged helper's verified leaf signer identity with the
 independently verified `Keiko.exe` signer identity from the same qualified release. This is an
