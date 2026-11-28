@@ -1547,3 +1547,49 @@ describe("the first governed stage of a repository whose index was never written
     expect(existsSync(join(repo, ".git", "index.lock"))).toBe(false);
   });
 });
+
+// A first unstage in a repository without a commit: `restore --staged` reads HEAD as its source and
+// HEAD has none, so the reviewed paths leave the index through the empty tree instead.
+describe("the first unstage of a repository that has no commit", () => {
+  function stagedFreshRepository(): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-unstage-fresh-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(base, "first.txt"), "first\n");
+    writeFileSync(join(base, "second.txt"), "second\n");
+    git(base, ["add", "first.txt", "second.txt"]);
+    return base;
+  }
+
+  const unborn = { kind: "unborn", branch: "main", objectIdLength: 40 } as const;
+  function unstageRequest(): Parameters<typeof buildUnstageArgv>[0] {
+    return {
+      pathspecs: ["first.txt"],
+      verified: {
+        head: unborn,
+        stagedTreeDigest: "0".repeat(64),
+        branchName: "main",
+        baseRef: "refs/heads/main",
+        base: unborn,
+      },
+    };
+  }
+
+  it("takes only the reviewed path out of the index", async () => {
+    const repo = stagedFreshRepository();
+    await expect(
+      unstageExactFiles(context(repo), buildUnstageArgv(unstageRequest())),
+    ).resolves.toBe(true);
+    expect(git(repo, ["ls-files"]).trim()).toBe("second.txt");
+    expect(existsSync(join(repo, ".git", "index.lock"))).toBe(false);
+  });
+
+  it("builds the plan from the empty tree only for an unborn head", () => {
+    expect(buildUnstageArgv(unstageRequest())[0]).toContain(
+      "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    );
+    expect(buildUnstageArgv({ pathspecs: ["first.txt"] })).toEqual([
+      ["restore", "--staged", "--", ":(literal)first.txt"],
+    ]);
+  });
+});

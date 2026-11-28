@@ -269,12 +269,27 @@ export function buildStageArgv(req: GitStageExecRequest): GitMutationArgvPlan {
 // (U-28) runs as several restores inside one index transaction instead of one oversized command.
 const UNSTAGE_ARGV_PATHSPEC_CHARS = 8_000;
 
+// The empty tree, which Git knows without storing it, per object format. An unborn HEAD has no
+// commit for `restore --staged` to read as its source, so the unstaging names the empty tree: every
+// reviewed path leaves the index exactly as it would for a path HEAD does not contain.
+const GIT_EMPTY_TREE_ID = Object.freeze({
+  40: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+  64: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+});
+
+function unstageRestorePrefix(req: GitUnstageExecRequest): string[] {
+  const head = req.verified?.head;
+  return head?.kind === "unborn"
+    ? ["restore", "--source", GIT_EMPTY_TREE_ID[head.objectIdLength], "--staged", "--"]
+    : ["restore", "--staged", "--"];
+}
+
 export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPlan {
   const plan: string[][] = [];
   let used = Infinity;
   for (const pathspec of assertPathspecs(req.pathspecs)) {
     if (used + pathspec.length + 1 > UNSTAGE_ARGV_PATHSPEC_CHARS) {
-      plan.push(["restore", "--staged", "--"]);
+      plan.push(unstageRestorePrefix(req));
       used = 0;
     }
     plan.at(-1)?.push(pathspec);
