@@ -543,3 +543,43 @@ describe("verification preview review (ADR-0124 D6)", () => {
     ).not.toEqual([]);
   });
 });
+
+describe("commit review renames", () => {
+  const verifiedCommit = {
+    result: { proposalId: "permission-42" },
+    message: "fix: rename",
+  };
+  const withRename = (renames: unknown): Readonly<Record<string, unknown>> =>
+    activeReview({ renames, verifiedCommit });
+
+  it("carries the old and the new path as separate, individually bounded fields", () => {
+    const long = (letter: string): string => `${letter.repeat(300)}.js`;
+    const review = withRename([{ path: "src/a.ts", from: long("o") }]);
+    expect(errorsFor(review).filter((error) => error.includes("renames"))).toEqual([]);
+    const tooLong = withRename([{ path: "src/a.ts", from: "o".repeat(513) }]);
+    expect(errorsFor(tooLong)).toContain("pendingApprovalReview.renames[0] is invalid");
+  });
+
+  it.each([
+    ["a path that is not listed", [{ path: "src/other.ts", from: "src/old.ts" }]],
+    ["an escaping origin", [{ path: "src/a.ts", from: "../old.ts" }]],
+    ["an extra key", [{ path: "src/a.ts", from: "src/old.ts", extra: true }]],
+    [
+      "a repeated path",
+      [
+        { path: "src/a.ts", from: "x" },
+        { path: "src/a.ts", from: "y" },
+      ],
+    ],
+  ])("refuses %s", (_name, renames) => {
+    expect(
+      errorsFor(withRename(renames)).filter((error) => error.includes("renames[")).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("refuses renames on a review that is not a commit review", () => {
+    expect(
+      errorsFor(activeReview({ renames: [{ path: "src/a.ts", from: "src/old.ts" }] })),
+    ).toContain("pendingApprovalReview.renames belongs to a commit review and must be an array");
+  });
+});

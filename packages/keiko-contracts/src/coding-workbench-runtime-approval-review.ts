@@ -140,6 +140,16 @@ export interface CodingWorkbenchGitBranchReview {
   readonly branchName: string;
 }
 
+/**
+ * A staged rename in a commit review: the path the change lands on (one of `paths`) and the path it
+ * came from. Each name is bounded on its own, so a rename between two paths that both fit the path
+ * bound is never refused for the length of a joined label; the UI renders the arrow.
+ */
+export interface CodingWorkbenchReviewRename {
+  readonly path: string;
+  readonly from: string;
+}
+
 export interface CodingWorkbenchRuntimePendingApprovalReview {
   /** Binds the review to the exact pending permission the operator is deciding about. */
   readonly requestId: string;
@@ -164,6 +174,11 @@ export interface CodingWorkbenchRuntimePendingApprovalReview {
    * an edit changeset, whose `paths` are the request.
    */
   readonly requested?: readonly string[];
+  /**
+   * Only for a commit review: the staged renames among the listed `paths`, each with the path it
+   * came from. Absent when no listed path is a rename.
+   */
+  readonly renames?: readonly CodingWorkbenchReviewRename[];
   /** Files the changeset declares — may exceed `paths.length` when truncated. */
   readonly fileCount: number;
   readonly addedLines: number;
@@ -234,6 +249,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "paths",
         "pathsTruncated",
         "requested",
+        "renames",
         "fileCount",
         "addedLines",
         "deletedLines",
@@ -258,6 +274,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
   }
   if (value.requested !== undefined) validateRequestedScope(value.requested, errors);
+  if (value.renames !== undefined) validateReviewRenames(value, errors);
   validateReviewCounts(value, errors);
   if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
 }
@@ -482,6 +499,29 @@ function validateReviewFileCountConsistency(
   if (value.fileCount !== carried) {
     errors.push("pendingApprovalReview.fileCount must match the carried path list");
   }
+}
+
+function validateReviewRenames(pending: Record<string, unknown>, errors: string[]): void {
+  const { renames, paths } = pending;
+  if (pending.verifiedCommit === undefined || !Array.isArray(renames) || !Array.isArray(paths)) {
+    errors.push("pendingApprovalReview.renames belongs to a commit review and must be an array");
+    return;
+  }
+  if (renames.length === 0 || renames.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS) {
+    errors.push("pendingApprovalReview.renames must be a bounded, non-empty array");
+    return;
+  }
+  const seen = new Set<unknown>();
+  renames.forEach((rename: unknown, index) => {
+    const valid =
+      isRecord(rename) &&
+      exactKeys(rename, ["path", "from"], "rename").length === 0 &&
+      paths.includes(rename.path) &&
+      !seen.has(rename.path) &&
+      isReviewableRepositoryPath(rename.from);
+    if (!valid) errors.push(`pendingApprovalReview.renames[${String(index)}] is invalid`);
+    if (isRecord(rename)) seen.add(rename.path);
+  });
 }
 
 function validateRequestedScope(value: unknown, errors: string[]): void {

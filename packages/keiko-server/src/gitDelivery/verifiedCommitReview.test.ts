@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readVerifiedCommitReview, type VerifiedCommitReviewRead } from "./verifiedCommitReview.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
@@ -121,8 +122,33 @@ describe("readVerifiedCommitReview with quoted Git paths", () => {
     runGit(root, ["add", "-A"]);
     const review = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
     expect(review).toMatchObject({
-      review: { paths: ["dir/größe.js \u2192 dir/größer name.js"], fileCount: 1 },
+      review: {
+        paths: ["dir/größer name.js"],
+        renames: [{ path: "dir/größer name.js", from: "dir/größe.js" }],
+        fileCount: 1,
+      },
     });
+  });
+
+  it("reviews a rename between two paths that each fit the bound but whose joined label would not", async () => {
+    const stem = `${"d".repeat(120)}/${"e".repeat(120)}/`;
+    const before = `${stem}${"a".repeat(60)}.js`;
+    const after = `${stem}${"b".repeat(60)}.js`;
+    expect(before.length).toBeLessThanOrEqual(CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS);
+    expect(before.length + after.length).toBeGreaterThan(
+      CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
+    );
+    const root = stagedRepo("long rename", before);
+    runGit(root, ["reset", "-q"]);
+    renameSync(join(root, before), join(root, after));
+    runGit(root, ["add", "-A"]);
+    const read = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
+    expect(read).toMatchObject({
+      review: { paths: [after], renames: [{ path: after, from: before }] },
+    });
+    expect(reviewOf(read).paths[0]?.length).toBeLessThanOrEqual(
+      CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
+    );
   });
 
   it("refuses a review whose file name holds the rename arrow", async () => {

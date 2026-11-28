@@ -1,4 +1,5 @@
 import type {
+  CodingWorkbenchReviewRename,
   CodingWorkbenchRuntimePendingApprovalReview,
   VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -32,8 +33,8 @@ export type VerifiedCommitReviewRead =
     }
   | { readonly incomplete: VerifiedCommitReviewIncompleteCause };
 
-// The rename label joins two names with an arrow, so a name that holds one could pass for a rename.
-// Such a review is refused instead of shown ambiguously.
+// The review renders a rename with an arrow between its two names, so a name that holds one could
+// pass for a rename. Such a review is refused instead of shown ambiguously.
 const RENAME_ARROW = "\u2192";
 
 function placeable(entry: GitStagedChangeEntry): boolean {
@@ -44,11 +45,14 @@ function placeable(entry: GitStagedChangeEntry): boolean {
   );
 }
 
-// A rename lists both names, so the person sees what is removed as well as what appears.
-function reviewLabel(entry: GitStagedChangeEntry): string {
-  return entry.oldPath === undefined
-    ? entry.path
-    : `${entry.oldPath} ${RENAME_ARROW} ${entry.path}`;
+// A rename carries both names as separate fields, each bounded on its own by the review contract,
+// so the person sees what is removed as well as what appears and no joined label can pass the bound.
+function renamesOf(
+  entries: readonly GitStagedChangeEntry[],
+): readonly CodingWorkbenchReviewRename[] {
+  return entries.flatMap((entry) =>
+    entry.oldPath === undefined ? [] : [{ path: entry.path, from: entry.oldPath }],
+  );
 }
 
 /**
@@ -71,7 +75,9 @@ export async function readVerifiedCommitReview(
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   });
   if (!entries.every(placeable)) return { incomplete: "diff-truncated" };
-  const paths = entries.map(reviewLabel).slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+  const shown = entries.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+  const paths = shown.map((entry) => entry.path);
+  const renames = renamesOf(shown);
   const added = entries.reduce((count, entry) => count + entry.addedLines, 0);
   const deleted = entries.reduce((count, entry) => count + entry.deletedLines, 0);
   const capped =
@@ -81,6 +87,7 @@ export async function readVerifiedCommitReview(
     requestId: result.proposalId,
     paths,
     pathsTruncated: paths.length < entries.length,
+    ...(renames.length === 0 ? {} : { renames }),
     fileCount: entries.length,
     addedLines: Math.min(added, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT),
     deletedLines: Math.min(deleted, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT),

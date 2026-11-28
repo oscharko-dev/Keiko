@@ -3293,6 +3293,40 @@ function ApprovalRequestedScope({
   return <p className={styles.approvalResearchTitle}>{text}</p>;
 }
 
+// A staged rename shows the path it came from before the path it lands on.
+function renamedFrom(
+  review: NonNullable<UseCodingWorkbenchApprovalReviewResult["review"]>,
+  path: string,
+): string {
+  const from = review.renames?.find((rename) => rename.path === path)?.from;
+  return from === undefined ? "" : `${from} \u2192 `;
+}
+
+function ApprovalChangedPaths({
+  review,
+  t,
+}: {
+  readonly review: NonNullable<UseCodingWorkbenchApprovalReviewResult["review"]>;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <ul
+      className={styles.approvalChangedFiles}
+      // The list scrolls once it is long, so a keyboard user must be able to reach it.
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable region
+      tabIndex={0}
+      aria-label={t("codingWorkbench.approval.changes.title")}
+    >
+      {review.paths.map((path) => (
+        <li className={styles.approvalChangedFile} key={path}>
+          {renamedFrom(review, path)}
+          {path}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // The reviewable facts of a changeset the operator is deciding about: the counts, the file list,
 // and the honest note when the list is truncated. Extracted from `ApprovalChangedFiles` so that
 // function stays inside the 50-line budget (AGENTS.md §6) — behaviour unchanged, only moved.
@@ -3319,19 +3353,7 @@ function ApprovalReviewBody({
         />
       </dl>
       <ApprovalRequestedScope review={review} t={t} />
-      <ul
-        className={styles.approvalChangedFiles}
-        // The list scrolls once it is long, so a keyboard user must be able to reach it.
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable region
-        tabIndex={0}
-        aria-label={t("codingWorkbench.approval.changes.title")}
-      >
-        {review.paths.map((path) => (
-          <li className={styles.approvalChangedFile} key={path}>
-            {path}
-          </li>
-        ))}
-      </ul>
+      <ApprovalChangedPaths review={review} t={t} />
       {review.countsUnavailable === true ? (
         <p className={styles.approvalResearchDetail}>
           {t("codingWorkbench.approval.changes.countsUnavailable")}

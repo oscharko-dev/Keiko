@@ -4159,6 +4159,18 @@ describe("CodingWorkbenchWindow", () => {
     },
   );
 
+  it("shows a staged rename as the old path, an arrow and the new path", () => {
+    const review = {
+      ...commitReview(),
+      paths: ["src/renamed.ts"],
+      renames: [{ path: "src/renamed.ts", from: "src/original.ts" }],
+    };
+    approvalReviewHookMock.mockReturnValue({ status: "ready", review, retry: vi.fn() });
+    renderWorkbench(commitApprovalState("supervised-coding"));
+    const files = screen.getByRole("group", { name: "Staged files for this commit" });
+    expect(files).toHaveTextContent("src/original.ts \u2192 src/renamed.ts");
+  });
+
   it.each([
     "missing-commit",
     "wrong-run",
