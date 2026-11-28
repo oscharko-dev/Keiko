@@ -350,6 +350,11 @@ describe("production workspace HEAD reader worktree layouts", () => {
       ["objectformat = sha\\\n256", 64],
       ['objectformat = "sha\\\n256"', 64],
       ["objectformat = sha\\\n1", 40],
+      // A comment ends at its line end: a backslash there continues nothing.
+      ["# note \\\nobjectformat = sha256", 64],
+      ["; note \\\nobjectformat = sha256", 64],
+      ["# note \\\\\nobjectformat = sha256", 64],
+      ['objectformat = "sha256" # note \\\n', 64],
     ] as const)("keeps the unborn identity of a SHA-256 repository for `%s`", (line, length) => {
       const root = unbornRepo();
       rmSync(join(root, ".git"), { recursive: true, force: true });

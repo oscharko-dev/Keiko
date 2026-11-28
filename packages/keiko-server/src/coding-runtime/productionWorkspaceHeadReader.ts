@@ -199,21 +199,41 @@ function declaresSha256(config: string): boolean {
 }
 
 // Git joins a line that ends in an unescaped backslash with the next one (`sha\` + `256` reads as
-// `sha256`); an even run of trailing backslashes is escaped backslashes, not a continuation.
+// `sha256`). A comment ends at its line end whatever it ends in, so a trailing backslash after an
+// unquoted `#` or `;` continues nothing, and a quote opened before the break stays open after it.
 function logicalLines(config: string): string[] {
   const lines: string[] = [];
   let pending = "";
+  let quoted = false;
   for (const physical of config.split(/\r?\n/u)) {
-    const trailing = /\\+$/u.exec(physical)?.[0].length ?? 0;
-    if (trailing % 2 === 1) {
+    const scan = scanLine(physical, quoted);
+    if (scan.continues) {
       pending += physical.slice(0, -1);
+      quoted = scan.quoted;
     } else {
       lines.push(pending + physical);
       pending = "";
+      quoted = false;
     }
   }
   if (pending !== "") lines.push(pending);
   return lines;
+}
+
+function scanLine(
+  physical: string,
+  startQuoted: boolean,
+): { readonly continues: boolean; readonly quoted: boolean } {
+  let quoted = startQuoted;
+  let escaped = false;
+  for (const character of physical) {
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === '"') quoted = !quoted;
+    else if (!quoted && (character === "#" || character === ";"))
+      return { continues: false, quoted };
+  }
+  return { continues: escaped, quoted };
 }
 
 // The lower-cased name of a `[section]` or `[section "subsection"]` header and the text after its
