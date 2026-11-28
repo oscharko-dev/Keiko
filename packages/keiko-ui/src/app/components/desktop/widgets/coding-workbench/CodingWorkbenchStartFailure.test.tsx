@@ -513,6 +513,28 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     await screen.findByRole("button", { name: "Stop run" });
   }
 
+  it("drops the refused start's alert when the person begins a new task (U-42)", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const { rerender } = render(<CodingWorkbenchWindow />);
+    await user.type(screen.getByLabelText("Task instructions"), "Fix the flaky retry loop");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+        "data-on",
+        "true",
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+    );
+
+    rerender(<CodingWorkbenchWindow historySelection="new:task-2" />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED/)).toBeNull();
+    });
+  });
+
   it("keeps the typed task and says why when another window's run refuses the start (U-14)", async (): Promise<void> => {
     const task = "Fix the flaky retry loop";
     await startRefusedByOtherWindow(task);

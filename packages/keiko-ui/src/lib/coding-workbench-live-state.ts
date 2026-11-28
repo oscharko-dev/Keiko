@@ -232,6 +232,7 @@ export type CodingWorkbenchRuntimeStateAction =
     }
   | { readonly kind: "mutation-complete" }
   | { readonly kind: "session-renewed" }
+  | { readonly kind: "refusal-dismissed" }
   | { readonly kind: "mutation-cancelled" }
   | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
@@ -397,6 +398,37 @@ function isAcknowledgedRecoveryRequired(state: CodingWorkbenchRuntimeState): boo
   return (
     state.run.value?.state === "recovery-required" && state.run.value.recoveryAcknowledged === true
   );
+}
+
+const MODEL_UNAVAILABLE_ERROR_CODE = "CODING_RUNTIME_MODEL_UNAVAILABLE";
+
+// A start refused because the selected model was not admitted belongs to that model: choosing
+// another one ends it (U-46). Every other failure stays until its own cause is gone.
+function withoutModelRefusal(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  return state.mutation.status === "error" &&
+    state.mutation.error?.code === MODEL_UNAVAILABLE_ERROR_CODE
+    ? { ...state, mutation: IDLE_MUTATION }
+    : state;
+}
+
+function sourceAdmitsModel(source: CodingWorkbenchRuntimeState["source"]): boolean {
+  return (
+    source.status === "ready" &&
+    source.value?.available === true &&
+    source.value.verification === "verified"
+  );
+}
+
+// U-46: the refusal ends when the read that follows reports the model as admitted where the one
+// before did not, e.g. after the person activated it in Settings > Models. A read that merely
+// repeats an admitted source proves nothing about the refusal and keeps it.
+function withoutResolvedModelRefusal(
+  state: CodingWorkbenchRuntimeState,
+  before: CodingWorkbenchRuntimeState["source"],
+): CodingWorkbenchRuntimeState {
+  return sourceAdmitsModel(state.source) && !sourceAdmitsModel(before)
+    ? withoutModelRefusal(state)
+    : state;
 }
 
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
@@ -685,11 +717,13 @@ const runtimeActionHandlers = {
   "select-runtime-preference": (state, action): CodingWorkbenchRuntimeState =>
     selectPreference(state, action.preference),
   "select-model": (state, action): CodingWorkbenchRuntimeState =>
-    projectReadiness({
-      ...state,
-      selectedModelId: action.modelId,
-      reasoningEffort: null,
-    }),
+    projectReadiness(
+      withoutModelRefusal({
+        ...state,
+        selectedModelId: action.modelId,
+        reasoningEffort: null,
+      }),
+    ),
   "select-reasoning-effort": (state, action): CodingWorkbenchRuntimeState => ({
     ...state,
     reasoningEffort: action.effort,
@@ -712,7 +746,9 @@ const runtimeActionHandlers = {
   "source-set": (state, action): CodingWorkbenchRuntimeState =>
     action.source.runtimePreference !== state.runtimePreference
       ? state
-      : projectReadiness({ ...state, source: ready(action.source) }),
+      : projectReadiness(
+          withoutResolvedModelRefusal({ ...state, source: ready(action.source) }, state.source),
+        ),
   "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness(
       withLiveRunIdentity(
@@ -748,6 +784,10 @@ const runtimeActionHandlers = {
     projectReadiness({ ...state, mutation: IDLE_MUTATION }),
   // A refusal belongs to the session it was given under; a new session shows the present instead.
   "session-renewed": (state): CodingWorkbenchRuntimeState =>
+    state.mutation.status === "error"
+      ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
+      : state,
+  "refusal-dismissed": (state): CodingWorkbenchRuntimeState =>
     state.mutation.status === "error"
       ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
       : state,

@@ -973,6 +973,22 @@ function useRunChannels(run: WorkbenchRunValue): WorkbenchRunChannels {
   return { research, skills };
 }
 
+// An alert belongs to the attempt that produced it: another repository or another task shown in
+// the window ends it (U-42). The first render is no switch.
+function useDismissRefusalOnTaskSwitch(
+  dismissRefusal: () => void,
+  root: string | undefined,
+  detail: CodingTaskSession["detail"],
+): void {
+  const taskId = detail?.task.id;
+  const seen = useRef({ root, taskId });
+  useEffect(() => {
+    if (seen.current.root === root && seen.current.taskId === taskId) return;
+    seen.current = { root, taskId };
+    dismissRefusal();
+  }, [dismissRefusal, root, taskId]);
+}
+
 function historyRuntimeState(
   state: CodingWorkbenchRuntimeState,
   history: CodingTaskSession,
@@ -1225,6 +1241,15 @@ export function CodingWorkbenchWindow({
     setTaskIntent: setDraftIntent,
   });
   const { taskIntent, onDraftReset: setTaskIntentEmpty } = activeRunConflict;
+  // New task leaves the previous task's refused or failed action behind with the task (U-42).
+  const { dismissRefusal } = actions;
+  const leaveRun = useCallback(
+    (runId: string | undefined): void => {
+      dismissRefusal();
+      onLeftRun?.(runId);
+    },
+    [dismissRefusal, onLeftRun],
+  );
   const history = useCodingTaskSession({
     snapshot: runtimeState.run.value,
     active: activeRunState(runtimeState.run.value?.state),
@@ -1240,8 +1265,9 @@ export function CodingWorkbenchWindow({
     onSelectionHandled: onHistorySelectionHandled,
     onDraftReset: setTaskIntentEmpty,
     leftRun,
-    onLeftRun,
+    onLeftRun: leaveRun,
   });
+  useDismissRefusalOnTaskSwitch(actions.dismissRefusal, selectedRoot, history.detail);
   const state = selectedConversationReadiness(
     historyRuntimeState(runtimeState, history),
     chatCatalog,

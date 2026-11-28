@@ -179,6 +179,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     setSelectedModel: vi.fn(),
     adoptModel: vi.fn(),
     setReasoningEffort: vi.fn(),
+    dismissRefusal: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),

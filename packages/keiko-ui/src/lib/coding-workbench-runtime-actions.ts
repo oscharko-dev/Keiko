@@ -72,6 +72,12 @@ export interface CodingWorkbenchRuntimeActions extends RuntimeMutationActions {
   readonly adoptModel: (modelId: string | null) => void;
   readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
   readonly prepareCodexSetup?: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
+  /**
+   * Ends the alert of a refused or failed action that belongs to the task the person leaves (New
+   * task, another task or repository): the next task starts without it (U-42). It never touches a
+   * pending action or a live failure of the run.
+   */
+  readonly dismissRefusal: () => void;
   readonly refreshProfile: () => Promise<void>;
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
@@ -305,6 +311,7 @@ function createCodingWorkbenchRuntimeActions({
       dispatch({ kind: "select-model", modelId });
     },
     setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
+    dismissRefusal: () => dispatch({ kind: "refusal-dismissed" }),
     prepareCodexSetup,
     refreshProfile,
     refreshSource,

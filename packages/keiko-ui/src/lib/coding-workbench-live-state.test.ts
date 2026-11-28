@@ -1019,3 +1019,80 @@ describe("prompt inputs the server offers", () => {
     });
   });
 });
+
+describe("a refused action belongs to the attempt that produced it (U-42, U-46)", () => {
+  const UNVERIFIED = {
+    runtimePreference: "managed-gateway",
+    modelSource: "keiko-model-gateway",
+    runtimeSource: "keiko-sidecar",
+    available: true,
+    verification: "unverified",
+  } as const;
+
+  function refused(code: string): CodingWorkbenchRuntimeState {
+    const base = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "source-set",
+      source: UNVERIFIED,
+    });
+    return codingWorkbenchRuntimeReducer(base, {
+      kind: "mutation-failed",
+      error: { code, message: "redacted", retryable: true, correlationId: "corr-refused" },
+    });
+  }
+
+  it("clears the alert of the previous task when the person leaves it (U-42)", () => {
+    const left = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
+      kind: "refusal-dismissed",
+    });
+    expect(left.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("never ends a pending action when a task is left", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "request-1",
+    });
+    expect(codingWorkbenchRuntimeReducer(pending, { kind: "refusal-dismissed" })).toBe(pending);
+  });
+
+  it("clears a model-unavailable refusal once the source reports the model as admitted (U-46)", () => {
+    const admitted = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_MODEL_UNAVAILABLE"), {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "verified" },
+    });
+    expect(admitted.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("keeps a model-unavailable refusal while the model is still not admitted", () => {
+    const state = refused("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    const reread = codingWorkbenchRuntimeReducer(state, { kind: "source-set", source: UNVERIFIED });
+    expect(reread.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    const failedProbe = codingWorkbenchRuntimeReducer(state, {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "failed" },
+    });
+    expect(failedProbe.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+  });
+
+  it("keeps every other refusal when a source read reports an admitted model", () => {
+    const state = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "verified" },
+    });
+    expect(state.mutation.error?.code).toBe("CODING_RUNTIME_INVALID_INTENT");
+  });
+
+  it("ends a model-unavailable refusal when another model is selected, and no other one", () => {
+    const another = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_MODEL_UNAVAILABLE"), {
+      kind: "select-model",
+      modelId: "another-model",
+    });
+    expect(another.mutation).toMatchObject({ status: "idle", error: null });
+    const other = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
+      kind: "select-model",
+      modelId: "another-model",
+    });
+    expect(other.mutation.error?.code).toBe("CODING_RUNTIME_INVALID_INTENT");
+  });
+});
