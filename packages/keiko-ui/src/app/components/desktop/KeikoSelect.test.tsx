@@ -505,6 +505,26 @@ describe("KeikoSelect interactions", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  it("closes an open menu when the control becomes busy", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ariaLabel: "Strategy",
+      menuTitle: "Strategy",
+      onValueChange: vi.fn(),
+      sections,
+      value: "model",
+    };
+    const { rerender } = render(<KeikoSelect {...props} />);
+    await user.click(screen.getByRole("combobox", { name: "Strategy" }));
+    expect(screen.getByRole("listbox", { name: "Strategy" })).toBeInTheDocument();
+    rerender(<KeikoSelect {...props} busy />);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Strategy" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   it("commits the active option with keyboard navigation and returns focus to the trigger", async () => {
     const onValueChange = vi.fn();
     render(

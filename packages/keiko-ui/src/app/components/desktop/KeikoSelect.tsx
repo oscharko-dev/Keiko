@@ -666,6 +666,11 @@ export default function KeikoSelect({
     setSearchQuery("");
   }, []);
 
+  // A change the control waits for locks it: an open menu would still commit a choice.
+  useEffect(() => {
+    if (busy) closeMenu();
+  }, [busy, closeMenu]);
+
   const openMenu = (preferredIndex?: number): void => {
     if (disabled || busy || flatOptions.length === 0) return;
     const fallbackIndex = resolveOpenMenuIndex(flatOptions, preferredIndex, selectedIndex);
