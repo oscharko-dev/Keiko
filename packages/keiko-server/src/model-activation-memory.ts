@@ -342,6 +342,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
     string,
     { readonly configurationDigest: string; readonly apiKey: string }
   >();
+  /** Models whose changed binding a withheld change kept out of the record; a settle keeps them out. */
+  private withheldKeys: ReadonlySet<string> = new Set();
   private unrecorded = false;
   /** The file may still hold a record this start could not replace or withdraw. */
   private rewritePending = false;
@@ -373,7 +375,10 @@ class FileModelActivationMemory implements ModelActivationMemory {
     this.commitBindings();
     this.logChange("restored", undefined, restored.length, correlationId);
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
-    if (outcome.kind !== "none" && !this.write(entries, correlationId)) {
+    // A record every entry of which was restored is already what the file should hold: rewriting it
+    // is redundant, and a failed redundant write must never withdraw a valid record.
+    const invalidates = outcome.kind !== "file" || [...counts.values()].some((count) => count > 0);
+    if (invalidates && !this.write(entries, correlationId)) {
       // The discard of an incompatible record did not land: keep it pending, never call it done.
       this.rewritePending = true;
       this.withdrawRecord(entries, new Map(), correlationId);
@@ -389,7 +394,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
   }
 
   public settle(reason: ActivationRemovalReason, correlationId: string): boolean {
-    this.sync(this.desired, reason, correlationId);
+    // A binding an earlier change withheld stays withheld: a retry replays what was wanted.
+    this.apply(this.desired, reason, correlationId, undefined, "allowed", this.withheldKeys);
     return !this.unrecorded;
   }
 
@@ -400,9 +406,25 @@ class FileModelActivationMemory implements ModelActivationMemory {
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
     additions: "allowed" | "withheld" = "allowed",
   ): void {
-    const { next, saved, overflow, bindings, kept } = this.plan(activated, additions);
+    this.apply(activated, reason, correlationId, removalReasons, additions, new Set());
+  }
+
+  private apply(
+    activated: readonly ActivatedModel[],
+    reason: ActivationRemovalReason,
+    correlationId: string,
+    removalReasons: ReadonlyMap<string, ActivationRemovalReason> | undefined,
+    additions: "allowed" | "withheld",
+    held: ReadonlySet<string>,
+  ): void {
+    const { next, saved, overflow, bindings, kept, withheld } = this.plan(
+      activated,
+      additions,
+      held,
+    );
     this.plannedBindings = bindings;
     this.desired = kept;
+    this.withheldKeys = withheld;
     const removed = this.removalsByReason(next, reason, removalReasons);
     const removedCount = [...removed.values()].reduce((sum, count) => sum + count, 0);
     const stale = this.rewritePending;
@@ -410,6 +432,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
       // Nothing to write, but a rebind to an identical stored value is still worth remembering.
       this.commitBindings();
       this.unrecorded = false;
+      // An addition refused for capacity needs no write, but it is still reported, never silent.
+      if (overflow > 0) this.logChange("discarded", "capacity", overflow, correlationId);
       return;
     }
     if (this.write(next, correlationId)) {
@@ -443,6 +467,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
   private plan(
     activated: readonly ActivatedModel[],
     additions: "allowed" | "withheld",
+    held: ReadonlySet<string>,
   ): {
     readonly next: Map<string, StoredActivation>;
     readonly saved: number;
@@ -450,10 +475,13 @@ class FileModelActivationMemory implements ModelActivationMemory {
     readonly bindings: Map<string, Binding>;
     /** The activated models a later settle replays: a model past the capacity stays, unsaved. */
     readonly kept: ActivatedModel[];
+    /** The models whose changed binding was kept out of the record in this plan. */
+    readonly withheld: Set<string>;
   } {
     const next = new Map<string, StoredActivation>();
     const bindings = new Map<string, Binding>();
     const kept: ActivatedModel[] = [];
+    const withheld = new Set<string>();
     const before = new Set(
       this.desired.map((model) => modelDigest(this.options.installationId, model.provider.modelId)),
     );
@@ -467,22 +495,25 @@ class FileModelActivationMemory implements ModelActivationMemory {
         if (stillWanted(additions, before, key)) kept.push(model);
         continue;
       }
-      const planned = this.planModel(key, model, additions);
+      const planned = this.planModel(key, model, additions, held);
+      if (planned.withheld) withheld.add(key);
       if (planned.entry !== undefined) next.set(key, planned.entry);
       if (planned.binding !== undefined) bindings.set(key, planned.binding);
       if (planned.saved) saved += 1;
       // A withheld sync drops an addition it never saw before, but keeps what was already wanted.
       if (planned.entry !== undefined || stillWanted(additions, before, key)) kept.push(model);
     }
-    return { next, saved, overflow, bindings, kept };
+    return { next, saved, overflow, bindings, kept, withheld };
   }
 
   /** The entry one model needs: its stored one when still bound the same way, else a new one. */
   private planModel(
     key: string,
     model: ActivatedModel,
-    additions: "allowed" | "withheld",
-  ): { entry?: StoredActivation; binding?: Binding; saved: boolean } {
+    requested: "allowed" | "withheld",
+    held: ReadonlySet<string>,
+  ): { entry?: StoredActivation; binding?: Binding; saved: boolean; withheld?: true } {
+    const additions = held.has(key) ? "withheld" : requested;
     const known = this.durable.get(key);
     if (known !== undefined && this.unchanged(key, model.provider))
       return { entry: known, saved: false };
@@ -495,7 +526,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
     if (known !== undefined && sameBinding(known, entry))
       return { entry: known, binding, saved: false };
     // Withheld, a changed binding keeps the stored entry: the model is live, and nothing is added.
-    if (known !== undefined && additions === "withheld") return { entry: known, saved: false };
+    if (known !== undefined && additions === "withheld")
+      return { entry: known, saved: false, withheld: true };
     return { entry, binding, saved: true };
   }
 

@@ -431,21 +431,45 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     });
 
     it("keeps the bindings of restored models when the startup rewrite had to withdraw", () => {
-      const keyed = (modelId: string): ModelProviderConfig =>
-        provider({ modelId, apiKey: `sk-test-bound-${modelId}` });
+      const keyed = (modelId: string, apiKey = `sk-test-bound-${modelId}`): ModelProviderConfig =>
+        provider({ modelId, apiKey });
       const models = [keyed("chat-a"), keyed("chat-b")];
       activate(memory(), ...models);
       writer.failures = 1;
       const running = memory();
-      expect(restoredIds(running, ...models)).toEqual(["chat-a", "chat-b"]);
+      // chat-b's credential changed, so the record needs a real rewrite that the disk refuses.
+      const first = keyed("chat-a");
+      expect(restoredIds(running, first, keyed("chat-b", "sk-test-rotated-b"))).toEqual(["chat-a"]);
       events.length = 0;
-      running.sync(
-        models.map((entry) => ({ provider: entry, activatedAt: ACTIVATED_AT })),
-        "invalidated",
-        "corr-after",
-      );
+      running.sync([{ provider: first, activatedAt: ACTIVATED_AT }], "invalidated", "corr-after");
       expect(changeLines()).toEqual([]);
-      expect(restoredIds(memory(), ...models)).toEqual(["chat-a", "chat-b"]);
+      expect(restoredIds(memory(), ...models)).toEqual(["chat-a"]);
+    });
+
+    it("leaves a valid record in place when the redundant startup write fails", () => {
+      activate(memory(), provider());
+      writer.failures = 2;
+      const running = memory();
+      expect(restoredIds(running, provider())).toEqual(["chat-a"]);
+      expect(running.recorded()).toBe(true);
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(true);
+      expect(restoredIds(memory(), provider())).toEqual(["chat-a"]);
+    });
+
+    it("keeps a withheld replacement binding out of a later settle and restart", () => {
+      const running = memory();
+      activate(running, provider());
+      const rotated = provider({ apiKey: "sk-test-rotated-in-failed-change" });
+      running.sync(
+        [{ provider: rotated, activatedAt: ACTIVATED_AT }],
+        "invalidated",
+        "corr-failed-change",
+        undefined,
+        "withheld",
+      );
+      expect(running.settle("deactivated", "corr-settle")).toBe(true);
+      expect(restoredIds(memory(), provider())).toEqual(["chat-a"]);
+      expect(restoredIds(memory(), rotated)).toEqual([]);
     });
 
     it("keeps a changed binding outstanding after its write failed", () => {
@@ -518,6 +542,23 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       );
       // What was reported saved is exactly what comes back.
       expect(restoredIds(memory(), ...providersOf(513))).toHaveLength(512);
+    });
+
+    it("reports one more activation at the bound even when no file write is needed", () => {
+      kdf.fake = true;
+      const running = memory();
+      activate(running, ...providersOf(512));
+      events.length = 0;
+      activate(running, ...providersOf(513));
+      expect(changeLines()).toContainEqual(
+        expect.objectContaining({
+          change: "discarded",
+          reason: "capacity",
+          count: 1,
+          correlationId: "corr-activate",
+        }),
+      );
+      kdf.fake = false;
     });
   });
 
