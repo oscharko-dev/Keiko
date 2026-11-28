@@ -16,7 +16,7 @@ import {
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
 import {
-  holdUnbudgetedBrowserStream,
+  admitDirectBrowserStream,
   resetBrowserStreamCapacityForTests,
   sharedStreamConnectionBudget,
 } from "../../../../../lib/browser-stream-capacity";
@@ -127,7 +127,10 @@ describe("BrowserWidget", () => {
   // Review #4573 finding 11: the session's event stream is a long-lived direct connection.
   it("counts its event stream against the persistent connection budget until it unmounts", async () => {
     resetBrowserStreamCapacityForTests();
-    holdUnbudgetedBrowserStream();
+    admitDirectBrowserStream(
+      () => undefined,
+      () => undefined,
+    );
     vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
     const before = sharedStreamConnectionBudget();
     const view = render(<BrowserWidget />);

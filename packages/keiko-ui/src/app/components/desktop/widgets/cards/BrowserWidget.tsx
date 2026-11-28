@@ -22,7 +22,7 @@ import {
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
-import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
+import { admitDirectBrowserStream } from "../../../../../lib/browser-stream-capacity";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   BrowserEventEnvelope,
@@ -229,16 +229,27 @@ function useBrowserEventStream(
       eventSourceRef.current = null;
       return;
     }
-    const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
-    if (source === null) return;
-    // A direct stream outside the shared pool: counted so finite requests keep a connection.
-    const releaseStream = holdUnbudgetedBrowserStream();
-    attachBrowserEventListeners(source, pushEvent);
-    attachBrowserStreamErrorHandler(source, setError, t);
-    eventSourceRef.current = source;
+    let source: EventSource | null = null;
+    // A direct stream outside the shared pool: it opens only once an origin-wide slot admits it, so
+    // finite requests keep a connection however many tabs and widgets stream.
+    const admission = admitDirectBrowserStream(
+      () => {
+        source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
+        if (source === null) return;
+        attachBrowserEventListeners(source, pushEvent);
+        attachBrowserStreamErrorHandler(source, setError, t);
+        eventSourceRef.current = source;
+      },
+      () => {
+        setError({
+          code: "EVENT_STREAM_CLOSED",
+          message: t("browserWidget.error.streamDisconnected"),
+        });
+      },
+    );
     return (): void => {
-      source.close();
-      releaseStream();
+      source?.close();
+      admission.release();
       eventSourceRef.current = null;
     };
   }, [session, pushEvent, setError, eventSourceRef, t]);

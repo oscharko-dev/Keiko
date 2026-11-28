@@ -1,16 +1,23 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "./client-diagnostics";
 import {
-  holdUnbudgetedBrowserStream,
+  admitDirectBrowserStream,
   resetBrowserStreamCapacityForTests,
   sharedStreamConnectionBudget,
 } from "./browser-stream-capacity";
 import { useSSE } from "./useSSE";
+
+// This suite drives the document-local admission path: the stream opens synchronously. Origin-wide
+// admission through Web Locks is pinned in browser-stream-capacity.test.ts.
+beforeEach(() => {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+});
 
 interface StreamRepair {
   readonly acknowledged: boolean;
@@ -193,7 +200,10 @@ describe("useSSE", () => {
   // Review #4573 finding 11: the run stream is a long-lived connection outside the shared pool.
   it("counts its open run stream against the persistent connection budget until it closes", () => {
     resetBrowserStreamCapacityForTests();
-    holdUnbudgetedBrowserStream();
+    admitDirectBrowserStream(
+      () => undefined,
+      () => undefined,
+    );
     vi.stubGlobal("EventSource", FakeEventSource);
     const before = sharedStreamConnectionBudget();
     const view = renderHook(() => useSSE("run 1"));
@@ -201,6 +211,35 @@ describe("useSSE", () => {
     expect(sharedStreamConnectionBudget()).toBe(before - 1);
     view.unmount();
     expect(sharedStreamConnectionBudget()).toBe(before);
+    resetBrowserStreamCapacityForTests();
+  });
+
+  // #4573: a direct stream is admitted against the origin-wide ceiling before it connects.
+  it("waits for an origin-wide slot before opening the run stream", async () => {
+    resetBrowserStreamCapacityForTests();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const held = Array.from({ length: 4 }, () =>
+      admitDirectBrowserStream(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const view = renderHook(() => useSSE("run 1"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(FakeEventSource.instances).toHaveLength(0);
+    held[0]?.release();
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    view.unmount();
+    held.forEach((admission) => admission.release());
     resetBrowserStreamCapacityForTests();
   });
 

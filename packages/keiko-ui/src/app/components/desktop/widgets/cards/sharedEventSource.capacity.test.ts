@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOriginLocksFixture } from "@/test-utils/origin-locks-fixture";
 import {
   acquirePersistentBrowserStreamCapacity,
-  holdUnbudgetedBrowserStream,
+  admitDirectBrowserStream,
   resetBrowserStreamCapacityForTests,
 } from "@/lib/browser-stream-capacity";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -78,11 +78,16 @@ describe("shared EventSource with actual origin leases", () => {
 
   // U-37: the shared pool shrinks by one connection per unshared stream, and grows back.
   it("holds fewer shared connections while unshared streams are open", async () => {
-    const releaseHeld = [1, 2].map(() => holdUnbudgetedBrowserStream());
+    const releaseHeld = [1, 2].map(() =>
+      admitDirectBrowserStream(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     const releases = Array.from({ length: 3 }, (_, index) => subscribeRoot(index));
     await vi.advanceTimersByTimeAsync(0);
     expect(CapacityEventSource.instances.filter((source) => !source.closed)).toHaveLength(2);
-    releaseHeld.forEach((release) => release());
+    releaseHeld.forEach((release) => release.release());
     await vi.advanceTimersByTimeAsync(0);
     expect(CapacityEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
     releases.forEach((release) => release());

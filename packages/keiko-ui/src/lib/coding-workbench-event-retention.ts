@@ -10,7 +10,8 @@ import {
   parseCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-runtime-api";
 import {
-  holdUnbudgetedBrowserStream,
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
   reserveInteractiveBrowserStreamCapacity,
 } from "./browser-stream-capacity";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
@@ -301,33 +302,35 @@ export function useCodingWorkbenchRuntimeEventStream(
   useEffect(() => {
     if (runId === undefined) return;
     const releaseInteractive = reserveInteractiveBrowserStreamCapacity();
-    const releaseStream = holdUnbudgetedBrowserStream();
-    const releaseCapacity = (): void => {
-      releaseStream();
-      releaseInteractive();
+    let session: CodingWorkbenchRuntimeStreamSession | undefined;
+    let admission: DirectStreamAdmission | undefined;
+    const openSession = (): void => {
+      try {
+        session = createCodingWorkbenchRuntimeStreamSession(
+          runId,
+          {
+            onOpen: () => handlersRef.current.onOpen(),
+            onEvents: (events, cursor, resnapshot) =>
+              handlersRef.current.onEvents(events, cursor, resnapshot),
+            onError: (error) => handlersRef.current.onError(error),
+            onReconnecting: () => handlersRef.current.onReconnecting?.(),
+            onReset: () => handlersRef.current.onReset(),
+          },
+          { staleAfterMs },
+        );
+      } catch (error) {
+        queueMicrotask(() => admission?.release());
+        handlersRef.current.onError(error);
+      }
     };
-    let session: CodingWorkbenchRuntimeStreamSession;
-    try {
-      session = createCodingWorkbenchRuntimeStreamSession(
-        runId,
-        {
-          onOpen: () => handlersRef.current.onOpen(),
-          onEvents: (events, cursor, resnapshot) =>
-            handlersRef.current.onEvents(events, cursor, resnapshot),
-          onError: (error) => handlersRef.current.onError(error),
-          onReconnecting: () => handlersRef.current.onReconnecting?.(),
-          onReset: () => handlersRef.current.onReset(),
-        },
-        { staleAfterMs },
-      );
-    } catch (error) {
-      releaseCapacity();
-      handlersRef.current.onError(error);
-      return;
-    }
+    // The stream opens only once an origin-wide connection slot admits it.
+    admission = admitDirectBrowserStream(openSession, () => {
+      handlersRef.current.onError(new Error("Workbench event stream capacity unavailable"));
+    });
     return (): void => {
-      session.close();
-      releaseCapacity();
+      session?.close();
+      admission?.release();
+      releaseInteractive();
     };
   }, [epoch, runId, staleAfterMs]);
 }

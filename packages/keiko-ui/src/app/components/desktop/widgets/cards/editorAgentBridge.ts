@@ -29,7 +29,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { postEditorAgentActionResult } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
-import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
+import {
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
+} from "../../../../../lib/browser-stream-capacity";
 import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
@@ -686,10 +689,17 @@ function handleEditorAgentFrame(event: Event): void {
   }
 }
 
-let releaseEditorAgentStream: (() => void) | null = null;
+let editorAgentAdmission: DirectStreamAdmission | null = null;
+const EDITOR_AGENT_ADMISSION_RETRY_MS = 5_000;
 
 function closeEditorAgentEventSource(): void {
-  if (editorAgentEventSource === null) return;
+  if (editorAgentEventSource === null) {
+    // A stream still waiting for an origin-wide slot is cancelled with its admission.
+    editorAgentAdmission?.release();
+    editorAgentAdmission = null;
+    editorAgentConnectedSessionKey = null;
+    return;
+  }
   if (editorAgentActionListener !== null) {
     editorAgentEventSource.removeEventListener("editor-agent:action", editorAgentActionListener);
   }
@@ -697,8 +707,8 @@ function closeEditorAgentEventSource(): void {
     editorAgentEventSource.removeEventListener("editor-agent:result", editorAgentResultListener);
   }
   editorAgentEventSource.close();
-  releaseEditorAgentStream?.();
-  releaseEditorAgentStream = null;
+  editorAgentAdmission?.release();
+  editorAgentAdmission = null;
   editorAgentEventSource = null;
   editorAgentActionListener = null;
   editorAgentResultListener = null;
@@ -719,7 +729,7 @@ function reconcileEditorAgentEventSource(): void {
     closeEditorAgentEventSource();
     return;
   }
-  if (editorAgentEventSource !== null && editorAgentConnectedSessionKey === nextKey) {
+  if (editorAgentConnectedSessionKey === nextKey) {
     // The connected set already matches; nothing to do.
     return;
   }
@@ -727,15 +737,33 @@ function reconcileEditorAgentEventSource(): void {
   if (typeof EventSource === "undefined") return;
   const url = editorAgentEventUrl(readySessions);
   if (url === null) return;
+  editorAgentConnectedSessionKey = nextKey;
+  // The stream opens only once an origin-wide connection slot admits it.
+  editorAgentAdmission = admitDirectBrowserStream(
+    () => openEditorAgentEventSource(url),
+    () => {
+      editorAgentAdmission = null;
+      editorAgentConnectedSessionKey = null;
+      setTimeout(scheduleEditorAgentReconcile, EDITOR_AGENT_ADMISSION_RETRY_MS);
+    },
+  );
+}
+
+function openEditorAgentEventSource(url: string): void {
   const source = createSameOriginApiEventSource(url);
-  if (source === null) return;
+  if (source === null) {
+    queueMicrotask(() => {
+      editorAgentAdmission?.release();
+      editorAgentAdmission = null;
+      editorAgentConnectedSessionKey = null;
+    });
+    return;
+  }
   editorAgentActionListener = handleEditorAgentFrame;
   editorAgentResultListener = handleEditorAgentFrame;
   source.addEventListener("editor-agent:action", editorAgentActionListener);
   source.addEventListener("editor-agent:result", editorAgentResultListener);
   editorAgentEventSource = source;
-  releaseEditorAgentStream = holdUnbudgetedBrowserStream();
-  editorAgentConnectedSessionKey = nextKey;
 }
 
 /**

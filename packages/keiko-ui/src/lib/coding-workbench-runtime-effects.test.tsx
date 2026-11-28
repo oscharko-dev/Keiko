@@ -1,6 +1,6 @@
 import { StrictMode, useReducer } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
   useCodingWorkbenchRuntimeStream,
@@ -33,6 +33,12 @@ import {
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { fetchCodingWorkbenchSidecarGatewayProfile } from "./coding-workbench-provider-api";
+
+// This suite drives the document-local admission path: the stream opens synchronously. Origin-wide
+// admission through Web Locks is pinned in browser-stream-capacity.test.ts.
+beforeEach(() => {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+});
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {

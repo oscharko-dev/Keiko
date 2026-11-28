@@ -22,7 +22,7 @@ import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import {
-  holdUnbudgetedBrowserStream,
+  admitDirectBrowserStream,
   resetBrowserStreamCapacityForTests,
   sharedStreamConnectionBudget,
 } from "../../../../../lib/browser-stream-capacity";
@@ -30,6 +30,12 @@ import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
 } from "../../../../../lib/client-diagnostics";
+
+// This suite drives the document-local admission path: the stream opens synchronously. Origin-wide
+// admission through Web Locks is pinned in browser-stream-capacity.test.ts.
+beforeEach(() => {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+});
 
 expect.extend(toHaveNoViolations);
 
@@ -823,7 +829,10 @@ describe("RelationshipEdgeBadge a11y (25 mixed states)", () => {
   // Review #4573 finding 11: the activity stream is a long-lived direct connection.
   it("counts its open stream against the persistent connection budget until it unmounts", () => {
     resetBrowserStreamCapacityForTests();
-    holdUnbudgetedBrowserStream();
+    admitDirectBrowserStream(
+      () => undefined,
+      () => undefined,
+    );
     const before = sharedStreamConnectionBudget();
     const view = render(<HookHarness onState={() => undefined} />);
     expect(FakeEventSource.instances).toHaveLength(1);

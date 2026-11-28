@@ -25,7 +25,10 @@ import {
   isEditorVerificationEvent,
   isEditorVerificationRun,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
+import {
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
+} from "../../../../../lib/browser-stream-capacity";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
   fetchVerificationCatalog,
@@ -430,7 +433,13 @@ function scheduleSharedSourceReconnect(): void {
 }
 
 // Releases the connection the shared verification stream holds outside the shared stream pool.
-let releaseSharedSourceBudget = (): void => undefined;
+let sharedSourceAdmission: DirectStreamAdmission | null = null;
+
+function releaseSharedSourceBudget(): void {
+  const admission = sharedSourceAdmission;
+  sharedSourceAdmission = null;
+  admission?.release();
+}
 
 function handleSharedSourceLoss(source: EventSource): void {
   if (sharedSource !== source) return;
@@ -444,7 +453,21 @@ function handleSharedSourceLoss(source: EventSource): void {
 }
 
 function createSharedSource(): void {
-  if (sharedSource !== null || !hasActiveRun()) return;
+  if (sharedSource !== null || sharedSourceAdmission?.active === true || !hasActiveRun()) return;
+  // The stream opens only once an origin-wide connection slot admits it (see the capacity module).
+  sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, () => {
+    sharedSourceAdmission = null;
+    setDependentSourceHealth("reconnecting");
+    scheduleSharedSourceReconnect();
+  });
+  void waitForSharedSource();
+}
+
+function connectSharedSource(): void {
+  if (sharedSource !== null || !hasActiveRun()) {
+    queueMicrotask(releaseSharedSourceBudget);
+    return;
+  }
   let source: EventSource | null;
   try {
     source = createSameOriginApiEventSource(EVENTS_URL);
@@ -452,13 +475,13 @@ function createSharedSource(): void {
     source = null;
   }
   if (source === null) {
+    queueMicrotask(releaseSharedSourceBudget);
     setDependentSourceHealth("reconnecting");
     scheduleSharedSourceReconnect();
     return;
   }
   sharedSource = source;
   sharedSourceOpen = false;
-  releaseSharedSourceBudget = holdUnbudgetedBrowserStream();
   source.addEventListener("open", () => {
     if (sharedSource !== source) return;
     sharedSourceOpen = true;

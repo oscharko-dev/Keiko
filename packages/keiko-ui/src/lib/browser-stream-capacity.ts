@@ -37,35 +37,143 @@ export function reserveInteractiveBrowserStreamCapacity(): () => void {
 
 // A browser allows six HTTP/1.1 connections per origin. Persistent streams may hold four of them;
 // the other two stay free so a finite read (a run status read, readiness, a snapshot) never queues
-// behind streams until its own deadline expires (U-37).
+// behind streams until its own deadline expires (U-37). The ceiling is enforced at admission by an
+// origin-wide Web Locks pool shared by every document of the origin: the shared event-source pool
+// and every direct stream take a lease before they open a connection.
 export const PERSISTENT_STREAM_CONNECTION_CEILING = 4;
 // What the shared pool may hold when nothing else is open.
 const SHARED_STREAM_CONNECTIONS = 3;
-let unbudgetedStreams = 0;
+// Direct streams and the shared pool draw from the same lock names, so together they never exceed
+// the ceiling; the shared pool only ever uses the first SHARED_STREAM_CONNECTIONS of them.
+let directStreams = 0;
+let admittedDirectStreams = 0;
+
+function requestDirectSlot(
+  admit: () => void,
+  deny: () => void,
+  correlationId: string | undefined,
+): () => void {
+  if (typeof navigator === "undefined" || navigator.locks === undefined) {
+    if (admittedDirectStreams >= PERSISTENT_STREAM_CONNECTION_CEILING) {
+      deny();
+    } else {
+      reportUnsupportedCapacity();
+      admit();
+    }
+    return () => undefined;
+  }
+  return acquirePersistentBrowserStreamCapacity(
+    admit,
+    (reason) => {
+      if (reason === "unavailable") deny();
+    },
+    {
+      yieldable: false,
+      slots: PERSISTENT_STREAM_CONNECTION_CEILING,
+      ...(correlationId === undefined ? {} : { correlationId }),
+    },
+  );
+}
+
+/** A direct stream's slot: `active` while it awaits or holds a slot; `release` gives it up. */
+export interface DirectStreamAdmission {
+  readonly active: boolean;
+  readonly release: () => void;
+}
 
 /**
- * Account for a long-lived stream that opens its own connection outside the shared stream pool (the
- * run event stream, the authenticated activity stream, the editor agent bridge). The shared pool
- * gives up one connection per such stream, so all persistent streams together stay within
- * {@link PERSISTENT_STREAM_CONNECTION_CEILING}. The returned release callback is idempotent.
+ * Admit a long-lived stream that opens its own connection outside the shared stream pool (the run
+ * event stream, the Workbench streams, the Browser and editor streams). The stream may open only
+ * after `onAdmitted` runs: it holds one of the origin's persistent connection slots until the
+ * returned admission is released, so no mix of documents and widgets can take more than
+ * {@link PERSISTENT_STREAM_CONNECTION_CEILING} connections. `onDenied` runs when no slot became
+ * free in time; the caller treats it as a failed connection and retries on its own schedule. The
+ * shared pool gives up its slots at once while a direct stream is pending or admitted. Without Web
+ * Locks the ceiling is enforced for this document only, and a callback may run before this
+ * function returns, so callers test `active` rather than a stored handle. `release` is idempotent
+ * and also cancels a pending admission.
  */
-export function holdUnbudgetedBrowserStream(): () => void {
-  unbudgetedStreams += 1;
+export function admitDirectBrowserStream(
+  onAdmitted: () => void,
+  onDenied: () => void,
+  correlationId?: string,
+): DirectStreamAdmission {
+  directStreams += 1;
   notifyCapacityChange();
-  let released = false;
-  return (): void => {
-    if (released) return;
-    released = true;
-    unbudgetedStreams = Math.max(0, unbudgetedStreams - 1);
+  let settled = false;
+  let admitted = false;
+  const finish = (): void => {
+    if (settled) return;
+    settled = true;
+    directStreams = Math.max(0, directStreams - 1);
+    if (admitted) admittedDirectStreams = Math.max(0, admittedDirectStreams - 1);
     notifyCapacityChange();
+  };
+  const admit = (): void => {
+    if (settled) return;
+    admitted = true;
+    admittedDirectStreams += 1;
+    onAdmitted();
+  };
+  const deny = (): void => {
+    if (settled) return;
+    finish();
+    onDenied();
+  };
+  const releaseLease = requestDirectSlot(admit, deny, correlationId);
+  return {
+    get active(): boolean {
+      return !settled;
+    },
+    release: (): void => {
+      finish();
+      releaseLease();
+    },
   };
 }
 
-/** How many connections the shared stream pool may hold now; at least one stays available. */
+/**
+ * Promise form of {@link admitDirectBrowserStream} for a stream a caller awaits: it resolves with
+ * the release callback once a slot admits the stream, or with `null` when none became free in time
+ * or the signal aborted first.
+ */
+export function admitDirectBrowserStreamAsync(
+  signal: AbortSignal,
+  correlationId?: string,
+): Promise<(() => void) | null> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(null);
+      return;
+    }
+    let admission: DirectStreamAdmission | undefined;
+    const cancel = (): void => {
+      admission?.release();
+      resolve(null);
+    };
+    admission = admitDirectBrowserStream(
+      () => {
+        signal.removeEventListener("abort", cancel);
+        resolve(() => admission?.release());
+      },
+      () => {
+        signal.removeEventListener("abort", cancel);
+        resolve(null);
+      },
+      correlationId,
+    );
+    signal.addEventListener("abort", cancel, { once: true });
+  });
+}
+
+/**
+ * How many connections the shared stream pool may hold now. It is zero while direct streams hold
+ * or await the whole ceiling, so the pool yields its last slot instead of exceeding it.
+ */
 export function sharedStreamConnectionBudget(): number {
   return Math.max(
-    1,
-    Math.min(SHARED_STREAM_CONNECTIONS, PERSISTENT_STREAM_CONNECTION_CEILING - unbudgetedStreams),
+    0,
+    Math.min(SHARED_STREAM_CONNECTIONS, PERSISTENT_STREAM_CONNECTION_CEILING - directStreams),
   );
 }
 
@@ -78,7 +186,8 @@ export function subscribeBrowserStreamCapacity(listener: CapacityListener): () =
 
 export function resetBrowserStreamCapacityForTests(): void {
   interactiveReservations = 0;
-  unbudgetedStreams = 0;
+  directStreams = 0;
+  admittedDirectStreams = 0;
   listeners.clear();
   nextPersistentSlot = 0;
   unsupportedCapacityReported = false;
@@ -93,6 +202,7 @@ let unsupportedCapacityReported = false;
 interface PersistentCapacityOptions {
   readonly yieldable?: boolean;
   readonly correlationId?: string;
+  readonly slots?: number;
 }
 
 type PersistentReleaseReason = "expired" | "cancelled" | "unavailable";
@@ -189,20 +299,45 @@ async function leastContendedSlot(locks: LockManager, names: readonly string[]):
   );
 }
 
-async function requestLease(locks: LockManager, lease: PersistentLease): Promise<void> {
+function yieldableSlotName(name: string): boolean {
+  return Number(name.slice(name.lastIndexOf(":") + 1)) < PERSISTENT_STREAM_SLOTS;
+}
+
+// The shared pool rotates over its own slots. A direct stream probes from the top, so it takes the
+// slot only direct streams use first and leaves the shared pool as many slots as possible.
+function leaseSlotNames(directSlots: number | undefined): string[] {
+  const slotName = (index: number): string => `keiko:persistent-stream:${String(index)}`;
+  if (directSlots !== undefined) {
+    return Array.from({ length: directSlots }, (_, offset) => slotName(directSlots - 1 - offset));
+  }
   const start = nextPersistentSlot++ % PERSISTENT_STREAM_SLOTS;
-  const names = Array.from(
-    { length: PERSISTENT_STREAM_SLOTS },
-    (_, offset) => `keiko:persistent-stream:${String((start + offset) % PERSISTENT_STREAM_SLOTS)}`,
+  return Array.from({ length: PERSISTENT_STREAM_SLOTS }, (_, offset) =>
+    slotName((start + offset) % PERSISTENT_STREAM_SLOTS),
   );
+}
+
+async function requestLease(locks: LockManager, lease: PersistentLease): Promise<void> {
+  const names = leaseSlotNames(lease.options.slots);
   for (const name of names) if (await probeSlot(locks, name, lease)) return;
   if (lease.ended) return;
-  const name = await leastContendedSlot(locks, names);
-  await locks.request(name, { signal: lease.abort.signal }, async () => {
-    if (lease.ended) return;
-    lease.granted = true;
-    await holdLease(locks, name, lease);
-  });
+  // The shared pool's slots yield to a waiter, so queueing there always ends. A direct stream also
+  // waits for the slot only direct streams use, because that slot may be the one that frees first;
+  // the first slot granted wins and the other request is withdrawn.
+  const yieldable = await leastContendedSlot(locks, names.filter(yieldableSlotName));
+  const candidates =
+    lease.options.slots === undefined ? [yieldable] : [yieldable, ...names.slice(0, 1)];
+  const waiting = new AbortController();
+  lease.abort.signal.addEventListener("abort", () => waiting.abort(), { once: true });
+  await Promise.allSettled(
+    [...new Set(candidates)].map((name) =>
+      locks.request(name, { signal: waiting.signal }, async () => {
+        if (lease.ended || lease.granted) return;
+        lease.granted = true;
+        waiting.abort();
+        await holdLease(locks, name, lease);
+      }),
+    ),
+  );
 }
 
 /** Hold any free origin slot; healthy non-replayable connections never yield for capacity. */

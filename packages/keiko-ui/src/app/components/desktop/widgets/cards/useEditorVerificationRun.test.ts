@@ -17,6 +17,12 @@ import {
   subscribeEditorProblems,
 } from "./editorProblemsStore";
 
+// This suite drives the document-local admission path: the stream opens synchronously. Origin-wide
+// admission through Web Locks is pinned in browser-stream-capacity.test.ts.
+beforeEach(() => {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+});
+
 const V = EDITOR_VERIFICATION_SCHEMA_VERSION;
 
 class FakeEventSource {

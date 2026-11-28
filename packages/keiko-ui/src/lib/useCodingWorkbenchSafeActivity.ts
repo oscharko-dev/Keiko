@@ -25,7 +25,7 @@ import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
 } from "./coding-app-session-channel-api";
-import { holdUnbudgetedBrowserStream } from "./browser-stream-capacity";
+import { admitDirectBrowserStreamAsync } from "./browser-stream-capacity";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import {
@@ -253,7 +253,11 @@ async function connectActivity(
   // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
   // subscription here turns a later server restart into an error on an already finished task.
   if (controller.signal.aborted || endedBeforeRead) return;
-  const release = holdUnbudgetedBrowserStream();
+  const release = await admitDirectBrowserStreamAsync(controller.signal);
+  if (release === null) {
+    if (controller.signal.aborted) return;
+    throw new Error("Workbench activity stream capacity unavailable");
+  }
   try {
     await streamCodingAppSessionChannelSnapshots({
       signal: controller.signal,

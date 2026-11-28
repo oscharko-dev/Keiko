@@ -32,7 +32,10 @@ import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
-import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
+import {
+  admitDirectBrowserStream,
+  type DirectStreamAdmission,
+} from "../../../../../lib/browser-stream-capacity";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import { secureRandomInt } from "../../../../../lib/secure-random";
 
@@ -466,7 +469,7 @@ export function useRelationshipActivityStream(
 
     let closed = false;
     let es: EventSource | null = null;
-    let releaseStreamBudget: (() => void) | null = null;
+    let streamAdmission: DirectStreamAdmission | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectAttempts = 0;
 
@@ -492,8 +495,8 @@ export function useRelationshipActivityStream(
     function closeStream(): void {
       es?.close();
       es = null;
-      releaseStreamBudget?.();
-      releaseStreamBudget = null;
+      streamAdmission?.release();
+      streamAdmission = null;
     }
 
     function scheduleReconnect(): void {
@@ -511,7 +514,16 @@ export function useRelationshipActivityStream(
     }
 
     function startSSE(): void {
-      if (closed || !visibleRef.current) return;
+      if (closed || !visibleRef.current || streamAdmission?.active === true) return;
+      // The stream opens only once an origin-wide connection slot admits it.
+      streamAdmission = admitDirectBrowserStream(connectSSE, () => {
+        streamAdmission = null;
+        scheduleReconnect();
+      });
+    }
+
+    function connectSSE(): void {
+      if (closed || !visibleRef.current || es !== null) return;
 
       const url =
         workspaceId !== undefined
@@ -520,12 +532,15 @@ export function useRelationshipActivityStream(
 
       try {
         es = createSameOriginApiEventSource(url);
-        if (es === null) return;
+        if (es === null) {
+          queueMicrotask(closeStream);
+          return;
+        }
       } catch {
+        queueMicrotask(closeStream);
         scheduleReconnect();
         return;
       }
-      releaseStreamBudget = holdUnbudgetedBrowserStream();
 
       es.onopen = (): void => {
         reconnectAttempts = 0;

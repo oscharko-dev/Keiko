@@ -5,7 +5,9 @@ import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client
 import {
   acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
-  holdUnbudgetedBrowserStream,
+  admitDirectBrowserStream,
+  admitDirectBrowserStreamAsync,
+  type DirectStreamAdmission,
   PERSISTENT_STREAM_CONNECTION_CEILING,
   sharedStreamConnectionBudget,
   reserveInteractiveBrowserStreamCapacity,
@@ -174,28 +176,94 @@ it("records a failed contention query once without dropping a healthy connection
   stop();
 });
 
-// U-37: three unshared streams (run events, activity stream, editor agent) plus three shared ones
-// filled all six HTTP/1.1 connections of the origin, so a run status read queued until its 10 s
-// deadline. The shared pool now yields one connection per unshared stream.
+// U-37 / #4573: persistent streams of every document of the origin share four connection slots, so
+// two of the six HTTP/1.1 connections stay free for finite reads. The ceiling is enforced when a
+// stream is admitted, not by counting streams after they opened.
 describe("persistent stream connection ceiling", () => {
-  it("leaves two of six origin connections free for finite reads", () => {
-    expect(sharedStreamConnectionBudget()).toBe(3);
-    const releases = [1, 2, 3].map(() => holdUnbudgetedBrowserStream());
-    const [first, ...rest] = releases;
-    expect(sharedStreamConnectionBudget() + releases.length).toBeLessThanOrEqual(
-      PERSISTENT_STREAM_CONNECTION_CEILING,
+  function admitAll(
+    count: number,
+    admitted: Set<number>,
+    denied?: Set<number>,
+  ): DirectStreamAdmission[] {
+    return Array.from({ length: count }, (_, index) =>
+      admitDirectBrowserStream(
+        () => admitted.add(index),
+        () => denied?.add(index),
+      ),
     );
-    expect(sharedStreamConnectionBudget()).toBe(1);
-    first?.();
-    first?.();
-    expect(sharedStreamConnectionBudget()).toBe(2);
-    rest.forEach((release) => release());
+  }
+
+  it("admits at most four direct streams and lets the shared pool yield its last slot", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    expect(sharedStreamConnectionBudget()).toBe(3);
+    const admitted = new Set<number>();
+    const admissions = admitAll(6, admitted);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(admitted.size).toBe(PERSISTENT_STREAM_CONNECTION_CEILING);
+    expect(sharedStreamConnectionBudget()).toBe(0);
+    admissions[0]?.release();
+    admissions[0]?.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(admitted.size).toBe(PERSISTENT_STREAM_CONNECTION_CEILING + 1);
+    admissions.forEach((admission) => admission.release());
     expect(sharedStreamConnectionBudget()).toBe(3);
   });
 
-  it("keeps one shared connection even when many unshared streams are open", () => {
-    const releases = Array.from({ length: 6 }, () => holdUnbudgetedBrowserStream());
-    expect(sharedStreamConnectionBudget()).toBe(1);
-    releases.forEach((release) => release());
+  it("shares the ceiling across documents and with the shared pool", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    let live = 0;
+    let peak = 0;
+    const open = (): void => {
+      live += 1;
+      peak = Math.max(peak, live);
+    };
+    const pool = Array.from({ length: 3 }, () =>
+      acquirePersistentBrowserStreamCapacity(open, () => (live -= 1)),
+    );
+    const documentA = Array.from({ length: 2 }, () => admitDirectBrowserStream(open, vi.fn()));
+    resetBrowserStreamCapacityForTests(); // Another tab starts its own counters, not its locks.
+    const documentB = Array.from({ length: 3 }, () => admitDirectBrowserStream(open, vi.fn()));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(peak).toBeLessThanOrEqual(PERSISTENT_STREAM_CONNECTION_CEILING);
+    expect(live).toBeLessThanOrEqual(PERSISTENT_STREAM_CONNECTION_CEILING);
+    [...pool, ...documentA.map((a) => a.release), ...documentB.map((b) => b.release)].forEach(
+      (stop) => stop(),
+    );
+  });
+
+  it("denies a stream that waits past the acquisition deadline", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    const denied = new Set<number>();
+    const admissions = admitAll(5, new Set<number>(), denied);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect([...denied]).toEqual([4]);
+    expect(admissions[4]?.active).toBe(false);
+    admissions.forEach((admission) => admission.release());
+  });
+
+  it("admits a stream asynchronously and not at all once its signal aborted", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    const controller = new AbortController();
+    const first = admitDirectBrowserStreamAsync(controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    const release = await first;
+    expect(release).not.toBeNull();
+    release?.();
+    controller.abort();
+    await expect(admitDirectBrowserStreamAsync(controller.signal)).resolves.toBeNull();
+  });
+
+  it("falls back to this document's ceiling when Web Locks are unavailable", () => {
+    vi.stubGlobal("navigator", {});
+    const admitted = new Set<number>();
+    const denied = new Set<number>();
+    const admissions = admitAll(5, admitted, denied);
+    expect(admitted.size).toBe(PERSISTENT_STREAM_CONNECTION_CEILING);
+    expect([...denied]).toEqual([4]);
+    admissions.forEach((admission) => admission.release());
   });
 });

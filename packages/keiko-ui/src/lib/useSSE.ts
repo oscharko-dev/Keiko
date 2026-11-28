@@ -12,7 +12,7 @@ import {
   repairLocalCodingAppSessionForStream,
   reportStreamSessionRecovered,
 } from "./coding-app-session-client";
-import { holdUnbudgetedBrowserStream } from "./browser-stream-capacity";
+import { admitDirectBrowserStream, type DirectStreamAdmission } from "./browser-stream-capacity";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -58,7 +58,7 @@ let everObservedEvent = false;
 let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
 // Releases the connection this document's run-event stream holds outside the shared stream pool.
-let releaseSharedEventSourceBudget: (() => void) | null = null;
+let sharedEventSourceAdmission: DirectStreamAdmission | null = null;
 let reconnectTimer: number | undefined;
 let reconnectAttempts = 0;
 // Set once an `onerror` in the current failure streak has a session repair in flight OR
@@ -120,8 +120,8 @@ function closeSharedEventSource(): void {
   sharedEventSource?.close();
   sharedEventSource = null;
   sharedEventSourceLive = false;
-  releaseSharedEventSourceBudget?.();
-  releaseSharedEventSourceBudget = null;
+  sharedEventSourceAdmission?.release();
+  sharedEventSourceAdmission = null;
 }
 
 function reconnectDelay(): number {
@@ -252,11 +252,29 @@ function endFailureStreak(): void {
 }
 
 function openSharedEventSource(): void {
+  if (
+    subscriberCount() === 0 ||
+    documentHidden() ||
+    sharedEventSource !== null ||
+    sharedEventSourceAdmission?.active === true
+  ) {
+    return;
+  }
+  sharedEventSourceAdmission = admitDirectBrowserStream(connectSharedEventSource, () => {
+    sharedEventSourceAdmission = null;
+    notifyAll("error", "Stream disconnected. Attempting to reconnect…");
+    scheduleReconnect();
+  });
+}
+
+function connectSharedEventSource(): void {
   if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
-  closeSharedEventSource();
   sharedEventSource = createSameOriginApiEventSource(runEventsUrl());
-  if (sharedEventSource === null) return;
-  releaseSharedEventSourceBudget = holdUnbudgetedBrowserStream();
+  if (sharedEventSource === null) {
+    // The slot is stored only after a synchronous admission returns, so release it afterwards.
+    queueMicrotask(closeSharedEventSource);
+    return;
+  }
 
   sharedEventSource.onopen = () => {
     endFailureStreak();
