@@ -509,6 +509,12 @@ describe("what a Code Mode program does (U-56)", () => {
     "/* tools.fixture.echo({}) */ return 2;",
     "return `${1 + 1} tools.bash(`;",
     "return obj.tools.shell({});",
+    "return /tools.shell()/u;",
+    "return /tools.automation.create(/.test(x);",
+    "const re = /[/]tools.bash(/g;",
+    "return a.replace(/x/g, '') && /tools.fixture.echo(/.test(s);",
+    "if (ok) /tools.shell(/.test(s);",
+    "return /tools.shell(",
   ])("names no kind where the program only mentions a tool: %s", (code) => {
     expect(program(code).programKind).toBeUndefined();
   });
@@ -518,6 +524,8 @@ describe("what a Code Mode program does (U-56)", () => {
     ["schedule", "return `${await tools.automation.create({})}`;"],
     ["tool", 'return `a${`b${await tools.fixture.echo({ text: "c" })}`}`;'],
     ["command", 'return "it\\"s"; await tools.bash({});'],
+    ["command", "const half = total / 2; await tools.shell({}); return half / 3;"],
+    ["command", "const re = /a\\/b[/]/g; await tools.shell({}); return re;"],
   ] as const)("still reads %s from a call beside literals", (kind, code) => {
     expect(program(code).programKind).toBe(kind);
   });

@@ -128,7 +128,7 @@ function programCode(code: string, start: number, nested: boolean, depth: number
   let i = start;
   let braces = 0;
   while (i < code.length) {
-    const span = programSpan(code, i, depth);
+    const span = programSpan(code, i, depth, out);
     if (span !== undefined) {
       out += span.out;
       i = span.end;
@@ -145,20 +145,88 @@ function programCode(code: string, start: number, nested: boolean, depth: number
 }
 
 // A literal or comment starting at `i`, as the text it leaves in the code; undefined for code.
-function programSpan(code: string, i: number, depth: number): ProgramScan | undefined {
+function programSpan(
+  code: string,
+  i: number,
+  depth: number,
+  before: string,
+): ProgramScan | undefined {
   const ch = code.charAt(i);
-  const next = code.charAt(i + 1);
-  if (ch === '"' || ch === "'") return { out: " ", end: quotedEnd(code, i, ch) };
+  if (ch === '"' || ch === "'") return { out: "0", end: quotedEnd(code, i, ch) };
   if (ch === "`") return templateSpan(code, i, depth);
-  if (ch === "/" && next === "/") {
+  return ch === "/" ? slashStart(code, i, before) : undefined;
+}
+
+// What a `/` starts: a line or block comment, or a division or a regular-expression literal.
+function slashStart(code: string, i: number, before: string): ProgramScan {
+  const next = code.charAt(i + 1);
+  if (next === "/") {
     const eol = code.indexOf("\n", i);
     return { out: " ", end: eol === -1 ? code.length : eol };
   }
-  if (ch === "/" && next === "*") {
+  if (next === "*") {
     const close = code.indexOf("*/", i + 2);
     return { out: " ", end: close === -1 ? code.length : close + 2 };
   }
-  return undefined;
+  return slashSpan(code, i, before);
+}
+
+// A program whose `/` cannot be told apart as a division or a regular-expression literal is not
+// read at all: guessing wrong would label a pattern's text as a call.
+class AmbiguousProgramError extends Error {}
+
+const REGEX_PRECEDING_KEYWORDS: ReadonlySet<string> = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "void",
+  "delete",
+  "new",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+]);
+
+// What a `/` that starts no comment is, from the code before it: a regular expression after an
+// operator, an opening bracket, a separator or a keyword; a division after an operand. After `)` or
+// `}` it depends on the statement around it (`if (x) /re/.test(y)`), so the program stays unread.
+function slashSpan(code: string, i: number, before: string): ProgramScan {
+  const prior = before.trimEnd();
+  const last = prior.charAt(prior.length - 1);
+  if (prior === "" || "(,=:[!&|?{;+-*%<>~^".includes(last)) return regexSpan(code, i);
+  if (last === ")" || last === "}") throw new AmbiguousProgramError();
+  const word = /[\w$]+$/u.exec(prior)?.[0] ?? "";
+  if (REGEX_PRECEDING_KEYWORDS.has(word)) return regexSpan(code, i);
+  return { out: "/", end: i + 1 };
+}
+
+// The literal from its opening slash to the end of its flags, as an operand; an unterminated one is
+// ambiguous.
+function regexSpan(code: string, open: number): ProgramScan {
+  let i = open + 1;
+  let inClass = false;
+  while (i < code.length) {
+    const ch = code.charAt(i);
+    if (ch === "\n") throw new AmbiguousProgramError();
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === "[") inClass = true;
+    else if (ch === "]") inClass = false;
+    else if (ch === "/" && !inClass) {
+      let end = i + 1;
+      while (/[\w$]/u.test(code.charAt(end))) end += 1;
+      return { out: "0", end };
+    }
+    i += 1;
+  }
+  throw new AmbiguousProgramError();
 }
 
 function quotedEnd(code: string, open: number, quote: string): number {
@@ -168,7 +236,7 @@ function quotedEnd(code: string, open: number, quote: string): number {
 }
 
 function templateSpan(code: string, open: number, depth: number): ProgramScan {
-  if (depth >= PROGRAM_MAX_TEMPLATE_DEPTH) return { out: " ", end: code.length };
+  if (depth >= PROGRAM_MAX_TEMPLATE_DEPTH) return { out: "0", end: code.length };
   let out = " ";
   let i = open + 1;
   while (i < code.length && code.charAt(i) !== "`") {
@@ -182,7 +250,7 @@ function templateSpan(code: string, open: number, depth: number): ProgramScan {
       i += 1;
     }
   }
-  return { out, end: Math.min(i + 1, code.length) };
+  return { out: `${out}0`, end: Math.min(i + 1, code.length) };
 }
 
 /** What a Code Mode program does, from the tools its code calls; undefined when it calls none. */
@@ -191,7 +259,13 @@ export function openCodeProgramKind(
 ): CodingSafeActivityProgramKind | undefined {
   const source = record(state.input)?.code;
   if (typeof source !== "string") return undefined;
-  const code = programCode(source, 0, false, 0).out;
+  let code: string;
+  try {
+    code = programCode(source, 0, false, 0).out;
+  } catch (error) {
+    if (error instanceof AmbiguousProgramError) return undefined;
+    throw error;
+  }
   if (PROGRAM_SCHEDULE_CALL.test(code)) return "schedule";
   if (PROGRAM_COMMAND_CALL.test(code)) return "command";
   return PROGRAM_TOOL_CALL.test(code) ? "tool" : undefined;
