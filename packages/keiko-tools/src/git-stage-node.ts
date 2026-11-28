@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { CODING_RUNTIME_GIT_MAX_STAGE_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
+  type CodingRuntimeGitStageCause,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   assertGitStageFileUnchanged,
   GIT_STAGE_FILE_CHANGED,
@@ -775,12 +778,45 @@ const ADMITTED_VALUES: readonly ReadonlySet<string>[] = [
 function attributeRowAdmitted(row: readonly string[]): boolean {
   return row.every((value, index) => ADMITTED_VALUES[index]?.has(value) === true);
 }
+/** The attribute class a verified staging refuses (closed; the value itself is never carried). */
+export type GitStageAttributeRefusal = Exclude<
+  CodingRuntimeGitStageCause,
+  "config-unsupported" | "filter-driver" | "content-conversion"
+>;
+// Row order is STAGE_ATTRIBUTES: filter, working-tree-encoding, ident, crlf, text, eol.
+const ATTRIBUTE_REFUSALS: readonly GitStageAttributeRefusal[] = [
+  "attribute-filter",
+  "attribute-encoding",
+  "attribute-ident",
+  "attribute-line-ending",
+  "attribute-line-ending",
+  "attribute-line-ending",
+];
+function attributeRowRefusal(row: readonly string[]): GitStageAttributeRefusal | undefined {
+  const at = row.findIndex((value, index) => ADMITTED_VALUES[index]?.has(value) !== true);
+  return at < 0 ? undefined : (ATTRIBUTE_REFUSALS[at] ?? "attribute-unreadable");
+}
+/**
+ * The first attribute class that makes a verified staging refuse one of `paths`, or `undefined` when
+ * every rule is admitted. An answer that cannot be read refuses as `attribute-unreadable`.
+ */
+export async function gitStageAttributeRefusal(
+  ctx: GitStageEffectContext,
+  paths: readonly string[],
+): Promise<GitStageAttributeRefusal | undefined> {
+  const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
+  if (values === undefined) return "attribute-unreadable";
+  for (const row of values) {
+    const refusal = attributeRowRefusal(row);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
+}
 export async function gitStageAttributesSupported(
   ctx: GitStageEffectContext,
   paths: readonly string[],
 ): Promise<boolean> {
-  const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
-  return values?.every(attributeRowAdmitted) ?? false;
+  return (await gitStageAttributeRefusal(ctx, paths)) === undefined;
 }
 // The only Git runs the read-only staged-object port may make: the attribute lookup and the object
 // hash from stdin paths (never `-w`), after leading `-c` overrides that are exactly the filter-driver

@@ -16,6 +16,7 @@ import {
   isSafeTaskBranchName,
   type CodingRuntimeGitBranch,
   type CodingRuntimeGitResult,
+  type CodingRuntimeGitStageCause,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   isVerifiedCommitResult,
@@ -1345,11 +1346,33 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
   "proposal-limit":
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
-  // #4068: Git for Windows sets core.autocrlf=true for the whole system, so every stage there was
-  // refused and the model guessed at file locks and hooks. Since #4491 a file whose conversion
-  // checks out its verified bytes again is staged; this names what is still refused.
+  // #4068, #4491: a refused staging names its closed cause (`STAGE_CAUSE_GUIDANCE`); this text only
+  // covers a refusal that carries none (an older record). It never asks the model to run
+  // `git config`: the sandbox refuses it and the setting is the operator's.
   "unsupported-transformation":
-    "Git would change these files' bytes while staging them, and the stored form would not check out as the bytes Keiko verified: a file mixes CRLF and LF line breaks while core.autocrlf is true and its staged version holds no CRLF, has CRLF line breaks while core.autocrlf is input, the effective core.safecrlf is not false, or a .gitattributes text, eol, crlf, filter, ident or working-tree-encoding rule applies. Do not retry with the same bytes. If a file you wrote mixes line breaks, rewrite it with the line breaks the file already uses (CRLF in a CRLF checkout) and propose again; otherwise report to the operator that this repository must opt out locally, for example with `git config core.autocrlf false`, before Keiko can stage and commit here.",
+    "Git would change these files' bytes while staging them, and the stored form would not check out as the bytes Keiko verified. Do not retry with the same bytes. If a file you wrote mixes CRLF and LF line breaks, rewrite it with the line breaks the file already uses and propose again; otherwise report to the operator that this repository's Git configuration or attribute rules must change before Keiko can stage here.",
+};
+
+// The closed cause of an `unsupported-transformation` stage refusal (#4491), each with the one step
+// that fits it. A setting or an attribute rule is the operator's to change; Keiko's sandbox refuses
+// `git config`, so a model is never told to run it. No path or value is echoed.
+const STAGE_CAUSE_GUIDANCE: Readonly<Record<CodingRuntimeGitStageCause, string>> = {
+  "config-unsupported":
+    "Keiko could not read this repository's line-ending configuration, or it holds a value verified staging does not admit (core.safecrlf is not false, an unknown core.autocrlf value, or the read itself failed). Other bytes will not help. Report it to the operator: only they can change that Git setting, and you cannot change it from here.",
+  "filter-driver":
+    "A configured Git filter driver (filter.<name>.clean, smudge or process) cannot be neutralised for staging. Other bytes will not help. Report it to the operator: the driver configuration is theirs to change.",
+  "attribute-filter":
+    "A Git attribute rule applies a filter to at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files, such as one extension. Stage the files the rule does not match, and report to the operator that the rule must change before the others can be staged.",
+  "attribute-encoding":
+    "A Git attribute rule applies a working-tree-encoding to at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files. Stage the other files, and report to the operator that the rule must change before these can be staged.",
+  "attribute-ident":
+    "A Git attribute rule applies ident expansion to at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files. Stage the other files, and report to the operator that the rule must change before these can be staged.",
+  "attribute-line-ending":
+    "A Git attribute rule sets a line-ending conversion (crlf, or a text or eol value Keiko does not admit) for at least one requested file. The rule may come from .gitattributes, .git/info/attributes or a global attributes file, and may match only some files, such as one extension. Stage the other files, and report to the operator that the rule must change before these can be staged.",
+  "attribute-unreadable":
+    "Git could not report the attribute rules for the requested files, so staging cannot be verified. Propose again once; if it repeats, report it to the operator.",
+  "content-conversion":
+    "At least one requested file would not round-trip under the effective line-ending mode: it mixes CRLF and LF line breaks, or its line breaks differ from what Git would store. Rewrite the file with the line breaks it already uses (CRLF in a CRLF file, LF in an LF file) and propose again.",
 };
 
 // An unstage proposal is refused for its own reasons (#3902 AC2).
@@ -1397,12 +1420,21 @@ const STATUS_TRUNCATED_GUIDANCE =
 
 function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
   if (result.kind === "status" && result.truncated) return { guidance: STATUS_TRUNCATED_GUIDANCE };
-  const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
   const guidance =
     (result.kind === "stage" || result.kind === "unstage") && result.status === "blocked"
-      ? table[result.reason]
+      ? blockedGuidance(result)
       : undefined;
   return guidance === undefined ? {} : { guidance };
+}
+
+// A closed cause names the one step that fits it; without one the refusal reason's text applies.
+function blockedGuidance(
+  result: Extract<CodingRuntimeGitResult, { readonly kind: "stage" | "unstage" }>,
+): string | undefined {
+  if (result.kind === "stage" && result.cause !== undefined)
+    return STAGE_CAUSE_GUIDANCE[result.cause];
+  const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
+  return table[result.reason];
 }
 
 const VERIFICATION_FAILURE_KEYS: ReadonlySet<string> = new Set([

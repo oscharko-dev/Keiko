@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   CODING_RUNTIME_GIT_MAX_PATHS,
   CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
+  CODING_RUNTIME_GIT_STAGE_CAUSES,
   isCodingRuntimeGitResult,
   normalizePersistedCodingRuntimeGitResult,
 } from "./coding-runtime-git.js";
+import { activityLogOperationSchema } from "./observability.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 const pairs = [
   ["ready", "none"],
@@ -38,6 +40,39 @@ describe("closed runtime Git evidence", () => {
         expect(isCodingRuntimeGitResult({ ...stage, status, reason })).toBe(valid);
       }
     }
+  });
+  // #4491: the closed cause of an unsupported-transformation refusal, and only there.
+  it("admits a closed cause on a stage unsupported-transformation refusal only", () => {
+    const refused = { ...stage, status: "blocked", reason: "unsupported-transformation" };
+    for (const cause of CODING_RUNTIME_GIT_STAGE_CAUSES) {
+      expect(isCodingRuntimeGitResult({ ...refused, cause })).toBe(true);
+    }
+    expect(isCodingRuntimeGitResult({ ...refused, cause: "bogus" })).toBe(false);
+    expect(
+      isCodingRuntimeGitResult({
+        ...stage,
+        status: "blocked",
+        reason: "policy-block",
+        cause: "filter-driver",
+      }),
+    ).toBe(false);
+    expect(
+      isCodingRuntimeGitResult({
+        ...refused,
+        kind: "unstage",
+        proposalId: "unstage-1",
+        cause: "filter-driver",
+      }),
+    ).toBe(false);
+  });
+  // The activity-log registration lists the causes as a literal (its parser reads literals); it must
+  // never drift from the contract's closed list.
+  it("keeps the activity-log stageCause vocabulary equal to the contract's causes", () => {
+    const field = activityLogOperationSchema("git.runtime-action")?.fields.stageCause;
+    expect(field).toMatchObject({ dataClass: "closed-enum", required: false });
+    expect([...((field as { values?: readonly string[] }).values ?? [])].sort()).toEqual(
+      [...CODING_RUNTIME_GIT_STAGE_CAUSES].sort(),
+    );
   });
   // U-28: the request carries at most CODING_RUNTIME_GIT_MAX_PATHS entries, but the proposal a
   // directory expands to binds up to CODING_RUNTIME_GIT_MAX_STAGE_PATHS files.

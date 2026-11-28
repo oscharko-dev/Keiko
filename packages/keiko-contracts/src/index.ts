@@ -5245,6 +5245,7 @@ export type {
   CodingRuntimeGitStatus,
   CodingRuntimeGitDiff,
   CodingRuntimeGitStage,
+  CodingRuntimeGitStageCause,
   CodingRuntimeGitUnstage,
   CodingRuntimeGitSync,
   CodingRuntimeGitBranch,

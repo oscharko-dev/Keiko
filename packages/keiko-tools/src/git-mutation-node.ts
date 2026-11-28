@@ -20,6 +20,7 @@ import type {
   GitDeliveryExecutionResult,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import type { CodingRuntimeGitStageCause } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   buildAbortArgv,
   buildBranchCreateArgv,
@@ -79,7 +80,7 @@ import {
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import {
   stageExactFiles,
-  gitStageAttributesSupported,
+  gitStageAttributeRefusal,
   gitStageFilesSupported,
   filterDriversOverridable,
   unstageExactFiles,
@@ -922,16 +923,23 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
   };
 }
 
+/**
+ * What a verified staging of `paths` can do: `supported`, or the one closed cause it refuses for
+ * (the first found, in the order configuration, filter driver, attribute rule, file content).
+ */
+export type GitStageSupport = "supported" | CodingRuntimeGitStageCause;
+
 export async function readGitStageSupport(
   deps: NodeGitMutationAdapterDeps,
   paths: readonly string[],
   fs?: WorkspaceFs,
-): Promise<boolean> {
+): Promise<GitStageSupport> {
   const ctx = buildRunContext(deps);
   // One configuration read for the whole admission; a driver that cannot be neutralized refuses
   // here as an unsupported transformation instead of failing a hash (PR #4568 audit).
   const config = await readStageConfig(ctx);
-  if (config === undefined || !filterDriversOverridable(config.filterDrivers)) return false;
+  if (config === undefined) return "config-unsupported";
+  if (!filterDriversOverridable(config.filterDrivers)) return "filter-driver";
   const { lineEndings, filterDrivers } = config;
   const effect: GitStageEffectContext = {
     workspaceRoot: deps.workspace.root,
@@ -943,10 +951,11 @@ export async function readGitStageSupport(
     run: (argv, stdin, _indexPath, timeoutMs) => runOne(ctx, argv, stdin, timeoutMs),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
-  return (
-    (await gitStageAttributesSupported(effect, paths)) &&
-    (await gitStageFilesSupported(effect, paths, lineEndings))
-  );
+  const attribute = await gitStageAttributeRefusal(effect, paths);
+  if (attribute !== undefined) return attribute;
+  return (await gitStageFilesSupported(effect, paths, lineEndings))
+    ? "supported"
+    : "content-conversion";
 }
 
 /**

@@ -65,12 +65,37 @@ export interface CodingRuntimeGitDiff {
   readonly kind: "diff";
   readonly diff: GitEditorDiffResponse;
 }
+/**
+ * Why a stage proposal was refused as `unsupported-transformation` (#4491): the one closed cause the
+ * verified staging found, so the model and the operator act on the real class instead of a guess.
+ * `config-unsupported`: the stage configuration could not be read or is outside what a verified
+ * staging admits (`core.safecrlf`, an unknown `core.autocrlf`, a failed read). `filter-driver`: a
+ * configured filter driver cannot be neutralised. `attribute-*`: the Git attribute rule class that
+ * applies (from any `.gitattributes`, `.git/info/attributes` or a global attributes file).
+ * `content-conversion`: a file's bytes would not round-trip under the effective line-ending mode.
+ */
+export const CODING_RUNTIME_GIT_STAGE_CAUSES = [
+  "config-unsupported",
+  "filter-driver",
+  "attribute-filter",
+  "attribute-encoding",
+  "attribute-ident",
+  "attribute-line-ending",
+  "attribute-unreadable",
+  "content-conversion",
+] as const;
+export type CodingRuntimeGitStageCause = (typeof CODING_RUNTIME_GIT_STAGE_CAUSES)[number];
+export function isCodingRuntimeGitStageCause(value: unknown): value is CodingRuntimeGitStageCause {
+  return CODING_RUNTIME_GIT_STAGE_CAUSES.some((cause) => cause === value);
+}
 export interface CodingRuntimeGitStage {
   readonly kind: "stage";
   readonly proposalId: string;
   readonly status: keyof typeof STAGE_STATUS_REASONS;
   readonly reason: (typeof STAGE_STATUS_REASONS)[keyof typeof STAGE_STATUS_REASONS][number];
   readonly pathCount: number;
+  /** Present only on an `unsupported-transformation` refusal of the verified staging check. */
+  readonly cause?: CodingRuntimeGitStageCause;
 }
 /**
  * An unstage proposal's result (#3902 AC2): the same lifecycle as a stage proposal, for paths whose
@@ -214,9 +239,19 @@ const PROPOSAL_ID: Readonly<Record<"stage" | "unstage", RegExp>> = {
   stage: /^stage-\d{1,39}$/u,
   unstage: /^unstage-\d{1,39}$/u,
 };
+// A cause belongs to a stage proposal's `unsupported-transformation` refusal and nowhere else.
+function causeAdmitted(value: Record<string, unknown>, kind: "stage" | "unstage"): boolean {
+  if (value.cause === undefined) return true;
+  return (
+    kind === "stage" &&
+    value.reason === "unsupported-transformation" &&
+    isCodingRuntimeGitStageCause(value.cause)
+  );
+}
 function proposal(value: Record<string, unknown>, kind: "stage" | "unstage"): boolean {
   return (
-    keys(value, ["kind", "proposalId", "status", "reason", "pathCount"]) &&
+    keys(value, ["kind", "proposalId", "status", "reason", "pathCount", "cause"]) &&
+    causeAdmitted(value, kind) &&
     typeof value.proposalId === "string" &&
     PROPOSAL_ID[kind].test(value.proposalId) &&
     stageStatusReason(value.status, value.reason) &&

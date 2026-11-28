@@ -1532,9 +1532,54 @@ describe("CodingToolFacade", () => {
       status: "completed",
       git: { kind: "stage", status: "blocked", reason: "unsupported-transformation" },
     });
-    expect(guidance).toContain("core.autocrlf");
-    expect(guidance).toContain("git config core.autocrlf false");
     expect(guidance).toContain("Do not retry");
+    expect(guidance).toContain("operator");
+    // #4491: Keiko's sandbox refuses `git config`, so the model is never told to run it.
+    expect(guidance).not.toContain("git config");
+  });
+
+  // #4491: a refusal that carries its closed cause gets the guidance of that cause, never a hint
+  // about another one (a Markdown attribute rule once sent the model chasing core.autocrlf).
+  it.each([
+    ["config-unsupported", "core.safecrlf", "operator"],
+    ["filter-driver", "filter driver", "operator"],
+    ["attribute-filter", "applies a filter", ".git/info/attributes"],
+    ["attribute-encoding", "working-tree-encoding", "Stage the other files"],
+    ["attribute-ident", "ident expansion", "Stage the other files"],
+    ["attribute-line-ending", "line-ending conversion", "one extension"],
+    ["attribute-unreadable", "could not report the attribute rules", "operator"],
+    ["content-conversion", "round-trip", "Rewrite the file"],
+  ] as const)("names the %s cause of a blocked stage", async (cause, named, step) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        git: {
+          kind: "stage",
+          proposalId: "stage-4491",
+          status: "blocked",
+          reason: "unsupported-transformation",
+          pathCount: 1,
+          cause,
+        },
+      }),
+    );
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({
+        action: "git",
+        operation: "stage",
+        phase: "propose",
+        paths: ["README.md"],
+      }),
+      capability,
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+
+    expect(guidance).toContain(named);
+    expect(guidance).toContain(step);
+    expect(guidance).not.toContain("git config");
+    if (cause !== "config-unsupported") expect(guidance).not.toContain("core.autocrlf");
   });
 
   // #3907: a task branch Keiko refused is a completed Git result with a closed reason, and each

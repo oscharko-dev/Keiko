@@ -29,6 +29,7 @@ import {
   createGitReadSession,
   createNodeGitMutationAdapter,
   readGitStageSupport,
+  type GitStageSupport,
 } from "./git-mutation-node.js";
 import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import type {
@@ -781,14 +782,14 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     rmSync(normalizationHome, { recursive: true, force: true });
   });
 
-  function stageSupported(): Promise<boolean> {
+  function stageSupported(paths: readonly string[] = ["a.txt"]): Promise<GitStageSupport> {
     return readGitStageSupport(
       {
         workspace: info,
         processEnv: { PATH: process.env.PATH ?? "", HOME: normalizationHome },
         now: () => Date.now(),
       },
-      ["a.txt"],
+      paths,
     );
   }
 
@@ -801,27 +802,27 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     git(["config", "core.autocrlf", "false"]);
     git(["config", "core.safecrlf", "false"]);
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   it("admits a file Git stores unchanged under an outer autocrlf that is not overridden", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   it("admits a file whose every line break is CRLF under an outer autocrlf", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   it("refuses a file with mixed line breaks under an outer autocrlf", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("content-conversion");
   });
 
   // Audit of #4491: Git keeps the bytes of a path whose index entry already stores a CR, so a mixed
@@ -832,7 +833,7 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     git(["-c", "core.autocrlf=false", "add", "a.txt"]);
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\n", "utf8");
 
-    expect(await stageSupported()).toBe(true);
+    expect(await stageSupported()).toBe("supported");
   });
 
   // Git still honours the legacy `crlf` attribute (`crlf=input` acts as `eol=lf`): a raw stage of a
@@ -843,7 +844,7 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     writeFileSync(join(root, ".gitattributes"), "*.txt crlf=input\n", "utf8");
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("attribute-line-ending");
   });
 
   it("refuses a CRLF file when the repository-local scope enables autocrlf=input", async () => {
@@ -852,7 +853,7 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     git(["config", "core.safecrlf", "false"]);
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("content-conversion");
   });
 
   // PR #4568 review: a configured value may hold a newline. Read as lines, the continuation of a
@@ -867,7 +868,7 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     expect(git(["config", "--get", "filter.lab.clean"])).toContain("\ncore.autocrlf false");
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("content-conversion");
   });
 
   // PR #4568 audit: a configured filter driver whose name cannot be overridden on the command line
@@ -877,13 +878,13 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     appendFileSync(join(root, ".git", "config"), '[filter "a=b"]\n\tclean = cat\n', "utf8");
     writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
 
-    await expect(stageSupported()).resolves.toBe(false);
+    await expect(stageSupported()).resolves.toBe("filter-driver");
   });
 
   it("refuses exact staging while core.safecrlf resolves to anything but false", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = warn\n");
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("config-unsupported");
   });
 
   // Review finding on PR #4568: the mode a verified staging hashed under is read once, so a change
@@ -940,7 +941,65 @@ describe("node git mutation adapter — stage normalization follows the effectiv
       "utf8",
     );
 
-    expect(await stageSupported()).toBe(false);
+    expect(await stageSupported()).toBe("config-unsupported");
+  });
+
+  // #4491: the refusal names ONE closed cause. An attribute rule that matches only Markdown refuses
+  // the Markdown file while a TypeScript file stages, in a repository whose autocrlf and safecrlf are
+  // unset everywhere (the config hint the model used to receive could not have helped).
+  describe("names the cause of a refusal", () => {
+    beforeEach(() => {
+      writeHomeGitConfig("[user]\n\tname = x\n");
+      writeFileSync(join(root, "doc.md"), "# doc\n", "utf8");
+      writeFileSync(join(root, "code.ts"), "export {};\n", "utf8");
+    });
+
+    it("refuses an attribute rule for *.md only and stages *.ts", async () => {
+      writeFileSync(join(root, ".gitattributes"), "*.md filter=lfs\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-filter");
+      expect(await stageSupported(["code.ts"])).toBe("supported");
+      expect(await stageSupported(["code.ts", "doc.md"])).toBe("attribute-filter");
+    });
+
+    it("reads a rule that lives only in .git/info/attributes", async () => {
+      appendFileSync(join(root, ".git", "info", "attributes"), "*.md ident\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-ident");
+      expect(await stageSupported(["code.ts"])).toBe("supported");
+    });
+
+    it("names a working-tree-encoding rule", async () => {
+      writeFileSync(join(root, ".gitattributes"), "*.md working-tree-encoding=UTF-16\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-encoding");
+    });
+
+    it("names a line-ending rule outside the admitted values", async () => {
+      writeFileSync(join(root, ".gitattributes"), "*.md eol=bogus\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("attribute-line-ending");
+    });
+
+    it("names a configuration Git cannot read as a verified staging admits", async () => {
+      git(["config", "core.autocrlf", "bogus"]);
+
+      expect(await stageSupported(["code.ts"])).toBe("config-unsupported");
+    });
+
+    it("names a filter driver that cannot be neutralised before any attribute", async () => {
+      appendFileSync(join(root, ".git", "config"), '[filter "a=b"]\n\tclean = cat\n', "utf8");
+      writeFileSync(join(root, ".gitattributes"), "*.md filter=lfs\n", "utf8");
+
+      expect(await stageSupported(["doc.md"])).toBe("filter-driver");
+    });
+
+    it("names a file whose line breaks would not round-trip", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      writeFileSync(join(root, "code.ts"), "a\r\nb\n", "utf8");
+
+      expect(await stageSupported(["code.ts"])).toBe("content-conversion");
+    });
   });
 });
 

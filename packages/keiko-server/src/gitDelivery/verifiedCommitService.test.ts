@@ -3628,7 +3628,22 @@ describe("productive runtime status/diff/stage lane", () => {
         },
         guard,
       ),
-    ).toMatchObject({ kind: "stage", status: "blocked", reason: "unsupported-transformation" });
+    ).toMatchObject({
+      kind: "stage",
+      status: "blocked",
+      reason: "unsupported-transformation",
+      cause: "attribute-filter",
+    });
+    // #4491: the closed cause rides on the existing activity-log line, with no path or value.
+    const refused = events.find(
+      (event) => event.op === "git.runtime-action" && event.extra?.phase === "stage-propose",
+    )?.extra;
+    expect(refused).toMatchObject({
+      state: "blocked",
+      reason: "unsupported-transformation",
+      stageCause: "attribute-filter",
+    });
+    expect(JSON.stringify(refused)).not.toContain("code.js");
     expect(existsSync(join(root, "filter-ran"))).toBe(false);
   });
   it("refuses stale stage bytes, expired approvals and cancelled stage effects", async () => {

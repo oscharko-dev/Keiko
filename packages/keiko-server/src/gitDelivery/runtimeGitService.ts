@@ -14,7 +14,10 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
-import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  isCodingRuntimeGitResult,
+  type CodingRuntimeGitStageCause,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   createGitReadSession,
@@ -188,6 +191,24 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
     state: RUNTIME_GIT_STATE_FIELD,
     reason: RUNTIME_GIT_REASON_FIELD,
     proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // Why a stage proposal was refused as `unsupported-transformation` (closed `CODING_RUNTIME_GIT_STAGE_CAUSES`);
+    // never a path, an attribute value or a configuration value.
+    stageCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      // A literal list (the registry reads literals); verifiedCommitService.test.ts pins it to the contract list.
+      values: [
+        "config-unsupported",
+        "filter-driver",
+        "attribute-filter",
+        "attribute-encoding",
+        "attribute-ident",
+        "attribute-line-ending",
+        "attribute-unreadable",
+        "content-conversion",
+      ],
+    },
     // The files a stage or unstage proposal bound after directory pathspecs expanded; absent on a
     // refusal that came before any expansion. `requestedCount` is the entries the request named.
     pathCount: { type: "integer", dataClass: "count", required: false },
@@ -276,6 +297,7 @@ interface RuntimeGitActivityFields {
     | "deadline-exceeded";
   readonly proposalId?: string;
   readonly pathCount?: number;
+  readonly stageCause?: CodingRuntimeGitStageCause;
   readonly requestedCount?: number;
   readonly fileCount?: number;
   readonly gitSpawnCount?: number;
@@ -509,6 +531,7 @@ function indexEvidence(
     state: result.status,
     reason: result.reason,
     proposalId: result.proposalId,
+    ...(result.kind === "stage" && result.cause !== undefined ? { stageCause: result.cause } : {}),
     ...(expanded || !proposing ? { pathCount: result.pathCount } : {}),
     ...(proposing ? { requestedCount: request.paths.length } : {}),
   };
@@ -1017,8 +1040,10 @@ export class RuntimeGitService {
       this.now(),
       proposalId,
     );
-    if (!(await readGitStageSupport(runtimeGitReadDeps(context, execution), paths, workspaceFs)))
-      return this.result(proposal, "blocked", "unsupported-transformation");
+    const deps = runtimeGitReadDeps(context, execution);
+    const support = await readGitStageSupport(deps, paths, workspaceFs);
+    if (support !== "supported")
+      return this.result(proposal, "blocked", "unsupported-transformation", support);
     return this.stored(proposal);
   }
   // The open proposal's answer: it waits for the operator under Ask for approval, else it is ready.
@@ -1236,6 +1261,7 @@ export class RuntimeGitService {
     proposal: RuntimeGitProposal,
     status: CodingRuntimeGitStage["status"],
     reason: CodingRuntimeGitStage["reason"],
+    cause?: CodingRuntimeGitStageCause,
   ): IndexProposalResult {
     return {
       kind: proposal.command.kind,
@@ -1243,6 +1269,7 @@ export class RuntimeGitService {
       status,
       reason,
       pathCount: proposal.command.pathspecs.length,
+      ...(cause === undefined ? {} : { cause }),
     };
   }
   // What the call has cost so far: the Git processes its scope started and the time since it began.
