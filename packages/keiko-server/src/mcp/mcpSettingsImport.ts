@@ -88,6 +88,15 @@ function wrappedEntries(section: Fields): readonly ImportEntry[] | undefined {
   return Object.keys(section).length === 1 ? Object.entries(nested) : undefined;
 }
 
+function resemblesServer(value: unknown): boolean {
+  const entry = fields(value);
+  return (
+    entry !== undefined &&
+    transportKind(entry) !== undefined &&
+    (Object.hasOwn(entry, "command") || Object.hasOwn(entry, "url"))
+  );
+}
+
 function importEntries(value: unknown): readonly ImportEntry[] | undefined {
   if (Array.isArray(value)) return value.map(namedEntry);
   const object = fields(value);
@@ -99,7 +108,10 @@ function importEntries(value: unknown): readonly ImportEntry[] | undefined {
   if (wrapper === undefined) return Object.entries(object);
   const section = fields(object[wrapper]);
   if (section === undefined) return undefined;
-  return transportKind(section) === undefined ? wrappedEntries(section) : Object.entries(object);
+  const entries = Object.entries(object);
+  if (transportKind(section) !== undefined) return entries;
+  if (entries.some(([key, entry]) => key !== wrapper && resemblesServer(entry))) return undefined;
+  return wrappedEntries(section);
 }
 
 function sealedValues(
@@ -235,7 +247,9 @@ function validEnabledOptions(entry: Fields): boolean {
 }
 
 function validProtocolOptions(entry: Fields): boolean {
-  return entry.type !== "sse" || entry.protocol === undefined || entry.protocol === "sse";
+  if (entry.protocol === undefined) return true;
+  if (entry.type === "sse") return entry.protocol === "sse";
+  return entry.type !== "streamable-http";
 }
 
 function importOne(name: string, raw: unknown, revision: string): Prepared {

@@ -22,8 +22,9 @@ provides historical evidence. Current conclusions require checks against the cur
   English and German. The input hints are available to keyboard and screen-reader users.
 - The import previews single and mixed batches and uses one registry revision for confirmation.
   Imported servers require activation and discovery after saving.
-- A configuration that mixes nested and direct server entries is refused as a whole. The JSON file
-  picker exposes file-read and file-size errors through its accessible description.
+- A configuration that mixes wrapped and direct server entries is refused as a whole. An explicit
+  Streamable HTTP entry refuses SSE. The JSON file picker exposes file-read and file-size errors
+  through its accessible description.
 - Settings rejects oversized serialized registries before changing the file or staging secrets.
   Stale same-server drafts require reopening, and save preserves the order of existing entries.
 - Status inspection no longer reloads configuration once per server. The dedicated invocation

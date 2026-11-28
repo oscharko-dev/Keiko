@@ -116,13 +116,14 @@ For an administrator preparing a file, this example contains one server of each 
 ```
 
 Keiko also accepts a single object with a `name`, a list of such objects, a name-to-server map,
-`mcp.servers`, or a `mcpServers` map. Keep all names inside `servers` when using a nested map.
+`mcp.servers`, or a `mcpServers` map. Keep every server inside the chosen block when using a wrapper.
 In the `mcpServers` format a local entry can use `command` as a
 string and `args` as a list. Remote `headers` and local `environment` or `env` accept string
 values. Credential values are sealed in Keiko's local store. Supply credentials there instead of in
 the URL or command line. Optional remote `oauth` takes the Keiko issuer, optional public client ID
-(`clientId`) and space-separated `scope`. Use `protocol: "sse"` for SSE or `network: "private"`
-for an organization-hosted private target. Unsupported options, invalid entries, and names already
+(`clientId`) and space-separated `scope`. Use `protocol: "sse"` for SSE with `type: "remote"` or
+use `type: "sse"`. An explicit `type: "streamable-http"` already selects its protocol. Set
+`network: "private"` for an organization-hosted private target. Unsupported options, invalid entries, and names already
 in Keiko prevent the batch save. The input limit is 64 KiB and the registry admits up to 16 servers.
 
 ### Manage connections

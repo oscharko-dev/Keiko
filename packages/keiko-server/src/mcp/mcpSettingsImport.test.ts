@@ -7,7 +7,7 @@ const remote = { type: "remote", url: "https://example.test/mcp", enabled: true 
 describe("central MCP JSON import", () => {
   it("takes only the MCP section of an OpenCode JSONC document", () => {
     const result = prepareMcpSettingsImport(
-      '{ /* copied config */ "provider": {}, "mcp": { "remote": {"type":"remote","url":"https://example.test/mcp"}, "local": {"type":"local","command":["/opt/example/node","--flag","/opt/example/server.js"]}, }, }',
+      '{ /* copied config */ "provider": {"demo": {"options": {"baseURL":"https://model.example.test"}}}, "mcp": { "remote": {"type":"remote","url":"https://example.test/mcp"}, "local": {"type":"local","command":["/opt/example/node","--flag","/opt/example/server.js"]}, }, }',
       snapshot,
     );
     expect(result.kind).toBe("ready");
@@ -65,6 +65,17 @@ describe("central MCP JSON import", () => {
     });
   });
 
+  it.each(["mcp", "mcpServers"])("refuses server definitions beside the %s wrapper", (wrapper) => {
+    const document = {
+      [wrapper]: { example: remote },
+      "local-tools": { command: "/opt/example/node", args: ["server.js"] },
+    };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toEqual({
+      kind: "invalid",
+      issue: "shape",
+    });
+  });
+
   it("keeps a server literally named servers alongside other direct entries", () => {
     const document = {
       mcp: { servers: remote, second: { url: "https://second.example.test/mcp" } },
@@ -72,6 +83,23 @@ describe("central MCP JSON import", () => {
     expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toMatchObject({
       kind: "ready",
       update: { servers: [{ name: "servers" }, { name: "second" }] },
+    });
+  });
+
+  it("refuses an SSE protocol on explicit streamable HTTP entries", () => {
+    const document = { example: { ...remote, type: "streamable-http", protocol: "sse" } };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toEqual({
+      kind: "invalid",
+      issue: "options",
+      entry: 1,
+    });
+  });
+
+  it.each(["remote", "http", "sse"])("accepts an SSE protocol on %s entries", (type) => {
+    const document = { example: { ...remote, type, protocol: "sse" } };
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toMatchObject({
+      kind: "ready",
+      update: { servers: [{ transport: { kind: "remote", protocol: "sse" } }] },
     });
   });
 
