@@ -24958,6 +24958,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "first-start",
           "unreadable",
           "format-changed",
+          "capacity",
           "foreign-installation",
           "product-changed",
           "configuration-changed",

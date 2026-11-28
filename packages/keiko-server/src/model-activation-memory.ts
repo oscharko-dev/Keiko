@@ -45,6 +45,7 @@ export const ACTIVATION_DISCARD_REASONS = [
   "first-start",
   "unreadable",
   "format-changed",
+  "capacity",
   "foreign-installation",
   "product-changed",
   "configuration-changed",
@@ -303,7 +304,14 @@ class FileModelActivationMemory implements ModelActivationMemory {
   private durable = new Map<string, StoredActivation>();
   /** The activated set the last `sync` asked for, kept so `settle` can retry a failed write. */
   private desired: readonly ActivatedModel[] = [];
+  /** The connection each stored model was bound with, so an unchanged one derives nothing again. */
+  private readonly bound = new Map<
+    string,
+    { readonly configurationDigest: string; readonly apiKey: string }
+  >();
   private unrecorded = false;
+  /** The file may still hold a record this start could not replace or withdraw. */
+  private rewritePending = false;
   private readonly installation: string;
 
   public constructor(private readonly options: ModelActivationMemoryOptions) {
@@ -323,9 +331,14 @@ class FileModelActivationMemory implements ModelActivationMemory {
       provider,
       activatedAt: entry.activatedAt,
     }));
+    for (const { entry, provider } of restored) this.remember(entry.modelDigest, provider);
     this.logChange("restored", undefined, restored.length, correlationId);
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
-    if (outcome.kind !== "none") this.write(entries, correlationId);
+    if (outcome.kind !== "none" && !this.write(entries, correlationId)) {
+      // The discard of an incompatible record did not land: keep it pending, never call it done.
+      this.rewritePending = true;
+      this.withdrawRecord(entries, new Map(), correlationId);
+    }
     return restored.map(({ entry, provider }) => ({
       modelId: provider.modelId,
       activatedAt: entry.activatedAt,
@@ -348,31 +361,74 @@ class FileModelActivationMemory implements ModelActivationMemory {
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
   ): void {
     this.desired = activated;
-    const next = new Map<string, StoredActivation>();
-    let saved = 0;
-    for (const model of activated) {
-      const key = modelDigest(this.options.installationId, model.provider.modelId);
-      const known = this.durable.get(key);
-      const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
-      if (known !== undefined && sameBinding(known, entry)) next.set(key, known);
-      else {
-        next.set(key, entry);
-        saved += 1;
-      }
-    }
+    const { next, saved, overflow } = this.plan(activated);
     const removed = this.removalsByReason(next, reason, removalReasons);
     const removedCount = [...removed.values()].reduce((sum, count) => sum + count, 0);
-    if (saved === 0 && removedCount === 0) {
+    const stale = this.rewritePending;
+    if (saved === 0 && removedCount === 0 && !stale) {
       this.unrecorded = false;
       return;
     }
     if (this.write(next, correlationId)) {
       this.durable = next;
       this.unrecorded = false;
+      this.rewritePending = false;
       this.logRemovals(removed, correlationId);
+      if (overflow > 0) this.logChange("discarded", "capacity", overflow, correlationId);
       if (saved > 0) this.logChange("saved", undefined, saved, correlationId);
-    } else if (removedCount > 0) this.withdrawRecord(next, removed, correlationId);
+    } else if (removedCount > 0 || stale) this.withdrawRecord(next, removed, correlationId);
     else this.unrecorded = true;
+  }
+
+  /**
+   * The record the activated set needs. A model whose connection is the one it was stored with
+   * derives nothing again: only a new or changed one pays for its credential derivation. At most
+   * `MAX_ENTRIES` are stored, which is exactly what a restart reads back; the rest is counted.
+   */
+  private plan(activated: readonly ActivatedModel[]): {
+    readonly next: Map<string, StoredActivation>;
+    readonly saved: number;
+    readonly overflow: number;
+  } {
+    const next = new Map<string, StoredActivation>();
+    let saved = 0;
+    let overflow = 0;
+    for (const model of activated) {
+      const key = modelDigest(this.options.installationId, model.provider.modelId);
+      if (next.size >= MAX_ENTRIES) {
+        overflow += 1;
+        continue;
+      }
+      const known = this.durable.get(key);
+      if (known !== undefined && this.unchanged(key, model.provider)) {
+        next.set(key, known);
+        continue;
+      }
+      const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
+      this.remember(key, model.provider, entry.configurationDigest);
+      if (known !== undefined && sameBinding(known, entry)) next.set(key, known);
+      else {
+        next.set(key, entry);
+        saved += 1;
+      }
+    }
+    for (const key of this.bound.keys()) if (!next.has(key)) this.bound.delete(key);
+    return { next, saved, overflow };
+  }
+
+  private remember(key: string, provider: ModelProviderConfig, configuration?: string): void {
+    this.bound.set(key, {
+      configurationDigest: configuration ?? configurationDigest(provider),
+      apiKey: provider.apiKey,
+    });
+  }
+
+  private unchanged(key: string, provider: ModelProviderConfig): boolean {
+    const known = this.bound.get(key);
+    return (
+      known?.apiKey === provider.apiKey &&
+      known.configurationDigest === configurationDigest(provider)
+    );
   }
 
   /** The stored models the next set drops, counted per reason (a model's own reason, else `reason`). */
@@ -421,6 +477,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
     }
     this.durable = new Map();
     this.unrecorded = false;
+    this.rewritePending = false;
     this.logRemovals(removed, correlationId);
     if (next.size > 0 && this.write(next, correlationId)) {
       this.durable = new Map(next);

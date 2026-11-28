@@ -36,6 +36,21 @@ vi.mock("./private-json.js", async (importOriginal) => {
   };
 });
 
+// Counts the memory-hard derivations; `fake` swaps in a cheap stand-in for tests of volume.
+const kdf = vi.hoisted(() => ({ calls: 0, fake: false }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    scryptSync: (...args: Parameters<typeof actual.scryptSync>): Buffer => {
+      kdf.calls += 1;
+      if (!kdf.fake) return actual.scryptSync(...args);
+      const [password, salt] = args as [string, string];
+      return actual.createHash("sha256").update(password).update(salt).digest();
+    },
+  };
+});
+
 const SECRET = "sk-test-secret-value-0001";
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
@@ -354,6 +369,77 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ reason: "configuration-changed", count: 1 }),
     );
+  });
+
+  describe("capacity", () => {
+    const providersOf = (count: number): ModelProviderConfig[] =>
+      Array.from({ length: count }, (_, index) => provider({ modelId: `chat-${String(index)}` }));
+
+    it("round-trips exactly the bound it stores", () => {
+      activate(memory(), ...providersOf(512));
+      expect(restoredIds(memory(), ...providersOf(512))).toHaveLength(512);
+      expect(changeLines().filter((line) => line.reason === "capacity")).toEqual([]);
+    });
+
+    it("reports what it cannot store instead of saving it and losing it at the restart", () => {
+      activate(memory(), ...providersOf(513));
+      expect(changeLines()).toContainEqual(
+        expect.objectContaining({ change: "discarded", reason: "capacity", count: 1 }),
+      );
+      // What was reported saved is exactly what comes back.
+      expect(restoredIds(memory(), ...providersOf(513))).toHaveLength(512);
+    });
+  });
+
+  describe("a startup discard that could not be written", () => {
+    afterEach(() => {
+      writer.failures = 0;
+    });
+
+    it("withdraws the incompatible record so a downgrade cannot restore it", () => {
+      activate(memory(), provider());
+      writer.failures = 1;
+      const upgraded = memory({ productVersion: "1.5.11" });
+      expect(restoredIds(upgraded, provider())).toEqual([]);
+      expect(upgraded.recorded()).toBe(true);
+      expect(restoredIds(memory({ productVersion: "1.5.10" }), provider())).toEqual([]);
+    });
+
+    it("stays pending while neither the rewrite nor the withdrawal lands, then settles", () => {
+      activate(memory(), provider());
+      const record = join(dir, MODEL_ACTIVATION_FILE);
+      const saved = readFileSync(record, "utf8");
+      // A directory where the record belongs refuses the rewrite and the removal alike.
+      rmSync(record);
+      mkdirSync(join(record, "blocker"), { recursive: true });
+      const upgraded = memory({ productVersion: "1.5.11" });
+      expect(restoredIds(upgraded, provider())).toEqual([]);
+      expect(upgraded.recorded()).toBe(false);
+      expect(upgraded.settle("invalidated", "corr-blocked")).toBe(false);
+      rmSync(record, { recursive: true });
+      writeFileSync(record, saved, { mode: 0o600 });
+      expect(upgraded.settle("invalidated", "corr-retry")).toBe(true);
+      expect(restoredIds(memory({ productVersion: "1.5.10" }), provider())).toEqual([]);
+    });
+  });
+
+  describe("an unchanged activated set", () => {
+    afterEach(() => {
+      kdf.fake = false;
+    });
+
+    it("derives no credential again, however many models are active", () => {
+      kdf.fake = true;
+      const providers = Array.from({ length: 300 }, (_, index) =>
+        provider({ modelId: `chat-${String(index)}`, apiKey: `sk-test-key-${String(index)}` }),
+      );
+      const running = memory();
+      activate(running, ...providers);
+      const before = kdf.calls;
+      activate(running, ...providers);
+      activate(running, ...providers);
+      expect(kdf.calls).toBe(before);
+    });
   });
 
   it("writes nothing when the activated set did not change", () => {
