@@ -12,6 +12,8 @@ import {
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { observedGitRunner } from "../gitProcessActivity.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 
 /** Where the message policy came from: a person's setting, the repository itself, or a fallback. */
@@ -153,8 +155,13 @@ function packageDeclaresCommitlint(text: string): boolean {
  */
 export async function repositoryDeclaresConventionalCommits(
   workspaceRoot: string,
-  runner: GitProcessRunner = defaultGitProcessRunner,
+  injectedRunner?: GitProcessRunner,
+  correlationId: string = UNKNOWN_CORRELATION_ID,
 ): Promise<boolean> {
+  // Every server git process is observed, so its failure or refusal reaches the Activity Log.
+  const runner =
+    injectedRunner ??
+    observedGitRunner(defaultGitProcessRunner, processServerLogSink(), correlationId);
   const entries = await readCommittedRootEntries(runner, workspaceRoot);
   if (entries === undefined) return false;
   if (COMMITLINT_CONFIG_FILES.some((name) => entries.has(name))) return true;
@@ -191,13 +198,18 @@ function emitFallbackDiagnostic(
 async function decisionFromSettings(
   deps: Pick<UiHandlerDeps, "editorSettingsControl">,
   workspaceRoot: string,
+  correlationId: string,
 ): Promise<GovernedCommitMessagePolicyDecision> {
   const snapshot = await deps.editorSettingsControl?.read(workspaceRoot);
   const setting = snapshot?.settings.find((entry) => entry.id === "gitCommitMessagePolicy");
   if (setting?.source !== "builtInDefault") {
     return decision(resolveGitCommitMessagePolicyMode(setting?.value), "setting");
   }
-  const declared = await repositoryDeclaresConventionalCommits(workspaceRoot);
+  const declared = await repositoryDeclaresConventionalCommits(
+    workspaceRoot,
+    undefined,
+    correlationId,
+  );
   return decision(declared ? "keiko-conventional" : "repository-native", "repository");
 }
 
@@ -222,7 +234,7 @@ export async function resolveGovernedCommitMessagePolicyDecision(
     };
   }
   try {
-    return await decisionFromSettings(deps, workspaceRoot);
+    return await decisionFromSettings(deps, workspaceRoot, correlationId);
   } catch (error) {
     emitFallbackDiagnostic(deps, correlationId, error);
     return decision("keiko-conventional", "fallback");

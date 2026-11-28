@@ -6,6 +6,8 @@ import {
   type GovernedIndexTransition,
   isGovernedIndexPath,
 } from "./governedIndexPaths.js";
+import { observedGitRunner } from "../gitProcessActivity.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
@@ -70,15 +72,19 @@ const NO_RESTORE: TurnIndexRestoreResult = { outcome: undefined, restoredCount: 
 const UNAVAILABLE: TurnIndexRestoreResult = { outcome: "unavailable", restoredCount: 0 };
 
 function gitRunner(root: string, indexFile?: string): GitRun {
-  const run = createGitProcessRunner(() => ({
-    ...gitEnv(),
-    GIT_LITERAL_PATHSPECS: "1",
-    // A repository-configured filesystem monitor is a program; none runs for these reads.
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "core.fsmonitor",
-    GIT_CONFIG_VALUE_0: "false",
-    ...(indexFile === undefined ? {} : { GIT_INDEX_FILE: indexFile }),
-  }));
+  const run = observedGitRunner(
+    createGitProcessRunner(() => ({
+      ...gitEnv(),
+      GIT_LITERAL_PATHSPECS: "1",
+      // A repository-configured filesystem monitor is a program; none runs for these reads.
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.fsmonitor",
+      GIT_CONFIG_VALUE_0: "false",
+      ...(indexFile === undefined ? {} : { GIT_INDEX_FILE: indexFile }),
+    })),
+    processServerLogSink(),
+    undefined,
+  );
   return (args) =>
     run(args, {
       cwd: root,

@@ -1537,10 +1537,13 @@ describe("verified Code-task commit service", () => {
   describe.skipIf(process.platform === "win32")("Git processes of one governed action", () => {
     // The most processes each action may start, measured on the code that makes one read of the
     // repository per proposal, one scope (and one promisor probe) per operation, one `git remote`
-    // for the signing decision and one `rev-parse` for the branch lookup. Before that code the same
+    // for the signing decision and one `rev-parse` for the branch lookup. An operation with more
+    // than one Git effect also pays one memoized `git version`: the held negative promisor verdict
+    // is reused only while that Git enforces the lazy-fetch guard itself (git-worktree-snapshot-node),
+    // so a status, which reads twice, starts that one process more. Before that code the same
     // actions started 12, 43, 58, 42, 26, 70, 83 and 34.
     const spawnBudget = {
-      status: 12,
+      status: 13,
       stagePropose: 17,
       // 41 plus the two reads that record which index entries the staging wrote (one before, one
       // after), which the undo of the turn needs to leave a person's own staging alone (U-34b).
