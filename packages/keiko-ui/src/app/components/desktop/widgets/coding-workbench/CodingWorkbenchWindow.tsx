@@ -1167,44 +1167,57 @@ function useRunRepositoryPin(
   // started never becomes it: while a start is pending, after it is refused and after it is
   // cancelled, whichever run the shared runtime shows is not this window's.
   const run = { active: runIsActive, runId: runResource.value?.runId };
-  const claimedRunId = useRef<string | undefined>(undefined);
+  // The run the response of this window's own start or continuation named, and whether it has been
+  // shown yet: the acknowledgement and the run snapshot are separate reads, either may render first.
+  const owned = useRef<{ readonly runId: string; seen: boolean } | undefined>(undefined);
   const starting = useRef(false);
   const pending = mutation.status === "pending" && RUN_STARTING_MUTATIONS.has(mutation.kind);
   // Declared before the pin effect so the same commit that shows the run sees the claim.
   useEffect(() => {
-    if (pending) {
-      starting.current = true;
-      return;
+    if (pending) starting.current = true;
+    else if (starting.current) {
+      starting.current = false;
+      const runId = acknowledgedStartRunId(mutation);
+      if (runId !== undefined) owned.current = { runId, seen: false };
     }
-    if (!starting.current) return;
-    starting.current = false;
-    // A refusal the next read superseded in the same render settles idle too, with its failure kept.
-    const acknowledged =
-      mutation.status === "idle" &&
-      mutation.cancelled !== true &&
-      mutation.supersededFailure === undefined;
-    // Only the run the response named is this window's: a re-read after a newer revision can show
-    // another window's run in the same render.
-    if (acknowledged && run.active && run.runId === mutation.acknowledgedRunId)
-      claimedRunId.current = run.runId;
+    const current = owned.current;
+    if (current === undefined) return;
+    if (run.active && run.runId === current.runId) current.seen = true;
+    // The claim ends with the run it was made for.
+    else if (current.seen) owned.current = undefined;
+  }, [pending, mutation, run.active, run.runId]);
+  useEffect(() => {
+    const claimed = run.active && owned.current?.runId === run.runId;
+    if (claimed && selectedRoot === undefined && repositoryRoot !== null)
+      onPinRepository?.(repositoryRoot);
   }, [
-    pending,
-    mutation.acknowledgedRunId,
-    mutation.status,
-    mutation.cancelled,
-    mutation.supersededFailure,
     run.active,
     run.runId,
+    mutation.status,
+    mutation.acknowledgedRunId,
+    selectedRoot,
+    repositoryRoot,
+    onPinRepository,
   ]);
-  // The claim ends with the run it was made for.
-  useEffect(() => {
-    if (!run.active || run.runId !== claimedRunId.current) claimedRunId.current = undefined;
-  }, [run.active, run.runId]);
-  useEffect(() => {
-    const claimed = claimedRunId.current !== undefined && claimedRunId.current === run.runId;
-    if (claimed && run.active && selectedRoot === undefined && repositoryRoot !== null)
-      onPinRepository?.(repositoryRoot);
-  }, [run.active, run.runId, selectedRoot, repositoryRoot, onPinRepository]);
+}
+
+/**
+ * The run a settled start or continuation was acknowledged with. A refusal the next read superseded
+ * in the same render settles idle too, with its failure kept, and a cancelled start settles idle
+ * without one: neither acknowledges a run. Only the run the response named is this window's, never
+ * whichever run is shown with it.
+ */
+function acknowledgedStartRunId(
+  mutation: Pick<
+    CodingWorkbenchRuntimeState["mutation"],
+    "status" | "cancelled" | "supersededFailure" | "acknowledgedRunId"
+  >,
+): string | undefined {
+  const settled =
+    mutation.status === "idle" &&
+    mutation.cancelled !== true &&
+    mutation.supersededFailure === undefined;
+  return settled ? mutation.acknowledgedRunId : undefined;
 }
 
 const RUN_STARTING_MUTATIONS: ReadonlySet<CodingWorkbenchMutationKind | null> = new Set([

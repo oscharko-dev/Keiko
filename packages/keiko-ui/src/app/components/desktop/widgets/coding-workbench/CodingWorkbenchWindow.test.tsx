@@ -5905,6 +5905,48 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(onPinRepository).not.toHaveBeenCalled();
   });
 
+  // The acknowledgement and the run snapshot are separate reads: either may render first, and the
+  // pin must follow once both are known whichever order they arrive in.
+  it.each([
+    ["the run is visible before the acknowledgement", true],
+    ["the acknowledgement renders before the run is visible", false],
+  ] as const)("pins this window's own run when %s", (_name, runFirst) => {
+    const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    const pending = {
+      status: "pending",
+      kind: "start",
+      requestId: "req-own",
+      error: null,
+    } as const;
+    const running = stateIn(WORKSPACE_A, { state: "running", runId: "run-own" });
+    const acknowledged = { ...IDLE_MUTATION_FIXTURE, acknowledgedRunId: "run-own" };
+    runtimeHookMock.mockReturnValue({
+      state: { ...stateIn(WORKSPACE_A), mutation: pending },
+      actions: actions(),
+    });
+    const view = render(window());
+    const steps = runFirst
+      ? [
+          { ...running, mutation: pending },
+          { ...running, mutation: acknowledged },
+        ]
+      : [
+          { ...stateIn(WORKSPACE_A), mutation: acknowledged },
+          { ...running, mutation: IDLE_MUTATION_FIXTURE },
+        ];
+    for (const state of steps) {
+      runtimeHookMock.mockReturnValue({ state, actions: actions() });
+      view.rerender(window());
+    }
+
+    expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+  });
+
   it("does not pin a later run of another window after its own run ended", () => {
     const onPinRepository = vi.fn();
     const window = (): ReactElement => (
