@@ -98,6 +98,8 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     for (const body of [text, logged]) {
       expect(body).not.toContain(SECRET);
       expect(body).not.toContain("127.0.0.1");
+      // The model id is as private as the endpoint: only a salted digest of it is stored.
+      expect(body).not.toContain("chat-a");
     }
   });
 
@@ -146,20 +148,48 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     expect(restored).toEqual(["chat-a"]);
   });
 
-  it("treats a missing, foreign-installation or malformed file as a first start", () => {
+  it("treats a missing file as a first start", () => {
     expect(restoredIds(memory(), provider())).toEqual([]);
     expect(changeLines()).toContainEqual(
       expect.objectContaining({ change: "discarded", reason: "first-start", count: 0 }),
     );
+  });
+
+  it("names a record of another installation foreign, not a first start", () => {
     activate(memory(), provider());
     events.length = 0;
     expect(restoredIds(memory({ installationId: "installation-2" }), provider())).toEqual([]);
-    expect(changeLines()).toContainEqual(expect.objectContaining({ reason: "first-start" }));
-    writeFileSync(join(dir, MODEL_ACTIVATION_FILE), "{not json", { mode: 0o600 });
-    events.length = 0;
-    expect(restoredIds(memory(), provider())).toEqual([]);
-    expect(changeLines()).toContainEqual(expect.objectContaining({ reason: "first-start" }));
+    const reasons = changeLines().map((line) => line["reason"]);
+    expect(reasons).toContain("foreign-installation");
+    expect(reasons).not.toContain("first-start");
   });
+
+  it("names a malformed record unreadable, not a first start", () => {
+    writeFileSync(join(dir, MODEL_ACTIVATION_FILE), "{not json", { mode: 0o600 });
+    expect(restoredIds(memory(), provider())).toEqual([]);
+    const reasons = changeLines().map((line) => line["reason"]);
+    expect(reasons).toContain("unreadable");
+    expect(reasons).not.toContain("first-start");
+  });
+
+  it("names a record of an unknown schema unreadable", () => {
+    writeFileSync(join(dir, MODEL_ACTIVATION_FILE), JSON.stringify({ schemaVersion: 99 }), {
+      mode: 0o600,
+    });
+    expect(restoredIds(memory(), provider())).toEqual([]);
+    expect(changeLines().map((line) => line["reason"])).toContain("unreadable");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "names a record that is not owner-private unreadable and restores nothing from it",
+    () => {
+      activate(memory(), provider());
+      chmodSync(join(dir, MODEL_ACTIVATION_FILE), 0o666);
+      events.length = 0;
+      expect(restoredIds(memory(), provider())).toEqual([]);
+      expect(changeLines().map((line) => line["reason"])).toContain("unreadable");
+    },
+  );
 
   it("removes the record on an explicit deactivation", () => {
     activate(memory(), provider());

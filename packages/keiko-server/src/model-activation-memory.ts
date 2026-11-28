@@ -39,6 +39,8 @@ const MAX_ENTRIES = 512;
 
 export const ACTIVATION_DISCARD_REASONS = [
   "first-start",
+  "unreadable",
+  "foreign-installation",
   "product-changed",
   "configuration-changed",
   "credential-changed",
@@ -88,7 +90,8 @@ const MODEL_ACTIVATION_PERSISTENCE_OPERATION = defineActivityLogOperation({
 });
 
 interface StoredActivation {
-  readonly modelId: string;
+  /** Digest of the model id salted with the installation identity; the id itself is never stored. */
+  readonly modelDigest: string;
   readonly configurationDigest: string;
   readonly credentialDigest: string;
   readonly activatedAt: string;
@@ -159,13 +162,17 @@ function credentialDigest(installationId: string, provider: ModelProviderConfig)
   );
 }
 
+function modelDigest(installationId: string, modelId: string): string {
+  return sha256Hex(canonicalise({ purpose: "model-activation-model", installationId, modelId }));
+}
+
 function bindingOf(
   installationId: string,
   provider: ModelProviderConfig,
   activatedAt: string,
 ): StoredActivation {
   return {
-    modelId: provider.modelId,
+    modelDigest: modelDigest(installationId, provider.modelId),
     configurationDigest: configurationDigest(provider),
     credentialDigest: credentialDigest(installationId, provider),
     activatedAt,
@@ -190,12 +197,12 @@ function isDigest(value: unknown): value is string {
 function parseEntry(value: unknown): StoredActivation | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const record = value as Record<string, unknown>;
-  const { modelId, activatedAt } = record;
-  if (typeof modelId !== "string" || modelId.length === 0 || modelId.length > 256) return undefined;
+  const { activatedAt } = record;
+  if (!isDigest(record.modelDigest)) return undefined;
   if (typeof activatedAt !== "string" || Number.isNaN(Date.parse(activatedAt))) return undefined;
   if (!isDigest(record.configurationDigest) || !isDigest(record.credentialDigest)) return undefined;
   return {
-    modelId,
+    modelDigest: record.modelDigest,
     activatedAt,
     configurationDigest: record.configurationDigest,
     credentialDigest: record.credentialDigest,
@@ -207,21 +214,22 @@ interface StoredFile {
   readonly entries: readonly StoredActivation[];
 }
 
-type ReadOutcome = { readonly kind: "none" } | { readonly kind: "unusable" } | StoredFileOutcome;
+type ReadOutcome =
+  { readonly kind: "none" | "unreadable" | "foreign-installation" } | StoredFileOutcome;
 interface StoredFileOutcome {
   readonly kind: "file";
   readonly file: StoredFile;
 }
 
-function parseFile(raw: Buffer, installation: string): StoredFileOutcome | undefined {
-  // A malformed file throws here; the reader reports it and treats the record as unusable.
+function parseFile(raw: Buffer, installation: string): ReadOutcome {
+  // A malformed file throws here; the reader reports it and treats the record as unreadable.
   const parsed: unknown = JSON.parse(raw.toString("utf8"));
-  if (typeof parsed !== "object" || parsed === null) return undefined;
+  if (typeof parsed !== "object" || parsed === null) return { kind: "unreadable" };
   const record = parsed as Record<string, unknown>;
-  if (record.schemaVersion !== SCHEMA_VERSION || record.installation !== installation)
-    return undefined;
+  if (record.schemaVersion !== SCHEMA_VERSION) return { kind: "unreadable" };
+  if (record.installation !== installation) return { kind: "foreign-installation" };
   const { productVersion, entries } = record;
-  if (typeof productVersion !== "string" || !Array.isArray(entries)) return undefined;
+  if (typeof productVersion !== "string" || !Array.isArray(entries)) return { kind: "unreadable" };
   const kept = entries
     .slice(0, MAX_ENTRIES)
     .map(parseEntry)
@@ -275,21 +283,23 @@ class FileModelActivationMemory implements ModelActivationMemory {
   ): readonly RestoredActivation[] {
     const outcome = this.read(correlationId);
     const counts = new Map<ActivationDiscardReason, number>();
-    const restored: StoredActivation[] = [];
-    if (outcome.kind !== "file") counts.set("first-start", 0);
+    const restored: { readonly entry: StoredActivation; readonly modelId: string }[] = [];
+    if (outcome.kind === "none") counts.set("first-start", 0);
+    else if (outcome.kind !== "file") counts.set(outcome.kind, 0);
     else if (outcome.file.productVersion !== this.options.productVersion)
       counts.set("product-changed", outcome.file.entries.length);
     else
       for (const entry of outcome.file.entries) {
-        const reason = this.verdict(entry, providers);
-        if (reason === undefined) restored.push(entry);
-        else counts.set(reason, (counts.get(reason) ?? 0) + 1);
+        const { reason, provider } = this.verdict(entry, providers);
+        if (reason === undefined && provider !== undefined)
+          restored.push({ entry, modelId: provider.modelId });
+        else if (reason !== undefined) counts.set(reason, (counts.get(reason) ?? 0) + 1);
       }
-    this.current = new Map(restored.map((entry) => [entry.modelId, entry]));
+    this.current = new Map(restored.map(({ entry }) => [entry.modelDigest, entry]));
     this.logChange("restored", undefined, restored.length, correlationId);
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
     if (outcome.kind !== "none") this.write(correlationId);
-    return restored.map(({ modelId, activatedAt }) => ({ modelId, activatedAt }));
+    return restored.map(({ entry, modelId }) => ({ modelId, activatedAt: entry.activatedAt }));
   }
 
   public sync(
@@ -300,15 +310,16 @@ class FileModelActivationMemory implements ModelActivationMemory {
     const next = new Map<string, StoredActivation>();
     let saved = 0;
     for (const model of activated) {
-      const known = this.current.get(model.provider.modelId);
+      const key = modelDigest(this.options.installationId, model.provider.modelId);
+      const known = this.current.get(key);
       const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
-      if (known !== undefined && sameBinding(known, entry)) next.set(entry.modelId, known);
+      if (known !== undefined && sameBinding(known, entry)) next.set(key, known);
       else {
-        next.set(entry.modelId, entry);
+        next.set(key, entry);
         saved += 1;
       }
     }
-    const removed = [...this.current.keys()].filter((modelId) => !next.has(modelId)).length;
+    const removed = [...this.current.keys()].filter((key) => !next.has(key)).length;
     if (saved === 0 && removed === 0) return;
     this.current = next;
     if (this.write(correlationId)) {
@@ -320,13 +331,17 @@ class FileModelActivationMemory implements ModelActivationMemory {
   private verdict(
     entry: StoredActivation,
     providers: readonly ModelProviderConfig[],
-  ): ActivationDiscardReason | undefined {
-    const provider = providers.find((candidate) => candidate.modelId === entry.modelId);
-    if (provider === undefined) return "configuration-changed";
-    if (configurationDigest(provider) !== entry.configurationDigest) return "configuration-changed";
+  ): { readonly reason?: ActivationDiscardReason; readonly provider?: ModelProviderConfig } {
+    const provider = providers.find(
+      (candidate) =>
+        modelDigest(this.options.installationId, candidate.modelId) === entry.modelDigest,
+    );
+    if (provider === undefined) return { reason: "configuration-changed" };
+    if (configurationDigest(provider) !== entry.configurationDigest)
+      return { reason: "configuration-changed" };
     if (credentialDigest(this.options.installationId, provider) !== entry.credentialDigest)
-      return "credential-changed";
-    return undefined;
+      return { reason: "credential-changed" };
+    return { provider };
   }
 
   private read(correlationId: string): ReadOutcome {
@@ -334,10 +349,10 @@ class FileModelActivationMemory implements ModelActivationMemory {
     try {
       const raw = readOwnerPrivateFile(this.options.path, MAX_FILE_BYTES);
       if (raw === undefined) return { kind: "none" };
-      return parseFile(raw, this.installation) ?? { kind: "unusable" };
+      return parseFile(raw, this.installation);
     } catch (error) {
       reportActivationFailure(this.options, "gateway.activation.restore", error, correlationId);
-      return { kind: "unusable" };
+      return { kind: "unreadable" };
     }
   }
 
