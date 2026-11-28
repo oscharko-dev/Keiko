@@ -258,39 +258,61 @@ async function firstByte(context, runId) {
   }
 }
 
+// The longest run of data-less blocks (comments such as the server's `: open`) before the first
+// event; a stream that only ever comments is refused instead of read forever.
+const MAX_SKIPPED_SSE_BLOCKS = 32;
+
+/**
+ * Time to the first SSE data frame (docs/qa/perf-evidence.md `sseFirstByteMs`): the chunk that
+ * brought the first bytes of the first event, never an earlier data-less comment block, which
+ * dispatches no event under the SSE rules.
+ */
 export async function readCodingPerformanceFirstEvent(
   reader,
   started,
   now = () => performance.now(),
 ) {
-  let firstByteMs;
-  let buffer = "";
+  const stream = { buffer: "", skipped: 0, dataStartedMs: undefined };
   const decoder = new globalThis.TextDecoder();
   while (true) {
     const chunk = await reader.read();
     if (chunk.done) throw new Error("fixture-sse-empty-or-incomplete");
     if (chunk.value.byteLength === 0) continue;
-    firstByteMs ??= now() - started;
-    buffer += decoder.decode(chunk.value, { stream: true });
-    if (Buffer.byteLength(buffer) > 65_536) throw new Error("fixture-sse-too-large");
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary >= 0) {
-      const data = buffer
-        .slice(0, boundary)
-        .split("\n")
-        .find((line) => line.startsWith("data: "));
-      buffer = buffer.slice(boundary + 2);
-      // A block without data, such as the server's `: open` comment, dispatches no event (SSE).
-      if (data !== undefined) return validatedFirstEvent(data, firstByteMs);
-      boundary = buffer.indexOf("\n\n");
-    }
+    const arrivedMs = now() - started;
+    stream.buffer += decoder.decode(chunk.value, { stream: true });
+    if (Buffer.byteLength(stream.buffer) > 65_536) throw new Error("fixture-sse-too-large");
+    const data = firstDataLine(stream);
+    if (data !== undefined) return validatedFirstEvent(data, stream.dataStartedMs ?? arrivedMs);
+    noteDataStart(stream, arrivedMs);
   }
 }
 
-function validatedFirstEvent(data, firstByteMs) {
+// What is left is the start of a block; unless it is a comment, the first event has begun.
+function noteDataStart(stream, arrivedMs) {
+  if (stream.buffer.length > 0 && !stream.buffer.startsWith(":"))
+    stream.dataStartedMs ??= arrivedMs;
+}
+
+function firstDataLine(stream) {
+  let boundary = stream.buffer.indexOf("\n\n");
+  while (boundary >= 0) {
+    const data = stream.buffer
+      .slice(0, boundary)
+      .split("\n")
+      .find((line) => line.startsWith("data: "));
+    stream.buffer = stream.buffer.slice(boundary + 2);
+    if (data !== undefined) return data;
+    stream.skipped += 1;
+    if (stream.skipped > MAX_SKIPPED_SSE_BLOCKS) throw new Error("fixture-sse-no-event");
+    boundary = stream.buffer.indexOf("\n\n");
+  }
+  return undefined;
+}
+
+function validatedFirstEvent(data, firstDataMs) {
   if (!validateCodingWorkbenchRuntimeSseEvent(JSON.parse(data.slice(6))).ok)
     throw new Error("fixture-sse-invalid");
-  return firstByteMs;
+  return firstDataMs;
 }
 
 async function finished(context, runId, observed) {

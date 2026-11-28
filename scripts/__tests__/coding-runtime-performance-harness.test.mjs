@@ -57,22 +57,39 @@ describe("native coding performance stream admission", () => {
     await expect(readCodingPerformanceFirstEvent(reader([frame]), 10, () => 15)).rejects.toThrow();
   });
 
-  it("measures the first byte at the open comment and validates the first event after it", async () => {
-    const frame = `event: status\ndata: ${JSON.stringify(event())}\n\n`;
-    let clock = 12;
-    const now = () => clock;
-    const parts = [": open\n\n", frame];
+  // Every stream opens with the `: open` comment (U-23); the metric stays the time to first data.
+  function timedReader(parts, clock) {
     const read = reader(parts);
-    const timed = {
+    return {
       read: async () => {
         const part = await read.read();
-        clock += 3;
+        clock.now += 3;
         return part;
       },
     };
-    await expect(readCodingPerformanceFirstEvent(timed, 10, now)).resolves.toBe(5);
+  }
+
+  it("times the first event, not the open comment that precedes it", async () => {
+    const frame = `event: status\ndata: ${JSON.stringify(event())}\n\n`;
+    const clock = { now: 12 };
+    await expect(
+      readCodingPerformanceFirstEvent(
+        timedReader([": open\n\n", frame], clock),
+        10,
+        () => clock.now,
+      ),
+    ).resolves.toBe(8);
     await expect(
       readCodingPerformanceFirstEvent(reader([`: open\n\n${frame}`]), 10, () => 15),
+    ).resolves.toBe(5);
+  });
+
+  it("times an event split across chunks from the chunk that began it", async () => {
+    const frame = `event: status\ndata: ${JSON.stringify(event())}\n\n`;
+    const clock = { now: 12 };
+    const parts = [`: open\n\n${frame.slice(0, 12)}`, frame.slice(12)];
+    await expect(
+      readCodingPerformanceFirstEvent(timedReader(parts, clock), 10, () => clock.now),
     ).resolves.toBe(5);
   });
 
@@ -80,6 +97,10 @@ describe("native coding performance stream admission", () => {
     await expect(
       readCodingPerformanceFirstEvent(reader([": open\n\n", ": keep\n\n"]), 10, () => 15),
     ).rejects.toThrow("fixture-sse-empty-or-incomplete");
+    const endless = reader(Array.from({ length: 40 }, () => ": keep\n\n"));
+    await expect(readCodingPerformanceFirstEvent(endless, 10, () => 15)).rejects.toThrow(
+      "fixture-sse-no-event",
+    );
   });
 
   it("refuses an empty or unbounded initial event", async () => {
