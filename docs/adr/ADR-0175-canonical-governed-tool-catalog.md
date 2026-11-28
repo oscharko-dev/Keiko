@@ -253,11 +253,14 @@ Because the budget exceeds the sandbox default, these tools join the long-hold l
 and the bridge. When such a call ends under the run, the `git.runtime-action` line names the cause
 (`deadline-exceeded`, `signal-aborted` or `authority-revoked`); the model-facing refusal is unchanged.
 A redeemed git delivery proposal (`keiko.git.execute`: stage, unstage, commit, push, pull request)
-declares `GOVERNED_GIT_EXECUTE_MAX_DURATION_MS` (ten minutes) instead of the 30 s sandbox default. It
-runs many git subprocesses, each bounded by its own command timeout and cancelled by Stop or authority
-revocation, so the catalog budget is only a runaway backstop: the fixed 30 s ended healthy delivery on
-a loaded host and on Windows with slow git or antivirus scanning in a large repository (2026-11-24
-work-ending-limits owner decision; fixed in 2026-11-27 for #4491). The default for every other tool is
+declares `GOVERNED_GIT_EXECUTE_MAX_DURATION_MS` (eight hours, the longest run an Authority Envelope
+can authorize, `MAX_RUNTIME_MAX_DURATION_MINUTES`) instead of the 30 s sandbox default. It runs many
+git subprocesses, each bounded by its own command timeout (a large-file hash by its size-proportional
+deadline) and cancelled by Stop or authority revocation, and the catalog deadline is the earlier of
+that budget and the run's authority expiry, so the budget is only a runaway backstop. The fixed 30 s
+ended healthy delivery on a loaded host and on Windows with slow git or antivirus scanning in a large
+repository, and the later ten minutes still cut a healthy 6 GiB stage whose own hash deadline is
+674.4 s (2026-11-24 work-ending-limits owner decision; fixed in 2026-11-27 and 2026-11-28 for #4491). The default for every other tool is
 unchanged, and the bridge and client deadlines derive from this budget like any other. A call that
 does hit a budget settles `timeout`/`deadline-exceeded` and its `tool-catalog.invocation-settled`
 line carries `budgetMs`, the bound that fired. A git execute call with a budget above 30 s is counted in
