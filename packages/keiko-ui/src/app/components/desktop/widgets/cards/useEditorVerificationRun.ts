@@ -29,6 +29,7 @@ import {
   admitDirectBrowserStream,
   type DirectStreamAdmission,
 } from "../../../../../lib/browser-stream-capacity";
+import { reportClientDiagnostic } from "../../../../../lib/client-diagnostics";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
   fetchVerificationCatalog,
@@ -441,6 +442,23 @@ function releaseSharedSourceBudget(): void {
   admission?.release();
 }
 
+// A yield closes the connection for an essential stream of a visible tab while this document is
+// hidden. The server keeps no replay for this stream and there is no run-state read, so the yield
+// takes the same path as a lost connection: every dependent root becomes uncertain until a fresh
+// terminal event arrives, and the bounded terminal reconciliation fails it closed otherwise.
+let sharedSourceYielded = false;
+
+function yieldSharedSource(): void {
+  const source = sharedSource;
+  if (source === null) return;
+  if (sharedSourceOpen) rememberUncertainRoots();
+  sharedSource = null;
+  sharedSourceOpen = false;
+  source.close();
+  sharedSourceYielded = true;
+  setDependentSourceHealth("reconnecting");
+}
+
 function handleSharedSourceLoss(source: EventSource): void {
   if (sharedSource !== source) return;
   if (sharedSourceOpen) rememberUncertainRoots();
@@ -455,7 +473,10 @@ function handleSharedSourceLoss(source: EventSource): void {
 function createSharedSource(): void {
   if (sharedSource !== null || sharedSourceAdmission?.active === true || !hasActiveRun()) return;
   // The stream opens only once an origin-wide connection slot admits it (see the capacity module).
-  sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource);
+  sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, {
+    yieldWhenHidden: true,
+    onYield: yieldSharedSource,
+  });
   void waitForSharedSource();
 }
 
@@ -478,6 +499,12 @@ function connectSharedSource(): void {
   }
   sharedSource = source;
   sharedSourceOpen = false;
+  if (sharedSourceYielded) {
+    sharedSourceYielded = false;
+    reportClientDiagnostic(
+      "[keiko] editor verification stream reopened after yielding its connection (resync=terminal-reconciliation)", // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
+    );
+  }
   source.addEventListener("open", () => {
     if (sharedSource !== source) return;
     sharedSourceOpen = true;
@@ -505,6 +532,7 @@ function closeSharedSource(): void {
   sharedSourceOpen = false;
   clearSharedSourceReconnectTimer();
   sharedSourceReconnectAttempts = 0;
+  sharedSourceYielded = false;
   source?.close();
   releaseSharedSourceBudget();
   settleSharedSourceReady(false);
@@ -665,6 +693,7 @@ export function resetEditorVerificationRunStateForTests(): void {
   projectStates.clear();
   projectIdByRunId.clear();
   rootsAwaitingFreshTerminal.clear();
+  sharedSourceYielded = false;
   totalListenerCount = 0;
 }
 

@@ -4,6 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
+import { createOriginLocksFixture } from "../../../../../test-utils/origin-locks-fixture";
+import {
+  admitDirectBrowserStream,
+  resetBrowserStreamCapacityForTests,
+  type DirectStreamAdmission,
+} from "../../../../../lib/browser-stream-capacity";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "../../../../../lib/client-diagnostics";
 import {
   resetEditorVerificationRunStateForTests,
   useEditorVerificationRun,
@@ -1312,5 +1322,85 @@ describe("useEditorVerificationRun", () => {
     });
     await tick();
     expect(result.current.catalogSettled).toBe(true);
+  });
+});
+
+// #4491: a hidden document's verification stream gives its connection to an essential stream of a
+// visible document. The server keeps no replay, so the reopen resyncs through the hook's existing
+// uncertainty path: health fails closed until a fresh terminal event settles it.
+describe("useEditorVerificationRun yielding to a visible document", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    resetClientDiagnosticWriter();
+  });
+
+  it("closes while hidden for a visible waiter, reopens, and settles from the next terminal event", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+    const held: DirectStreamAdmission[] = [];
+    try {
+      const { result } = render();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const first = FakeEventSource.instances[0];
+      expect(first).toBeDefined();
+      const waiterAdmitted = vi.fn();
+      for (let index = 0; index < 3; index += 1) {
+        held.push(admitDirectBrowserStream(() => undefined));
+      }
+      held.push(admitDirectBrowserStream(waiterAdmitted));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(first?.closed).toBe(true);
+      expect(waiterAdmitted).toHaveBeenCalledOnce();
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("reconnecting");
+      held.forEach((admission) => admission.release());
+      held.length = 0;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+      act(() =>
+        FakeEventSource.instances[1]?.emit("run-completed", {
+          runId: "run-1",
+          ...completed("passed"),
+        }),
+      );
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
+      const messages = writer.mock.calls.map(([message]) => String(message));
+      expect(
+        messages.filter((message) => message.includes("yielded origin capacity")),
+      ).toHaveLength(1);
+      expect(
+        messages.filter((message) => message.includes("verification stream reopened")),
+      ).toHaveLength(1);
+    } finally {
+      held.forEach((admission) => admission.release());
+      unsubscribe();
+      vi.useRealTimers();
+    }
   });
 });
