@@ -658,9 +658,10 @@ function validVerifiedOperands(
     validRevisionState(v.head),
     validRevisionState(v.base),
     // An unborn head is the branch being committed to. An unborn base is the base the run names:
-    // the same branch, or the protected branch a task branch was cut from before it had a commit.
+    // the same branch, or the protected branch a task branch was cut from, which stays unborn
+    // while the task branch gains commits (#4491).
     v.head.kind === "born" || v.head.branch === v.branchName,
-    v.base.kind === "born" || (v.head.kind === "unborn" && v.base.branch === v.baseRef),
+    v.base.kind === "born" || v.base.branch === v.baseRef,
     /^[a-f0-9]{64}$/u.test(v.stagedTreeDigest),
     isSafeGitRefName(v.branchName),
     isSafeGitRefName(v.baseRef),

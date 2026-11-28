@@ -23,6 +23,7 @@ import {
   readGitWorktreeSnapshot,
   readGitTreeDigest,
   readGitHeadState,
+  readGitBaseState,
   readGitIndexTreeDigest,
 } from "./git-mutation-node.js";
 import { gitZeroObjectId, type GitHeadState } from "./git-head-state.js";
@@ -460,6 +461,24 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
       base: head,
     };
   }
+  async function unbornCandidateOn(
+    branchName: string,
+    baseRef: string,
+  ): Promise<GitCommitExecRequest & { readonly verified: GitVerifiedCommitPrecondition }> {
+    const head = await readGitHeadState({ workspace });
+    if (head.kind !== "unborn") throw new Error("expected an unborn head");
+    return {
+      message: "feat: the first commit",
+      allowEmpty: false,
+      verified: {
+        head,
+        base: await readGitBaseState({ workspace }, baseRef, head),
+        stagedTreeDigest: await readGitIndexTreeDigest({ workspace }),
+        branchName,
+        baseRef,
+      },
+    };
+  }
   async function unbornCandidate(): Promise<
     GitCommitExecRequest & { readonly verified: GitVerifiedCommitPrecondition }
   > {
@@ -552,6 +571,61 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
   it("reads the orphan branch as an explicit unborn state", async () => {
     const head: GitHeadState = await readGitHeadState({ workspace });
     expect(head).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });
+  });
+  // The protected branch stays unborn after the task branch cut from it gets its first commit
+  // (#4491): the base read, and a second verified commit against it, must keep working.
+  it("keeps the never-born base usable after the task branch has its first commit", async () => {
+    const created = await adapter().createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(created.outcome).toBe("succeeded");
+    expect(
+      (await adapter().commit(await unbornCandidateOn("feature/first", "fresh"))).outcome,
+    ).toBe("succeeded");
+    const head = await readGitHeadState({ workspace });
+    expect(head.kind).toBe("born");
+    const base = await readGitBaseState({ workspace }, "fresh", head);
+    expect(base).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });
+    writeFileSync(join(root, "code.txt"), "second\n");
+    git(["add", "code.txt"]);
+    const second = await adapter().commit({
+      message: "feat: the second commit",
+      allowEmpty: false,
+      verified: {
+        head,
+        base,
+        stagedTreeDigest: await readGitIndexTreeDigest({ workspace }),
+        branchName: "feature/first",
+        baseRef: "fresh",
+      },
+    });
+    expect(second.outcome).toBe("succeeded");
+    expect(git(["rev-list", "--count", "HEAD"])).toBe("2");
+    expect(git(["branch", "--list", "fresh"])).toBe("");
+  });
+  it("treats a base ref that appeared after the review as drift", async () => {
+    await adapter().createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    await adapter().commit(await unbornCandidateOn("feature/first", "fresh"));
+    const head = await readGitHeadState({ workspace });
+    const base = await readGitBaseState({ workspace }, "fresh", head);
+    writeFileSync(join(root, "code.txt"), "second\n");
+    git(["add", "code.txt"]);
+    const verified = {
+      head,
+      base,
+      stagedTreeDigest: await readGitIndexTreeDigest({ workspace }),
+      branchName: "feature/first",
+      baseRef: "fresh",
+    };
+    git(["update-ref", "refs/heads/fresh", git(["rev-parse", "dev"])]);
+    const result = await adapter().commit({ message: "feat: x", allowEmpty: false, verified });
+    expect(result.outcome).toBe("failed");
   });
   it("creates a signed root commit with no parent and the reviewed tree", async () => {
     const request = await unbornCandidate();
@@ -682,7 +756,10 @@ describe("verified operands that contradict each other", () => {
   const cases: readonly (readonly [string, Partial<GitVerifiedCommitPrecondition>])[] = [
     ["an unborn head of another branch", { head: { ...unborn, branch: "other" }, base: unborn }],
     ["an unborn base that is not the branch", { head: unborn, base: unborn, baseRef: "dev" }],
-    ["an unborn base under a born head", { head: born, base: unborn }],
+    [
+      "an unborn base under a born head that is not the base ref",
+      { head: born, base: unborn, baseRef: "dev" },
+    ],
     ["an unborn head with a unsafe branch name", { head: { ...unborn, branch: "-x" } }],
     ["a born head with a malformed sha", { head: { kind: "born", sha: "zz" } }],
   ];

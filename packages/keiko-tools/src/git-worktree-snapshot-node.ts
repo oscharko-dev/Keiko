@@ -1216,7 +1216,9 @@ export async function readGitHeadState(deps: NodeGitWorktreeReaderDeps): Promise
 
 /**
  * The state of a base ref relative to the HEAD it is compared with. An unborn branch is its own
- * base (a fresh repository has nothing older); any other base must resolve to a commit.
+ * base (a fresh repository has nothing older); a base that names no commit is itself unborn, also
+ * once the task branch cut from it has its own commit, so the protected branch that was never born
+ * stays a usable, drift-checked base (#4491). Any other base must resolve to a commit.
  */
 export async function readGitBaseState(
   deps: NodeGitWorktreeReaderDeps,
@@ -1224,13 +1226,25 @@ export async function readGitBaseState(
   head: GitHeadState,
 ): Promise<GitHeadState> {
   if (head.kind === "unborn" && baseRef === head.branch) return head;
-  if (head.kind === "unborn" && (await baseRefIsAbsent(deps, baseRef)))
-    return { kind: "unborn", branch: baseRef, objectIdLength: head.objectIdLength };
+  if (await baseRefIsAbsent(deps, baseRef)) {
+    const objectIdLength =
+      head.kind === "unborn" ? head.objectIdLength : await readGitObjectIdLength(deps);
+    return { kind: "unborn", branch: baseRef, objectIdLength };
+  }
   return { kind: "born", sha: await readGitRevision(deps, baseRef) };
 }
 
-// A base that names no commit while HEAD is unborn is itself unborn: a task branch cut from an
-// unborn protected branch has nothing older to be based on (#4491). Only a local branch ref that is
+async function readGitObjectIdLength(deps: NodeGitWorktreeReaderDeps): Promise<40 | 64> {
+  const format = (
+    await runRead(machineReadContext(deps), ["rev-parse", "--show-object-format"])
+  ).trim();
+  if (format !== "sha1" && format !== "sha256")
+    throw new GitWorktreeReadError("git object format is unsupported");
+  return format === "sha256" ? 64 : 40;
+}
+
+// A base that names no commit is itself unborn: a task branch cut from an unborn protected branch
+// has nothing older to be based on (#4491). Only a local branch ref that is
 // absent and resolves to nothing counts; a ref that exists but does not read is damage and fails.
 async function baseRefIsAbsent(deps: NodeGitWorktreeReaderDeps, baseRef: string): Promise<boolean> {
   if (!isSafeGitRefName(baseRef)) return false;
