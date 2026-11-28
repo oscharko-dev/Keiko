@@ -6,6 +6,7 @@ import {
   resetBrowserStreamCapacityForTests,
 } from "./browser-stream-capacity";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 // #4573: the Workbench run stream is the main surface. When other streams hold every origin slot at
 // the moment it starts, it must still open eventually: it keeps asking for a slot on a bounded
@@ -148,5 +149,29 @@ describe("the Workbench run stream under full stream occupancy", () => {
     });
     expect(OpenedEventSource.instances).toHaveLength(0);
     held.forEach((admission) => admission.release());
+  });
+});
+
+describe("the Workbench run stream without an event source", () => {
+  it("records a closed diagnostic and reports the failure instead of staying silent", async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("EventSource", undefined);
+    const reported: { message: string; kind: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reported.push({ message, kind: meta?.errorKind }));
+    const onError = vi.fn();
+    try {
+      const view = runStream(onError);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(onError).toHaveBeenCalledOnce();
+      expect(reported).toContainEqual({
+        message: "[keiko] coding workbench runtime stream could not be created",
+        kind: "unavailable",
+      });
+      view.unmount();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 });

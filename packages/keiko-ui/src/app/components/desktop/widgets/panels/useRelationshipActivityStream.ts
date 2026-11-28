@@ -543,6 +543,9 @@ export function useRelationshipActivityStream(
           return;
         }
       } catch {
+        reportClientDiagnostic("[keiko] relationship activity stream could not be created", {
+          errorKind: "unavailable",
+        });
         queueMicrotask(closeStream);
         scheduleReconnect();
         return;

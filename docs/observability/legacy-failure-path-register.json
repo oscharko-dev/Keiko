@@ -7365,12 +7365,6 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useEditorVerificationRun.ts",
-      "owner": "createSharedSource",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/useEditorVerificationRun.ts",
       "owner": "onMessage",
       "kind": "unregistered-catch",
       "count": 1
@@ -7432,12 +7426,6 @@
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/panels/useRelationshipActivityStream.ts",
       "owner": "handleRawData",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/panels/useRelationshipActivityStream.ts",
-      "owner": "startSSE",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -7562,12 +7550,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/coding-workbench-event-retention.ts",
-      "owner": "useCodingWorkbenchRuntimeEventStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
       "owner": "useCodexSetup",
       "kind": "unregistered-catch",
@@ -7666,12 +7648,6 @@
     {
       "path": "packages/keiko-ui/src/lib/useCodingWorkbenchQuestions.ts",
       "owner": "useQuestionMutation",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/useSSE.ts",
-      "owner": "openSharedEventSource",
       "kind": "unregistered-catch",
       "count": 1
     },

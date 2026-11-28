@@ -874,3 +874,28 @@ describe("useSSE", () => {
     view.unmount();
   });
 });
+
+describe("useSSE unreadable frames", () => {
+  afterEach(() => {
+    FakeEventSource.instances = [];
+    vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
+  });
+
+  it("records one closed diagnostic per stream for frames it cannot read, never their content", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: { message: string; kind: string | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reported.push({ message, kind: meta?.errorKind }));
+    renderHook(() => useSSE("run 1"));
+    const source = FakeEventSource.instances[0];
+    act(() => {
+      source?.emit("secret-not-json");
+      source?.emit("{broken");
+    });
+    const lines = reported.filter((entry) => entry.message.includes("frame unreadable"));
+    expect(lines).toEqual([
+      { message: "[keiko] run events stream frame unreadable", kind: "validation-failed" },
+    ]);
+    expect(JSON.stringify(reported)).not.toContain("secret-not-json");
+  });
+});

@@ -489,6 +489,9 @@ function connectSharedSource(): void {
   try {
     source = createSameOriginApiEventSource(EVENTS_URL);
   } catch {
+    reportClientDiagnostic("[keiko] editor verification stream could not be created", {
+      errorKind: "unavailable",
+    });
     source = null;
   }
   if (source === null) {

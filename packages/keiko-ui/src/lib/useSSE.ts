@@ -57,6 +57,7 @@ const lastSeqBySubscriber = new Map<RunEventSubscriber, number>();
 let everObservedEvent = false;
 let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
+let unreadableFrameReported = false;
 // Releases the connection this document's run-event stream holds outside the shared stream pool.
 let sharedEventSourceAdmission: DirectStreamAdmission | null = null;
 let reconnectTimer: number | undefined;
@@ -120,6 +121,7 @@ function closeSharedEventSource(): void {
   sharedEventSource?.close();
   sharedEventSource = null;
   sharedEventSourceLive = false;
+  unreadableFrameReported = false;
   sharedEventSourceAdmission?.release();
   sharedEventSourceAdmission = null;
 }
@@ -306,6 +308,13 @@ function connectSharedEventSource(): void {
     try {
       parsed = JSON.parse(ev.data as string) as HarnessEvent;
     } catch {
+      // One line per stream, not per frame: a broken producer must not flood the activity log.
+      if (!unreadableFrameReported) {
+        unreadableFrameReported = true;
+        reportClientDiagnostic("[keiko] run events stream frame unreadable", {
+          errorKind: "validation-failed",
+        });
+      }
       return;
     }
     notifyRun(parsed);

@@ -296,6 +296,12 @@ export function createCodingWorkbenchRuntimeStreamSession(
   );
 }
 
+function reportRuntimeStreamUnavailable(): void {
+  reportClientDiagnostic("[keiko] coding workbench runtime stream could not be created", {
+    errorKind: "unavailable",
+  });
+}
+
 export function useCodingWorkbenchRuntimeEventStream(
   runId: string | undefined,
   epoch: number,
@@ -325,6 +331,7 @@ export function useCodingWorkbenchRuntimeEventStream(
           { staleAfterMs },
         );
       } catch (error) {
+        reportRuntimeStreamUnavailable();
         queueMicrotask(() => admission?.release());
         handlersRef.current.onError(error);
       }
