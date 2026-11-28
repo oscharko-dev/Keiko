@@ -340,7 +340,8 @@ export function useCodingWorkbenchRuntimeEventStream(
     // hidden it gives the slot to a visible tab's essential stream; it reopens (a fresh session
     // snapshots the run) when the slot is granted again.
     admission = admitDirectBrowserStream(openSession, {
-      yieldWhenHidden: true,
+      // Lowest value to lose last: it carries the run state and pending approvals.
+      replayRank: 2,
       onYield: () => {
         session?.close();
         session = undefined;

@@ -41,6 +41,9 @@ Accepted
 > admitted as an essential stream and never yields its connection slot. The server treats a dropped
 > bridge as an unavailable session, an action issued during a gap would find no bridge, and the
 > stream has no replay for the frames a gap would lose.
+> It is a non-replayable stream: while it waits for a slot, replayable streams of a visible
+> document yield to it. The limit of this rule (two hidden tabs each holding a bridge and a
+> verification stream fill all four slots) is named in `docs/observability/README.md`.
 
 ## Context
 

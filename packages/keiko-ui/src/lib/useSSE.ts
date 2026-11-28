@@ -262,7 +262,22 @@ function openSharedEventSource(): void {
   ) {
     return;
   }
-  sharedEventSourceAdmission = admitDirectBrowserStream(connectSharedEventSource);
+  // Replayable: every subscribed run is re-read from its last cursor on reopening, so this stream
+  // gives its slot to a non-replayable one (editor agent bridge, verification) and reopens later.
+  // Of the replayable streams it yields first: it feeds the Agent run widget, not the Workbench.
+  sharedEventSourceAdmission = admitDirectBrowserStream(connectSharedEventSource, {
+    replayRank: 0,
+    onYield: yieldSharedEventSource,
+  });
+}
+
+// Closes the connection only: the admission stays, so the stream asks for a slot again.
+function yieldSharedEventSource(): void {
+  sharedEventSource?.close();
+  sharedEventSource = null;
+  sharedEventSourceLive = false;
+  unreadableFrameReported = false;
+  notifyAll("connecting", null);
 }
 
 function connectSharedEventSource(): void {

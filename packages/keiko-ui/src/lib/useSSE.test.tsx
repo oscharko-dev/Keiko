@@ -899,3 +899,44 @@ describe("useSSE unreadable frames", () => {
     expect(JSON.stringify(reported)).not.toContain("secret-not-json");
   });
 });
+
+describe("useSSE under origin stream capacity", () => {
+  afterEach(() => {
+    FakeEventSource.instances = [];
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("gives its connection to a non-replayable stream and reopens when a slot frees", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+    const view = renderHook(() => useSSE("run 1"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const first = FakeEventSource.instances[0];
+    expect(first).toBeDefined();
+    const holders = Array.from({ length: 3 }, () => admitDirectBrowserStream(() => undefined));
+    const waiterAdmitted = vi.fn();
+    const waiter = admitDirectBrowserStream(waiterAdmitted, { nonReplayable: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(first?.close).toHaveBeenCalled();
+    expect(waiterAdmitted).toHaveBeenCalledOnce();
+    expect(view.result.current.status).toBe("connecting");
+    waiter.release();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    holders.forEach((admission) => admission.release());
+  });
+});

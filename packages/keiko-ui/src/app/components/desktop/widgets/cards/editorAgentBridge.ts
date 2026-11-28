@@ -741,7 +741,9 @@ function reconcileEditorAgentEventSource(): void {
   // The stream opens only once an origin-wide connection slot admits it. It is essential and never
   // yields: the server treats a dropped bridge as an unavailable session, so an action issued
   // during a gap would find no bridge, and the stream has no replay for what the gap would lose.
-  editorAgentAdmission = admitDirectBrowserStream(() => openEditorAgentEventSource(url));
+  editorAgentAdmission = admitDirectBrowserStream(() => openEditorAgentEventSource(url), {
+    nonReplayable: true,
+  });
 }
 
 function openEditorAgentEventSource(url: string): void {

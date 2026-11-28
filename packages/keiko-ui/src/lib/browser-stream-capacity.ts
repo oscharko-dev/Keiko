@@ -57,7 +57,7 @@ let admittedDirectStreams = 0;
  * keep their slot while their document is visible. `background` streams (relationship activity,
  * Browser) give theirs up to a waiter a person can see (never to another background stream or to a
  * hidden document's waiter), and an
- * essential stream that opted in (`yieldWhenHidden`) gives its slot up to an essential stream of a
+ * essential stream that opted in (`replayRank`) gives its slot up to an essential stream of a
  * visible document while its own document is hidden, so a forgotten tab never starves the tab a
  * person is looking at.
  */
@@ -68,10 +68,17 @@ export interface DirectStreamOptions {
   /** The stream lost its slot to a more urgent one: close the connection. */
   readonly onYield?: () => void;
   /**
-   * Essential only: also yield to an essential waiter of a visible document while this document is
-   * hidden. The stream asks again the moment the document becomes visible. Needs `onYield`.
+   * Essential only: the stream reopens losslessly from a fresh snapshot, so it may give its slot up.
+   * It yields to an essential waiter of a visible document while its own document is hidden, and to
+   * a visible non-replayable waiter in any case, lowest rank first (a lower rank yields before a
+   * higher one). It asks again when its document becomes visible. Needs `onYield`.
    */
-  readonly yieldWhenHidden?: boolean;
+  readonly replayRank?: number;
+  /**
+   * Essential only: the server keeps no replay for this stream (the editor verification stream and
+   * the editor agent bridge), so it never yields, and a waiting one makes replayable streams yield.
+   */
+  readonly nonReplayable?: boolean;
   /** The stream is mid-action: a yield is postponed to the next check while this returns false. */
   readonly canYield?: () => boolean;
   /**
@@ -85,6 +92,7 @@ export interface DirectStreamOptions {
 
 const DIRECT_RETRY_INITIAL_MS = 1_000;
 const DIRECT_RETRY_MAX_MS = 30_000;
+const HAND_ON_RETRY_MS = 250;
 /** How long an essential stream waits silently before the surface is told it is waiting. */
 export const STREAM_WAITING_THRESHOLD_MS = 10_000;
 
@@ -111,7 +119,8 @@ function directLeaseOptions(request: DirectSlotRequest): PersistentCapacityOptio
     yieldable: background,
     essential: !background,
     slots: PERSISTENT_STREAM_CONNECTION_CEILING,
-    ...(!background && options.yieldWhenHidden === true ? { yieldWhenHidden: true } : {}),
+    ...(!background && options.replayRank !== undefined ? { replayRank: options.replayRank } : {}),
+    ...(!background && options.nonReplayable === true ? { nonReplayable: true } : {}),
     ...(options.canYield === undefined ? {} : { canYield: options.canYield }),
     ...(request.quiet ? { quietUnavailable: true } : {}),
     ...(options.correlationId === undefined ? {} : { correlationId: options.correlationId }),
@@ -246,11 +255,17 @@ function loseDirectSlot(
     options.onYield?.();
   }
   state.waitAttempts += 1;
-  state.retryTimer = window.setTimeout(() => {
-    state.retryTimer = undefined;
-    request();
-  }, directRetryDelay(state.attempt));
-  state.attempt += 1;
+  // A slot passed on to a visible waiter is asked for again at once (a short pause only keeps two
+  // waiters from spinning on one slot), never behind the growing backoff of a failed request.
+  const handedOn = reason === "handed-on";
+  state.retryTimer = window.setTimeout(
+    () => {
+      state.retryTimer = undefined;
+      request();
+    },
+    handedOn ? HAND_ON_RETRY_MS : directRetryDelay(state.attempt),
+  );
+  if (!handedOn) state.attempt += 1;
 }
 
 // A document that yielded while hidden asks again the moment a person looks at it.
@@ -317,7 +332,7 @@ export function admitDirectBrowserStream(
       quiet: state.unavailableReported,
     });
   };
-  if (options.yieldWhenHidden === true) {
+  if (options.replayRank !== undefined) {
     state.stopVisibilityWatch = watchVisibilityRetry(state, request);
   }
   request();
@@ -334,7 +349,7 @@ export function admitDirectBrowserStream(
 /**
  * Promise form of {@link admitDirectBrowserStream} for an essential stream a caller awaits: it
  * resolves with the release callback once a slot admits the stream, or with `null` when the signal
- * aborted first. `onYield` runs when the slot is later given up (see `yieldWhenHidden`); the caller
+ * aborted first. `onYield` runs when the slot is later given up (see `replayRank`); the caller
  * then closes its connection, releases, and admits again.
  */
 export function admitDirectBrowserStreamAsync(
@@ -383,6 +398,7 @@ export function resetBrowserStreamCapacityForTests(): void {
   admittedDirectStreams = 0;
   listeners.clear();
   localWaiters.clear();
+  localStrongWaiters.clear();
   nextPersistentSlot = 0;
   unsupportedCapacityReported = false;
 }
@@ -398,14 +414,16 @@ interface PersistentCapacityOptions {
   readonly yieldable?: boolean;
   /** An essential direct stream: it queues on every slot, announces itself and never times out. */
   readonly essential?: boolean;
-  readonly yieldWhenHidden?: boolean;
+  readonly replayRank?: number;
+  readonly nonReplayable?: boolean;
   readonly canYield?: () => boolean;
   readonly quietUnavailable?: boolean;
   readonly correlationId?: string;
   readonly slots?: number;
 }
 
-type PersistentReleaseReason = "expired" | "cancelled" | "unavailable";
+// `handed-on`: the slot was granted, then passed on at once to a waiter a person can see.
+type PersistentReleaseReason = "expired" | "cancelled" | "unavailable" | "handed-on";
 
 interface PersistentLease {
   readonly abort: AbortController;
@@ -458,18 +476,33 @@ function staggerLeaseCheck(name: string, lease: PersistentLease): Promise<void> 
 // are also counted locally, so a hidden document's own background streams still give way to its
 // own waiter.
 const WAITING_MARKER_SUFFIX = ":waiting:visible";
+const STRONG_MARKER_SUFFIX = ":nonreplayable";
 const localWaiters = new Map<string, number>();
+const localStrongWaiters = new Map<string, number>();
 
 function waitingMarker(slot: string): string {
   return `${slot}${WAITING_MARKER_SUFFIX}`;
 }
 
-function countLocalWaiter(names: readonly string[], delta: 1 | -1): void {
+// The marker of a visible waiter whose stream the server cannot replay: replayable holders make way.
+function strongMarker(slot: string): string {
+  return `${waitingMarker(slot)}${STRONG_MARKER_SUFFIX}`;
+}
+
+function countLocalWaiter(
+  counts: Map<string, number>,
+  names: readonly string[],
+  delta: 1 | -1,
+): void {
   for (const name of names) {
-    const next = (localWaiters.get(name) ?? 0) + delta;
-    if (next > 0) localWaiters.set(name, next);
-    else localWaiters.delete(name);
+    const next = (counts.get(name) ?? 0) + delta;
+    if (next > 0) counts.set(name, next);
+    else counts.delete(name);
   }
+}
+
+function strongWaiterPresent(snapshot: LockManagerSnapshot, name: string): boolean {
+  return lockPresent(snapshot, strongMarker(name)) || (localStrongWaiters.get(name) ?? 0) > 0;
 }
 
 function lockPresent(snapshot: LockManagerSnapshot, name: string): boolean {
@@ -480,7 +513,7 @@ function lockPresent(snapshot: LockManagerSnapshot, name: string): boolean {
 // always do, an essential stream only when it opted in to yield while its document is hidden.
 function leaseChecksWaiters(options: PersistentCapacityOptions): boolean {
   return options.essential === true
-    ? options.yieldWhenHidden === true
+    ? options.replayRank !== undefined
     : options.yieldable !== false;
 }
 
@@ -496,13 +529,16 @@ function holderShouldYield(
   if (options.essential !== true) {
     return lockPresent(snapshot, waitingMarker(name)) || (localWaiters.get(name) ?? 0) > 0;
   }
-  return documentHidden() && lockPresent(snapshot, waitingMarker(name));
+  if (documentHidden() && lockPresent(snapshot, waitingMarker(name))) return true;
+  return options.replayRank !== undefined && strongWaiterPresent(snapshot, name);
 }
 
 // An essential holder looks for waiters only while its document is hidden.
 function waiterCheckDue(lease: PersistentLease): boolean {
   if (lease.ended || !leaseChecksWaiters(lease.options)) return false;
-  return lease.options.essential !== true || documentHidden();
+  return (
+    lease.options.essential !== true || documentHidden() || lease.options.replayRank !== undefined
+  );
 }
 
 // A stream in the middle of an action keeps its slot until the next check.
@@ -523,6 +559,25 @@ function reportWaiterQueryFailureOnce(lease: PersistentLease): void {
   });
 }
 
+// Replayable streams yield lowest rank first: a higher rank waits for the lower ones to act and
+// keeps its slot if the waiter has been served meanwhile.
+const REPLAY_RANK_DELAY_MS = 1_500;
+
+async function lowerRankYieldedFirst(
+  locks: LockManager,
+  name: string,
+  lease: PersistentLease,
+): Promise<boolean> {
+  const rank = lease.options.replayRank ?? 0;
+  if (rank === 0) return false;
+  await new Promise<void>((resolve) => {
+    lease.staggerTimer = window.setTimeout(resolve, rank * REPLAY_RANK_DELAY_MS);
+  });
+  if (lease.ended) return true;
+  const snapshot = await locks.query();
+  return !shouldGiveUpSlot(snapshot, name, lease.options);
+}
+
 async function checkLeaseWaiters(
   locks: LockManager,
   name: string,
@@ -536,7 +591,9 @@ async function checkLeaseWaiters(
     if (lease.ended) return;
     const snapshot = await locks.query();
     lease.waiterQueryFailed = false;
-    if (shouldGiveUpSlot(snapshot, name, lease.options)) releaseLease(lease, "expired");
+    if (!shouldGiveUpSlot(snapshot, name, lease.options)) return;
+    if (await lowerRankYieldedFirst(locks, name, lease)) return;
+    releaseLease(lease, "expired");
   } catch {
     reportWaiterQueryFailureOnce(lease);
   }
@@ -545,13 +602,24 @@ async function checkLeaseWaiters(
 // A stream that reaches the head of a slot's queue while a waiter a person can see needs that slot
 // hands it straight on instead of opening a connection it would have to close again: a background
 // stream gives way to any visible waiter, an essential stream of a hidden document to the visible
-// waiter of another one. The shared pool and a visible document's essential stream keep what they
-// were granted.
-function handsOnToVisibleWaiter(lease: PersistentLease): boolean {
+// waiter of another one, and a replayable stream to a non-replayable one. The shared pool and a
+// visible document's non-replayable essential stream keep what they were granted.
+function visibleWaiterNeedsSlot(
+  snapshot: LockManagerSnapshot,
+  name: string,
+  lease: PersistentLease,
+): boolean {
   const { options } = lease;
-  if (options.slots === undefined) return false;
-  if (options.essential === true) return !lease.documentVisible;
-  return options.yieldable !== false;
+  if (options.essential !== true) {
+    return options.yieldable !== false && lockPresent(snapshot, waitingMarker(name));
+  }
+  if (!lease.documentVisible && lockPresent(snapshot, waitingMarker(name))) return true;
+  // A replayable stream that was granted a slot a non-replayable waiter needs passes it on.
+  return (
+    options.replayRank !== undefined &&
+    options.nonReplayable !== true &&
+    strongWaiterPresent(snapshot, name)
+  );
 }
 
 async function deferToVisibleWaiter(
@@ -559,12 +627,12 @@ async function deferToVisibleWaiter(
   name: string,
   lease: PersistentLease,
 ): Promise<boolean> {
-  if (!handsOnToVisibleWaiter(lease)) return false;
+  if (lease.options.slots === undefined) return false;
   try {
     const snapshot = await locks.query();
     if (lease.ended) return true;
-    if (!lockPresent(snapshot, waitingMarker(name))) return false;
-    releaseLease(lease, "expired");
+    if (!visibleWaiterNeedsSlot(snapshot, name, lease)) return false;
+    releaseLease(lease, lease.options.essential === true ? "handed-on" : "expired");
     return true;
   } catch {
     // A failed contention query only skips the early hand-over; it is reported once per lease.
@@ -672,7 +740,9 @@ function announceWaiter(
   lease: PersistentLease,
   waiting: AbortSignal,
 ): void {
-  countLocalWaiter(names, 1);
+  const strong = lease.options.nonReplayable === true;
+  countLocalWaiter(localWaiters, names, 1);
+  if (strong) countLocalWaiter(localStrongWaiters, names, 1);
   let visible: AbortController | undefined;
   const sync = (): void => {
     if (waiting.aborted) return;
@@ -685,7 +755,10 @@ function announceWaiter(
     if (visible !== undefined) return;
     const own = new AbortController();
     visible = own;
-    for (const name of names) void holdMarker(locks, waitingMarker(name), own.signal);
+    for (const name of names) {
+      void holdMarker(locks, waitingMarker(name), own.signal);
+      if (strong) void holdMarker(locks, strongMarker(name), own.signal);
+    }
   };
   sync();
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", sync);
@@ -694,7 +767,8 @@ function announceWaiter(
     () => {
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", sync);
       visible?.abort();
-      countLocalWaiter(names, -1);
+      countLocalWaiter(localWaiters, names, -1);
+      if (strong) countLocalWaiter(localStrongWaiters, names, -1);
     },
     { once: true },
   );
@@ -747,7 +821,7 @@ export function acquirePersistentBrowserStreamCapacity(
     ended: false,
     granted: false,
     waiterQueryFailed: false,
-    documentVisible: true,
+    documentVisible: !documentHidden(),
     acquisitionTimer: 0,
     leaseTimer: undefined,
     staggerTimer: undefined,

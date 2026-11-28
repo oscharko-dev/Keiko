@@ -209,6 +209,30 @@ interface ActivityConnectionInput {
   readonly setConnectionWaiting: (waiting: boolean) => void;
 }
 
+function snapshotPublisher(
+  controller: AbortController,
+  ingestDeltas: UseCodingWorkbenchModelTextsResult["ingestDeltas"],
+  enqueue: (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void,
+): (snapshot: CodingAppSessionChannelSnapshot, final?: boolean) => void {
+  return (snapshot, final) => {
+    if (controller.signal.aborted) return;
+    // Deltas are appended as they arrive: the batch keeps only the newest snapshot.
+    const content = snapshot.content;
+    if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
+    enqueue(snapshot, final);
+  };
+}
+
+// A wait reported after its connection ended must not touch a state that moved on.
+function guardedWaiting(
+  controller: AbortController,
+  setWaiting: (waiting: boolean) => void,
+): (waiting: boolean) => void {
+  return (waiting) => {
+    if (!controller.signal.aborted) setWaiting(waiting);
+  };
+}
+
 function useActivityConnection(input: ActivityConnectionInput): void {
   const { batch, epoch, runId, runStateRef, setState, ingestDeltas, setConnectionWaiting } = input;
   const { cancel, enqueue, flush } = batch;
@@ -228,14 +252,12 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       feed: current.feed?.runId === runId ? current.feed : null,
       errorCode: null,
     }));
-    const publish = (snapshot: CodingAppSessionChannelSnapshot, final?: boolean): void => {
-      if (controller.signal.aborted) return;
-      // Deltas are appended as they arrive: the batch below keeps only the newest snapshot.
-      const content = snapshot.content;
-      if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
-      enqueue(snapshot, final);
-    };
-    void connectActivity(controller, publish, runStateRef, setConnectionWaiting)
+    void connectActivity(
+      controller,
+      snapshotPublisher(controller, ingestDeltas, enqueue),
+      runStateRef,
+      guardedWaiting(controller, setConnectionWaiting),
+    )
       .then(() => {
         if (controller.signal.aborted) return;
         flush();
@@ -248,6 +270,7 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       });
     return () => {
       controller.abort();
+      setConnectionWaiting(false);
       cancel();
     };
   }, [
@@ -293,7 +316,7 @@ async function streamUntilYielded(
 ): Promise<boolean> {
   const yielded = new AbortController();
   const release = await admitDirectBrowserStreamAsync(controller.signal, {
-    yieldWhenHidden: true,
+    replayRank: 1,
     onYield: () => yielded.abort(),
     onWaiting,
   });

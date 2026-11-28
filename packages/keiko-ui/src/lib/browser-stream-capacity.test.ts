@@ -393,7 +393,7 @@ describe("stream fairness between documents and priorities", () => {
     useLocks();
     setVisibility("visible");
     const yielded = vi.fn();
-    const holders = admitMany(4, { yieldWhenHidden: true, onYield: yielded });
+    const holders = admitMany(4, { replayRank: 0, onYield: yielded });
     await vi.advanceTimersByTimeAsync(0);
     const waiterAdmitted = new Set<number>();
     const waiter = admitMany(1, {}, waiterAdmitted);
@@ -412,7 +412,7 @@ describe("stream fairness between documents and priorities", () => {
     useLocks();
     const yielded = vi.fn();
     setVisibility("visible");
-    const visibleHolders = admitMany(4, { yieldWhenHidden: true, onYield: yielded });
+    const visibleHolders = admitMany(4, { replayRank: 0, onYield: yielded });
     await vi.advanceTimersByTimeAsync(0);
     const visibleWaiter = admitMany(1);
     await vi.advanceTimersByTimeAsync(60_000);
@@ -420,7 +420,7 @@ describe("stream fairness between documents and priorities", () => {
     [...visibleHolders, ...visibleWaiter].forEach((admission) => admission.release());
     await vi.advanceTimersByTimeAsync(0);
     setVisibility("hidden");
-    const hiddenHolders = admitMany(4, { yieldWhenHidden: true, onYield: yielded });
+    const hiddenHolders = admitMany(4, { replayRank: 0, onYield: yielded });
     await vi.advanceTimersByTimeAsync(0);
     const hiddenWaiter = admitMany(1);
     await vi.advanceTimersByTimeAsync(60_000);
@@ -433,7 +433,7 @@ describe("stream fairness between documents and priorities", () => {
     setVisibility("visible");
     const onAdmitted = vi.fn();
     const holders = Array.from({ length: 4 }, () =>
-      admitDirectBrowserStream(onAdmitted, { yieldWhenHidden: true, onYield: vi.fn() }),
+      admitDirectBrowserStream(onAdmitted, { replayRank: 0, onYield: vi.fn() }),
     );
     await vi.advanceTimersByTimeAsync(0);
     const [waiter] = admitMany(1);
@@ -582,7 +582,7 @@ describe("stream fairness: who a waiter may displace", () => {
     setVisibility("hidden", false);
     // Judged within the first check after the visible waiter queued, before the hidden waiter's
     // retry: that retry would count as a waiter of this (the holders') document.
-    await vi.advanceTimersByTimeAsync(900);
+    await vi.advanceTimersByTimeAsync(220);
     expect(yielded).toHaveBeenCalledTimes(1);
     expect(visibleAdmitted.size).toBe(1);
     expect(hiddenAdmitted.size).toBe(0);
@@ -631,7 +631,7 @@ describe("stream fairness: who a waiter may displace", () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
     setVisibility("hidden", false);
-    const holders = admitMany(4, { yieldWhenHidden: true, onYield: vi.fn() });
+    const holders = admitMany(4, { replayRank: 0, onYield: vi.fn() });
     await vi.advanceTimersByTimeAsync(0);
     const first = new Set<number>();
     const second = new Set<number>();
@@ -669,5 +669,104 @@ describe("a synchronous admission and its abort signal", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(queuedAdmitted).toHaveBeenCalledOnce();
     [...held, queued].forEach((admission) => admission.release());
+  });
+});
+
+// #4491: one visible tab can need five essential streams against four slots. The two whose servers
+// keep no replay (verification, editor agent bridge) keep their slot; the three that reopen from a
+// fresh snapshot make way, lowest rank first, so such a tab never starves.
+describe("non-replayable streams and the replayable ones that make way", () => {
+  function setVisibility(state: "visible" | "hidden"): void {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  }
+
+  function useLocks(): void {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    setVisibility("visible");
+  }
+
+  interface Probe {
+    readonly admitted: ReturnType<typeof vi.fn>;
+    readonly yielded: ReturnType<typeof vi.fn>;
+  }
+
+  function admitProbe(options: DirectStreamOptions): Probe & { admission: DirectStreamAdmission } {
+    const admitted = vi.fn();
+    const yielded = vi.fn();
+    const admission = admitDirectBrowserStream(admitted, { ...options, onYield: yielded });
+    return { admitted, yielded, admission };
+  }
+
+  it("admits all five essential streams of one visible tab over time, the lowest rank yielding first and reopening", async () => {
+    useLocks();
+    const runEvents = admitProbe({ replayRank: 0 });
+    const activity = admitProbe({ replayRank: 1 });
+    const retention = admitProbe({ replayRank: 2 });
+    const bridge = admitProbe({ nonReplayable: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const verification = admitProbe({ nonReplayable: true });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(verification.admitted).toHaveBeenCalledOnce();
+    expect(runEvents.yielded).toHaveBeenCalledOnce();
+    expect(activity.yielded).not.toHaveBeenCalled();
+    expect(retention.yielded).not.toHaveBeenCalled();
+    expect(bridge.yielded).not.toHaveBeenCalled();
+    // The yielded stream asks again and reopens the moment a slot frees.
+    bridge.admission.release();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(runEvents.admitted).toHaveBeenCalledTimes(2);
+    expect(activity.yielded).not.toHaveBeenCalled();
+    [runEvents, activity, retention, verification].forEach((probe) => probe.admission.release());
+  });
+
+  it("yields the next rank when the lowest one is not there", async () => {
+    useLocks();
+    const activity = admitProbe({ replayRank: 1 });
+    const retention = admitProbe({ replayRank: 2 });
+    const second = admitProbe({ replayRank: 2 });
+    const bridge = admitProbe({ nonReplayable: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const verification = admitProbe({ nonReplayable: true });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(verification.admitted).toHaveBeenCalledOnce();
+    expect(activity.yielded).toHaveBeenCalledOnce();
+    expect(retention.yielded).not.toHaveBeenCalled();
+    expect(second.yielded).not.toHaveBeenCalled();
+    [activity, retention, second, bridge, verification].forEach((p) => p.admission.release());
+  });
+
+  it("never makes a non-replayable stream yield, even while its document is hidden, and tells a visible waiter it waits", async () => {
+    useLocks();
+    const holders = Array.from({ length: 4 }, () => admitProbe({ nonReplayable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("hidden");
+    const onWaiting = vi.fn();
+    const waiter = admitDirectBrowserStream(vi.fn(), { onWaiting, nonReplayable: true });
+    await vi.advanceTimersByTimeAsync(STREAM_WAITING_THRESHOLD_MS + 60_000);
+    expect(holders.every((holder) => holder.yielded.mock.calls.length === 0)).toBe(true);
+    expect(onWaiting.mock.calls).toEqual([[true]]);
+    waiter.release();
+    holders.forEach((holder) => holder.admission.release());
+  });
+
+  it("asks again within a short pause when a hidden stream handed a granted slot to a visible waiter", async () => {
+    useLocks();
+    setVisibility("hidden");
+    const holders = Array.from({ length: 4 }, () => admitProbe({ replayRank: 0 }));
+    await vi.advanceTimersByTimeAsync(0);
+    const hidden = admitProbe({});
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("visible");
+    const visible = admitProbe({});
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(5_200);
+    expect(visible.admitted).toHaveBeenCalledOnce();
+    expect(hidden.admitted).not.toHaveBeenCalled();
+    visible.admission.release();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(hidden.admitted).toHaveBeenCalledOnce();
+    [...holders, hidden, visible].forEach((probe) => probe.admission.release());
   });
 });
