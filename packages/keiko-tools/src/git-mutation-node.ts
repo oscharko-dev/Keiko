@@ -518,8 +518,15 @@ async function execCommit(
     return { ...(await execVerifiedCommit(ctx, request, sign)), ...signing };
   }
   // The decision above was made for the prepared branch: a checkout that moved on while it was made
-  // is refused before any commit exists, never committed unsigned on the other branch.
-  if (!(await checkoutStillPrepared(ctx))) return { ...failureFromExit(0, 0), ...signing };
+  // is refused before any commit exists. This narrows the window rather than closing it: a switch
+  // between this read and the commit's own start cannot be seen (an unverified commit has no
+  // explicit ref update to bind). A failed read is a failed commit, never a pass.
+  const prepared = await checkoutStillPrepared(ctx).catch((error: unknown) => error);
+  if (prepared !== true)
+    return {
+      ...(prepared === false ? failureFromExit(0, 0) : failureFromThrow(prepared, 0, 0)),
+      ...signing,
+    };
   const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
   if (result.outcome !== "succeeded") return { ...result, ...signing };
   try {

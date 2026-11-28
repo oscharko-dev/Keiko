@@ -158,6 +158,30 @@ describe("node git mutation adapter — an interactive commit stays on the branc
     expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
   });
 
+  it("fails the commit when the checkout cannot be read after the decision", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const stop = new AbortController();
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      signal: stop.signal,
+      preparedCheckout: { branchName: git(["branch", "--show-current"]).trim() },
+      signingRequiredByBranchProtection: (): Promise<boolean> => {
+        stop.abort();
+        return Promise.resolve(false);
+      },
+    });
+    writeFileSync(join(root, "b.txt"), "x\n", "utf8");
+    git(["add", "a.txt"]);
+
+    const committed = await ad.commit({ message: "must not land", allowEmpty: false });
+
+    expect(committed.outcome).not.toBe("succeeded");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
   it("commits on the prepared branch when the checkout did not move", async () => {
     writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
     const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
