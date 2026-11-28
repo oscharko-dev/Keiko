@@ -21,12 +21,13 @@ import {
 } from "./model-activation-memory.js";
 
 // A write the disk refuses, injected at the private-JSON writer the memory saves through.
-const writer = vi.hoisted(() => ({ failures: 0 }));
+const writer = vi.hoisted(() => ({ failures: 0, calls: 0 }));
 vi.mock("./private-json.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./private-json.js")>();
   return {
     ...actual,
     savePrivateJson: (...args: Parameters<typeof actual.savePrivateJson>): void => {
+      writer.calls += 1;
       if (writer.failures > 0) {
         writer.failures -= 1;
         throw new Error("disk refused the write");
@@ -526,6 +527,8 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
   });
 
   describe("capacity", () => {
+    const capacityLines = (): readonly Record<string, unknown>[] =>
+      changeLines().filter((line) => line.reason === "capacity");
     const providersOf = (count: number): ModelProviderConfig[] =>
       Array.from({ length: count }, (_, index) => provider({ modelId: `chat-${String(index)}` }));
 
@@ -546,19 +549,73 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
 
     it("reports one more activation at the bound even when no file write is needed", () => {
       kdf.fake = true;
-      const running = memory();
-      activate(running, ...providersOf(512));
+      try {
+        const running = memory();
+        activate(running, ...providersOf(512));
+        events.length = 0;
+        activate(running, ...providersOf(513));
+        expect(capacityLines()).toEqual([
+          expect.objectContaining({ count: 1, correlationId: "corr-activate" }),
+        ]);
+        // The same refusal again is not repeated; a different count is reported.
+        activate(running, ...providersOf(513));
+        expect(capacityLines()).toHaveLength(1);
+        activate(running, ...providersOf(514));
+        expect(capacityLines()).toHaveLength(2);
+      } finally {
+        kdf.fake = false;
+      }
+    });
+
+    it("reports the refusal when the write of a change at the bound fails", () => {
+      kdf.fake = true;
+      try {
+        const running = memory();
+        activate(running, ...providersOf(511));
+        events.length = 0;
+        writer.failures = 1;
+        activate(running, ...providersOf(513));
+        expect(running.recorded()).toBe(false);
+        expect(capacityLines()).toHaveLength(1);
+      } finally {
+        kdf.fake = false;
+        writer.failures = 0;
+      }
+    });
+
+    it("never writes anything for a missing record", () => {
+      writer.calls = 0;
+      expect(restoredIds(memory(), provider())).toEqual([]);
+      expect(writer.calls).toBe(0);
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(false);
+    });
+
+    it("counts entries it drops and rewrites the record without them", () => {
+      activate(memory(), ...providersOf(512));
+      const record = join(dir, MODEL_ACTIVATION_FILE);
+      const stored = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+      stored.entries.push({ garbage: true }, ...stored.entries.slice(0, 1));
+      // Entry 513 is a valid-looking copy past the bound; the garbage sits at index 512.
+      stored.entries.splice(10, 0, { garbage: true });
+      writeFileSync(record, JSON.stringify(stored), { mode: 0o600 });
       events.length = 0;
-      activate(running, ...providersOf(513));
-      expect(changeLines()).toContainEqual(
-        expect.objectContaining({
-          change: "discarded",
-          reason: "capacity",
-          count: 1,
-          correlationId: "corr-activate",
-        }),
-      );
-      kdf.fake = false;
+      expect(restoredIds(memory(), ...providersOf(512)).length).toBeGreaterThan(500);
+      const reasons = changeLines().filter((line) => line.change === "discarded");
+      expect(reasons).toContainEqual(expect.objectContaining({ reason: "unreadable", count: 1 }));
+      expect(reasons).toContainEqual(expect.objectContaining({ reason: "capacity" }));
+      const rewritten = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+      expect(rewritten.entries.every((entry) => !("garbage" in (entry as object)))).toBe(true);
+      expect(rewritten.entries.length).toBeLessThanOrEqual(512);
+    });
+
+    it("restamps an empty record of another product version", () => {
+      activate(memory({ productVersion: "1.5.9" }), provider());
+      const record = join(dir, MODEL_ACTIVATION_FILE);
+      const stored = JSON.parse(readFileSync(record, "utf8")) as { entries: unknown[] };
+      stored.entries = [];
+      writeFileSync(record, JSON.stringify(stored), { mode: 0o600 });
+      restoredIds(memory({ productVersion: "1.5.10" }), provider());
+      expect(readFileSync(record, "utf8")).toContain("1.5.10");
     });
   });
 

@@ -252,6 +252,9 @@ function parseEntry(value: unknown): StoredActivation | undefined {
 interface StoredFile {
   readonly productVersion: string;
   readonly entries: readonly StoredActivation[];
+  /** Stored entries that did not parse, and entries past the bound a restart reads. */
+  readonly malformed: number;
+  readonly overflow: number;
 }
 
 interface Binding {
@@ -292,7 +295,21 @@ function parseFile(raw: Buffer, installation: string): ReadOutcome {
     .slice(0, MAX_ENTRIES)
     .map(parseEntry)
     .filter((entry): entry is StoredActivation => entry !== undefined);
-  return { kind: "file", file: { productVersion, entries: kept } };
+  const considered = Math.min(record.entries.length, MAX_ENTRIES);
+  return {
+    kind: "file",
+    file: {
+      productVersion,
+      entries: kept,
+      malformed: considered - kept.length,
+      overflow: record.entries.length - considered,
+    },
+  };
+}
+
+function countDropped(counts: Map<ActivationDiscardReason, number>, file: StoredFile): void {
+  if (file.malformed > 0) counts.set("unreadable", file.malformed);
+  if (file.overflow > 0) counts.set("capacity", file.overflow);
 }
 
 function sameBinding(left: StoredActivation, right: StoredActivation): boolean {
@@ -344,6 +361,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
   >();
   /** Models whose changed binding a withheld change kept out of the record; a settle keeps them out. */
   private withheldKeys: ReadonlySet<string> = new Set();
+  /** The overflow count last reported by this instance, so an unchanged one is not repeated. */
+  private reportedOverflow = 0;
   private unrecorded = false;
   /** The file may still hold a record this start could not replace or withdraw. */
   private rewritePending = false;
@@ -377,7 +396,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
     // A record every entry of which was restored is already what the file should hold: rewriting it
     // is redundant, and a failed redundant write must never withdraw a valid record.
-    const invalidates = outcome.kind !== "file" || [...counts.values()].some((count) => count > 0);
+    // A missing file writes nothing; every other discard, even one of zero entries, rewrites.
+    const invalidates = [...counts.keys()].some((reason) => reason !== "first-start");
     if (invalidates && !this.write(entries, correlationId)) {
       // The discard of an incompatible record did not land: keep it pending, never call it done.
       this.rewritePending = true;
@@ -425,6 +445,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
     this.plannedBindings = bindings;
     this.desired = kept;
     this.withheldKeys = withheld;
+    this.reportCapacity(overflow, correlationId);
     const removed = this.removalsByReason(next, reason, removalReasons);
     const removedCount = [...removed.values()].reduce((sum, count) => sum + count, 0);
     const stale = this.rewritePending;
@@ -432,8 +453,6 @@ class FileModelActivationMemory implements ModelActivationMemory {
       // Nothing to write, but a rebind to an identical stored value is still worth remembering.
       this.commitBindings();
       this.unrecorded = false;
-      // An addition refused for capacity needs no write, but it is still reported, never silent.
-      if (overflow > 0) this.logChange("discarded", "capacity", overflow, correlationId);
       return;
     }
     if (this.write(next, correlationId)) {
@@ -441,19 +460,24 @@ class FileModelActivationMemory implements ModelActivationMemory {
       this.commitBindings();
       this.unrecorded = false;
       this.rewritePending = false;
-      this.logWritten(removed, overflow, saved, correlationId);
+      this.logWritten(removed, saved, correlationId);
     } else if (removedCount > 0 || stale) this.withdrawRecord(next, removed, correlationId);
     else this.unrecorded = true;
   }
 
+  /** Reports what the bound refused, on every path, once per distinct count of this instance. */
+  private reportCapacity(overflow: number, correlationId: string): void {
+    if (overflow > 0 && overflow !== this.reportedOverflow)
+      this.logChange("discarded", "capacity", overflow, correlationId);
+    this.reportedOverflow = overflow;
+  }
+
   private logWritten(
     removed: ReadonlyMap<ActivationRemovalReason, number>,
-    overflow: number,
     saved: number,
     correlationId: string,
   ): void {
     this.logRemovals(removed, correlationId);
-    if (overflow > 0) this.logChange("discarded", "capacity", overflow, correlationId);
     if (saved > 0) this.logChange("saved", undefined, saved, correlationId);
   }
 
@@ -619,12 +643,15 @@ class FileModelActivationMemory implements ModelActivationMemory {
     else if (outcome.kind !== "file") counts.set(outcome.kind, outcome.entries);
     else if (outcome.file.productVersion !== this.options.productVersion)
       counts.set("product-changed", outcome.file.entries.length);
-    else
+    else {
       for (const entry of outcome.file.entries) {
         const { reason, provider } = this.verdict(entry, providers);
         if (reason === undefined && provider !== undefined) restored.push({ entry, provider });
         else if (reason !== undefined) counts.set(reason, (counts.get(reason) ?? 0) + 1);
       }
+      // Entries the reader dropped are counted, so the record is rewritten without them.
+      countDropped(counts, outcome.file);
+    }
     return { counts, restored };
   }
 
