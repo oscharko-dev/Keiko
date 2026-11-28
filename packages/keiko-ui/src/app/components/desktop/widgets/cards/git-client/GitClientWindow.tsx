@@ -1506,11 +1506,13 @@ export function GitClientWindow({
         } catch (error) {
           // A transport failure or timeout may follow a server that already changed the index.
           moveEpoch();
+          if (originRepository !== null)
+            notifyGitRepositoryStateInvalidated(originRepository, mutationRepositoryRoot);
           throw error;
         }
       });
     },
-    [runStaging, selectedPath],
+    [mutationRepositoryRoot, runStaging, selectedPath],
   );
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
   const runCommitPreview = commit.runPreview;
@@ -2352,6 +2354,7 @@ export function GitClientWindow({
       stagedFileCount={activeStatus?.stagedCount ?? 0}
       hasConflicts={hasActiveConflicts}
       busy={commit.flow.busy}
+      stagingBusy={staging.flow.busy}
       outcome={commit.flow.outcome}
       error={commit.flow.error}
       preview={commit.preview}

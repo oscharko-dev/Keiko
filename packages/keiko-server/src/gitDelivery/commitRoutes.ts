@@ -95,9 +95,11 @@ import {
 } from "./approvalStore.js";
 import {
   executeGovernedMutation,
+  GitDeliveryRootAuthorityRevokedError,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+  managedRootStillAuthorized,
   readStagedConflictMarkerFileCountFor,
   readCommitDraftSnapshotFor,
   readStagedPathsFor,
@@ -1149,7 +1151,7 @@ function selectCommitDraftRecovery(
 async function generateModelCommitMessage(
   deps: UiHandlerDeps,
   input: CommitDraftInput,
-  signal: AbortSignal,
+  run: CommitDraftRun,
   log: ServerLogSink,
 ): Promise<ModelCommitDraftResult> {
   const resolved = resolveCommitDraftModel(deps);
@@ -1159,9 +1161,10 @@ async function generateModelCommitMessage(
   const key = sha256Hex(JSON.stringify([identity, resolved.configDigest]));
   const cache = draftCache(deps);
   return draftMutex.runExclusive([key], async (): Promise<ModelCommitDraftResult> => {
-    const callSignal = AbortSignal.any([signal, AbortSignal.timeout(resolved.deadlineMs)]);
+    const callSignal = AbortSignal.any([run.signal, AbortSignal.timeout(resolved.deadlineMs)]);
     if (clientLeft(callSignal))
       return { ok: false, code: classifyCommitDraftModelFailure(callSignal.reason, callSignal) };
+    run.assertWorkspaceAuthorized();
     const cached = cache.get(key);
     if (cached !== undefined)
       return { ...cached, bounds: { ...cached.bounds, reused: true, generationAttempts: 0 } };
@@ -1169,6 +1172,7 @@ async function generateModelCommitMessage(
     logCommitDraftAttempt(log, input.correlationId, result, 1);
     const recovery = repairCommitDraftModel(resolved, result);
     if (recovery !== undefined && !clientLeft(callSignal)) {
+      run.assertWorkspaceAuthorized();
       const repair = result.bounds?.blankLineDraftRejected === true ? "blank-lines" : "format";
       const repaired = await attemptCommitDraft(deps, recovery, input, callSignal, 2, repair);
       logCommitDraftAttempt(log, input.correlationId, repaired, 2);
@@ -1180,6 +1184,7 @@ async function generateModelCommitMessage(
         code: classifyCommitDraftModelFailure(callSignal.reason, callSignal),
         ...(result.bounds === undefined ? {} : { bounds: result.bounds }),
       };
+    run.assertWorkspaceAuthorized();
     result = {
       ...result,
       bounds: {
@@ -1336,6 +1341,7 @@ function modelDraftFailureResult(
 interface CommitDraftRun {
   readonly correlationId: string;
   readonly signal: AbortSignal;
+  readonly assertWorkspaceAuthorized: () => void;
 }
 
 async function computeModelCommitDraft(
@@ -1349,6 +1355,7 @@ async function computeModelCommitDraft(
 ): Promise<RouteResult> {
   const { correlationId, signal } = run;
   const log = seams.activityLog ?? processServerLogSink();
+  run.assertWorkspaceAuthorized();
   const staged = await readCommitDraftSnapshotFor(workspace, seams, now, run);
   const summary = summarizeStagedChangeset(staged.paths);
   // Re-checked after every await that can outlast a disconnect (PR #3602 review): a client that
@@ -1374,7 +1381,7 @@ async function computeModelCommitDraft(
       instruction: req.instruction,
       correlationId,
     },
-    signal,
+    run,
     log,
   );
   if (!suggested.ok) return modelDraftFailureResult(log, correlationId, summary, suggested);
@@ -1440,6 +1447,10 @@ export const createHandleCommitDraft = (
     // (PR #3602 review). Disposed once both the lookup and the call have settled, however they end.
     const cancellation = commitDraftCancellation(ctx);
     try {
+      const stillAuthorized = managedRootStillAuthorized(deps, workspace, {
+        activityLog,
+        correlationId,
+      });
       const policy = await resolveGovernedCommitMessagePolicy(
         deps,
         workspace.root,
@@ -1450,6 +1461,9 @@ export const createHandleCommitDraft = (
       return await draftWithModel(deps, workspace, req, policy, seams, now, {
         correlationId,
         signal: cancellation.signal,
+        assertWorkspaceAuthorized: () => {
+          if (!stillAuthorized()) throw new GitDeliveryRootAuthorityRevokedError();
+        },
       });
     } finally {
       cancellation.dispose();

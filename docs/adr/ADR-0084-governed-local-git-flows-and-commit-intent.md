@@ -126,8 +126,15 @@ staged changes through the existing sandboxed Git reader. One Git invocation ret
 file list and the patch from the same staged view. Its default output allowance is 4 MiB
 (explicit narrower policies still apply); truncation is rejected, never accepted as a complete read.
 Both sides of a rename or copy are checked against the workspace path denial policy before the
-patch is sent to the model. Generating a whole-index draft requires opening the Git repository root.
-A nested project receives a refusal with instructions to open that root.
+patch is sent to the model. Generating a whole-index draft requires the root of an active Git
+worktree. A nested project receives instructions to open the worktree root. A bare repository has
+no worktree and is refused before the index read. The route re-proves managed workspace authority
+before reading the patch, before model dispatch and before releasing a completed suggestion.
+
+The composer binds a suggestion to the staged patch digest when available. Discovering the branch
+list later leaves that binding intact. Commit and draft generation are disabled while an index
+mutation is pending. An uncertain staging failure refreshes the index and commit preview before
+commit is available again. The composer retains manually entered text.
 
 Draft assembly uses the shared context-token counter, including the response schema, output
 reserve and model safety margin. The model compares removed and added content and leads with the

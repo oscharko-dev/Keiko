@@ -946,7 +946,7 @@ harness inputs retain their existing values.
 
 ## Git staging counts and commit draft feedback — 2026-11-28
 
-Localized Git staging counts and draft feedback changed the English and German optional message
-catalogs. The nine Chromium updater cases passed in 2.2 minutes on macOS arm64 with Node 26.13.1, including the real
-BFF outage case. The three producer records bind the updated catalogs and pass
-`npm run check:update-ui-evidence`.
+Localized Git staging counts, the staging-in-progress hint and draft feedback changed the English
+and German optional message catalogs. The nine Chromium updater cases passed in 2.9 minutes on
+macOS arm64 with Node 26.13.1, including the real BFF outage case. The three producer records bind
+the updated catalogs. The fourteen committed updater captures retain their existing renderer.

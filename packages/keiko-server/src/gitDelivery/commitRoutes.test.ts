@@ -779,6 +779,60 @@ describe("commit preview — read-only verification context (AC3)", () => {
 });
 
 describe("commit draft — explicit model-backed generation", () => {
+  it.each(["snapshot", "retry", "result"] as const)(
+    "withholds model input after managed workspace authority is revoked during %s",
+    async (phase) => {
+      const fixture = managedWorkspaceDeps();
+      try {
+        const provisioning = fixture.override.workspaceProvisioning;
+        if (provisioning === undefined) throw new Error("Missing managed workspace fixture");
+        let revoked = false;
+        const correlationId = "git-commit-draft-revoked-fixture";
+        const events: ServerLogEvent[] = [];
+        const model = vi.fn(() => {
+          if (phase === "retry" && !revoked) {
+            revoked = true;
+            throw new ProviderError("Unavailable", 501);
+          }
+          if (phase === "result") revoked = true;
+          return draftResponse({ subject: "fix: repair review", body: "Handle empty results." });
+        });
+        const handler = createHandleCommitDraft({
+          execution: seams({
+            stagedDiffReader: () => {
+              if (phase === "snapshot") revoked = true;
+              return Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change");
+            },
+          }),
+          activityLog: { write: (event) => events.push(event) },
+        });
+        const context = ctxFor(DRAFT, {
+          schemaVersion: "1",
+          projectId: fixture.instance.managedWorktreePath,
+        });
+        const res = await handler(
+          { ...context, correlationId },
+          deps({
+            ...fixture.override,
+            workspaceProvisioning: {
+              ...provisioning,
+              getInstance: (id) => (revoked ? undefined : provisioning.getInstance(id)),
+            },
+            config: DRAFT_GATEWAY_CONFIG,
+            modelPortFactory: () => draftModelPort(model),
+          }),
+        );
+        expect(res.status).toBe(409);
+        expect(model).toHaveBeenCalledTimes(phase === "snapshot" ? 0 : 1);
+        expect(events).toContainEqual(
+          expect.objectContaining({ op: "workspace.root.denied", correlationId }),
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
   it("accepts a style draft for blank-line and trailing-whitespace edits", async () => {
     const patch = [
       "diff --git a/src/review.ts b/src/review.ts",

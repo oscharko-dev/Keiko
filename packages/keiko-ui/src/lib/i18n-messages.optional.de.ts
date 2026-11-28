@@ -3524,6 +3524,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Änderungen bereitstellen, um einen Commit-Entwurf vorzubereiten.",
   "commitComposer.hint.enterSummary": "Geben Sie eine Commit-Zusammenfassung ein.",
   "commitComposer.hint.waitPreview": "Warten Sie auf die Commit-Richtlinienvorschau.",
+  "commitComposer.hint.waitStaging": "Warten Sie, bis das Staging abgeschlossen ist.",
   "commitComposer.hint.createBranchForProtected":
     "Erstellen Sie vor dem Committen einen Arbeitsbranch für diesen geschützten Branch.",
   "commitComposer.hint.resolvePolicy":

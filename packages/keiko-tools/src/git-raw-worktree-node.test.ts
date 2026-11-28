@@ -223,6 +223,15 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
     ).rejects.toBeInstanceOf(GitWorktreeReadError);
   });
 
+  it("refuses to treat the history of a bare repository as a staged deletion", async () => {
+    await expect(
+      readGitStagedDraft({
+        workspace: { ...workspace, root: remote, selectedRoot: remote },
+        processEnv: { PATH: process.env.PATH },
+      }),
+    ).rejects.toBeInstanceOf(GitWorktreeReadError);
+  });
+
   it("uses the same staged gitlink paths for preview and drafting even with local ignore settings", async () => {
     const head = git(["rev-parse", "HEAD"]);
     git(["update-index", "--add", "--cacheinfo", `160000,${head},module-ref`]);

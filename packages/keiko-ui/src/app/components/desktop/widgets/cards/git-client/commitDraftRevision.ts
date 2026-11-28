@@ -22,28 +22,29 @@ function headCommitOf(
 }
 
 /**
- * What a generated commit draft describes: the commit it would land on and each staged path with
- * its index status, in a stable order. `null` while either is unknown. It stays in memory only and
- * is never logged or sent.
+ * What a generated commit draft describes: the staged patch and its reported paths. This identity
+ * stays in memory and is never logged or sent.
  *
  * A new branch from the current commit keeps it, as does any status read that changes nothing
- * staged. The same path staged again with other content moves it through the status's digest of the
- * staged object ids (PR #4568 review); a status without that digest binds the selection alone. Its
- * known limit, outside this window: another commit checked out on a detached HEAD with the same
- * staged selection keeps it (the status names no detached commit).
+ * staged. The status digest includes both sides of each staged change, so branch metadata arriving
+ * later cannot invalidate an unchanged patch. On a server without the digest, fall back to the
+ * branch tip and each staged path. A detached tip is unknown on that fallback path.
  */
 export function stagedSelectionSignature(
   status: GitRepositoryStatusResponse | null | undefined,
   branches: readonly GitBranchListEntry[],
 ): string | null {
   if (status?.available !== true) return null;
-  const head = headCommitOf(status, branches);
-  if (head === null) return null;
+  const identity =
+    status.stagedDigest === undefined
+      ? headCommitOf(status, branches)
+      : `staged:${status.stagedDigest}`;
+  if (identity === null) return null;
   const staged = status.changes
     .filter((change) => change.staged)
     .map((change) => `${change.indexStatus}\u0000${change.oldPath ?? ""}\u0000${change.path}`)
     .sort((left, right) => left.localeCompare(right));
-  return [head, status.truncated ? "t" : "c", status.stagedDigest ?? "", ...staged].join("\u0001");
+  return [identity, status.truncated ? "t" : "c", ...staged].join("\u0001");
 }
 
 interface LastSignature {

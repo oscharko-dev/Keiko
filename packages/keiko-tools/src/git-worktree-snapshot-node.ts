@@ -909,8 +909,12 @@ function stagedDraftPaths(raw: string): readonly string[] {
 /** One Git invocation binds the paths and patch to the same HEAD and index read. */
 export async function readGitStagedDraft(deps: NodeGitWorktreeReaderDeps): Promise<GitStagedDraft> {
   const ctx = stagedPatchContext(deps);
-  if ((await runRead(ctx, ["rev-parse", "--show-prefix"])).trimEnd() !== "")
-    throw new GitStagedDraftScopeError();
+  const scope = (
+    await runRead(ctx, ["rev-parse", "--is-inside-work-tree", "--show-prefix"])
+  ).replaceAll("\r\n", "\n");
+  if (!scope.startsWith("true\n"))
+    throw new GitWorktreeReadError("staged draft worktree unavailable");
+  if (scope !== "true\n\n") throw new GitStagedDraftScopeError();
   const output = await runRead(ctx, stagedPatchArgs(["--patch-with-raw", "-z", "--no-relative"]));
   if (output === "") return { paths: [], patch: "" };
   const separator = output.indexOf("\0\0");

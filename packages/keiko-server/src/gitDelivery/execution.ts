@@ -381,11 +381,10 @@ export type GitDeliveryMutationDeps = Pick<
   "evidenceStore" | "redactor" | "managedTaskWorkspaceRoot" | "workspaceProvisioning"
 >;
 
-/** A governed mutation refused because the admitted workspace root no longer re-proves. */
+/** A Git delivery request refused because the admitted workspace root no longer re-proves. */
 export class GitDeliveryRootAuthorityRevokedError extends Error {
   public constructor() {
-    // The message is the classification: this error is diagnosed by its name and by the
-    // `git.delivery.dispatch.no-spawn` line written before it is thrown, never by free text.
+    // The owning route records the refusal using the error class and its existing operation.
     super("git-delivery-root-authority-revoked");
     this.name = "GitDeliveryRootAuthorityRevokedError";
   }
