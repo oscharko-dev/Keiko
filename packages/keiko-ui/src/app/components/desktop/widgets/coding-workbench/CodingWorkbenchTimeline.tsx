@@ -740,7 +740,7 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
   return marked;
 }
 
-// A proposal row that may still be redeemed, by the same predicate family as
+// A Git step an execute may still redeem, by the same predicate family as
 // markSupersededGitProposals: any non-execute call answered as waiting for approval or prepared,
 // and a stage-class proposal answered ready, which carries no outcome (Full access).
 function isOpenGitProposal(tool: CodingSafeActivityTool): boolean {

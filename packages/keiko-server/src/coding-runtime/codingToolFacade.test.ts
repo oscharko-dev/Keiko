@@ -2918,7 +2918,9 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     [{ kind: "pull", status: "not-fast-forward" }, "not-done"],
     [{ kind: "fetch", status: "auth-failed" }, "not-done"],
   ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
-    expect(codingToolGitPresentation(completedWith("git", git))).toMatchObject({ gitOutcome });
+    // The index steps also name which direction they took; every other kind presents its outcome only.
+    const action = git.kind === "stage" || git.kind === "unstage" ? { gitAction: git.kind } : {};
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome, ...action });
   });
 
   // Lab 2026-11-27 (Full access): the policy authorized the commit proposal, no decision was ever

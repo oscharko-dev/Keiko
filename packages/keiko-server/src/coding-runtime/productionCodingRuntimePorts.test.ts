@@ -1995,7 +1995,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(outcome).toEqual({ reason: "provider-failed" });
   });
 
-  it("maps an unavailable snapshot capture to generation-unavailable", async () => {
+  it("maps an unavailable snapshot capture, and a capture without a reference, to generation-unavailable", async () => {
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
         snapshots: fakeSnapshots(() =>
@@ -2015,7 +2015,9 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(outcome).toEqual({ reason: "generation-unavailable" });
   });
 
-  it("treats a captured remote digest that no longer matches the scope as generation-unavailable", async () => {
+  // U-50 audit: a remote that moved since the scope was bound is a stale condition, not a missing
+  // capability, so it reports stale-snapshot and the UI can hide only the capability-absent reason.
+  it("treats a captured remote digest that no longer matches the scope as stale-snapshot", async () => {
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
         snapshots: fakeSnapshots(() =>
@@ -2027,7 +2029,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
       }),
     );
     const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
-    expect(outcome).toEqual({ reason: "generation-unavailable" });
+    expect(outcome).toEqual({ reason: "stale-snapshot" });
   });
 
   it("denies model egress and never calls the Model Gateway when no description authority admits the scope", async () => {

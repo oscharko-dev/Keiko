@@ -1564,9 +1564,8 @@ async function dispatchWorkbenchDescription(
   const captured = capture.snapshot;
   if (captured.outcome === "failed") return { reason: "provider-failed" };
   if (captured.outcome === "unavailable") return { reason: "generation-unavailable" };
-  if (capture.reference === undefined || captured.remoteDigest !== scope.remoteDigest) {
-    return { reason: "generation-unavailable" };
-  }
+  if (capture.reference === undefined) return { reason: "generation-unavailable" };
+  if (captured.remoteDigest !== scope.remoteDigest) return { reason: "stale-snapshot" };
   if (captured.baseSha !== scope.baseSha || captured.headSha !== scope.headSha) {
     return { reason: "stale-snapshot" };
   }

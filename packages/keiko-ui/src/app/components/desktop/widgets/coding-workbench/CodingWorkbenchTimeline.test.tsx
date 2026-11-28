@@ -957,6 +957,21 @@ describe("CodingWorkbenchTimeline", () => {
       ).toEqual(["Git commit", "Git commit"]);
     });
 
+    // Audit of 488d2c939: a branch or sync proposal is open too, so one unredeemed stage proposal
+    // followed by a branch proposal leaves two open and the execute must not guess "Git stage".
+    it.each([
+      ["keiko_git_branch", "Create task branch"],
+      ["keiko_git_sync", "Git sync"],
+    ] as const)("counts a %s proposal among the open ones", (tool, label) => {
+      expect(
+        titles([
+          proposal("stage", "keiko_git_stage", { gitAction: "stage" }),
+          proposal("other", tool, { gitOutcome: "waiting-for-approval" }),
+          execute("which", "completed"),
+        ]),
+      ).toEqual(["Git stage", label, "Git operation"]);
+    });
+
     it("keeps the generic label with no open proposal or with several", () => {
       expect(titles([execute("alone", "completed")])).toEqual(["Git operation"]);
       expect(
