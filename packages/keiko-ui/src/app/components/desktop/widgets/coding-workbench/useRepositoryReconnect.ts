@@ -57,7 +57,8 @@ function reconnectOutcome(
 
 // A reconnect is a state-changing request, which the shared client gives no read deadline. The
 // picker stays locked while it runs, so a hung request would lock it for good: the wait ends as a
-// `TimeoutError` failure instead (U-44).
+// `TimeoutError` failure instead (U-44). A server-side reconnect that finishes after the deadline
+// still shows the failure; the catalog is read again the next time the picker opens.
 export const RECONNECT_TIMEOUT_MS = 30_000;
 
 function withReconnectDeadline<T>(request: Promise<T>): Promise<T> {

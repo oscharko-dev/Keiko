@@ -686,15 +686,14 @@
 }
 
 .cmpSetupSelector > .cmpRepositorySelectorGit,
-.cmpSetupSelector > .cmpRepositorySelectorNotice:empty {
-  /* The live region stays mounted for screen readers but takes no room while it is empty. */
-  flex-basis: 0;
-  height: 0;
-}
-
-.cmpRepositorySelectorNotice {
+.cmpSetupSelector > .cmpRepositorySelectorNotice {
   grid-column: 1 / -1;
   justify-self: start;
+}
+
+/* The status region stays mounted for screen readers but takes no room while it is empty. */
+.cmpRepositorySelectorNotice:empty {
+  position: absolute;
 }
 
 /* The trigger hugs its label: the shared select trigger stretches to its container and pushes the

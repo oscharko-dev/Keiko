@@ -476,6 +476,35 @@ describe("KeikoSelect interactions", () => {
     },
   ];
 
+  it("stays announced but does not open while busy", async () => {
+    const onOpen = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        busy
+        menuTitle="Strategy"
+        onOpen={onOpen}
+        onValueChange={vi.fn()}
+        sections={sections}
+        value="model"
+      />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    expect(trigger).toHaveAttribute("aria-disabled", "true");
+    expect(trigger).toHaveAttribute("aria-busy", "true");
+    expect(trigger).not.toBeDisabled();
+    await user.click(trigger);
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(trigger, { key: " " });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it("commits the active option with keyboard navigation and returns focus to the trigger", async () => {
     const onValueChange = vi.fn();
     render(
