@@ -922,10 +922,39 @@ function windowParts(
     .map((secret) => secret.split("\n").map(stripCarriageReturn));
   const keptHead = head.subarray(0, headEnd);
   const keptTail = keepsTail ? tail.subarray(tailStart) : Buffer.alloc(0);
+  if (multiLine.length === 0) return { head: keptHead, tail: keptTail };
+  const needles = secretLineNeedles(multiLine);
   return {
-    head: multiLine.length === 0 ? keptHead : dropStraddlingSecretHead(keptHead, multiLine),
-    tail: multiLine.length === 0 ? keptTail : dropStraddlingSecretTail(keptTail, multiLine),
+    head: dropSecretLines(dropStraddlingSecretHead(keptHead, multiLine), needles, false),
+    tail: dropSecretLines(dropStraddlingSecretTail(keptTail, multiLine), needles, true),
   };
+}
+
+const MIN_SECRET_LINE_CHARS = 8;
+
+// Every line of a multi-line secret long enough to identify it, trimmed: a retained line that
+// contains one is part of the secret however the stream was cut (it may end inside the secret, or
+// print it indented or behind a prefix), so it never leaves the retained window.
+function secretLineNeedles(secrets: readonly (readonly string[])[]): readonly string[] {
+  return secrets.flatMap((lines) =>
+    lines.map((line) => line.trim()).filter((line) => line.length >= MIN_SECRET_LINE_CHARS),
+  );
+}
+
+// `endsMidLine`: the window ends without a newline (a stream killed mid-print), so its last line may
+// be only the start of a secret line; a fragment of at least the needle length floor that is part of
+// one is dropped as well.
+function dropSecretLines(window: Buffer, needles: readonly string[], endsMidLine: boolean): Buffer {
+  if (needles.length === 0 || window.length === 0) return window;
+  const lines = window.toString("utf8").split("\n");
+  const lastIndex = lines.length - 1;
+  const kept = lines.filter((line, index) => {
+    const text = line.trim();
+    if (needles.some((needle) => text.includes(needle))) return false;
+    const fragment = endsMidLine && index === lastIndex && text.length >= MIN_SECRET_LINE_CHARS;
+    return !(fragment && needles.some((needle) => needle.includes(text)));
+  });
+  return kept.length === lines.length ? window : Buffer.from(kept.join("\n"), "utf8");
 }
 
 function stripCarriageReturn(line: string): string {

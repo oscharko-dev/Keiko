@@ -1738,6 +1738,49 @@ describe("runCommand — retain-head-tail output (output volume never ends healt
     }
   });
 
+  describe("a multi-line secret that the stream cuts or prints decorated", () => {
+    const secret = "alpha-secret-line-one\nbeta-secret-line-two\ngamma-secret-line-three";
+    const filler = `${"f".repeat(5)}\n`.repeat(60);
+
+    async function runWith(chunks: readonly string[]): Promise<string> {
+      const spawn = recordingSpawn();
+      const base = retainDeps(spawn);
+      const deps = {
+        ...base,
+        policy: { ...base.policy, maxOutputBytes: 400 },
+        processEnv: { PATH: process.env.PATH ?? "", KEIKO_FIXTURE_MULTILINE: secret },
+      };
+      const promise = runCommand({ ...input, signal: controller().signal }, deps);
+      for (const chunk of chunks) spawn.child.stdout.emit("data", Buffer.from(chunk));
+      spawn.child.emit("close", 0, null);
+      return (await promise).stdout;
+    }
+
+    it("keeps no middle line when the stream ends inside the secret", async () => {
+      const stdout = await runWith([filler, "start\nbeta-secret-line-two\n"]);
+      expect(stdout).not.toContain("secret-line");
+      expect(stdout).toContain("start");
+      const unterminated = await runWith([
+        filler,
+        "start\nalpha-secret-line-one\nbeta-secret-line",
+      ]);
+      expect(unterminated).not.toContain("secret-line");
+    });
+
+    it.each([
+      ["an indent", "    beta-secret-line-two\n"],
+      ["trailing whitespace", "beta-secret-line-two \t\n"],
+      ["a prefix", "> beta-secret-line-two\n"],
+      ["a log prefix", "2026-11-28 out: beta-secret-line-two\r\n"],
+    ])(
+      "drops a retained secret line printed with %s, in the head and in the tail",
+      async (_n, line) => {
+        const stdout = await runWith([`${line}${filler}`, filler, `end\n${line}`]);
+        expect(stdout).not.toContain("secret-line");
+      },
+    );
+  });
+
   // The retained window IS maxOutputBytes: stdout and stderr share it, so two flooded streams of
   // whole lines keep exactly that many bytes (the value the old flood guard cut at stays asserted).
   it("retains exactly maxOutputBytes across both streams when whole lines flood them", async () => {
