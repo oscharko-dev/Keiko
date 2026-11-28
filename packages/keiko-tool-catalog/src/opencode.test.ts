@@ -146,14 +146,14 @@ describe("opencode registration set", () => {
     expect(GOVERNED_GIT_EXECUTE_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
     );
+    const widened = new Set<string>([
+      "keiko.verification.run",
+      gitExecute,
+      ...APPROVAL_WAITING_TOOL_IDS,
+      ...gitReads,
+    ]);
     for (const [id, tool] of byId) {
-      if (
-        id === "keiko.verification.run" ||
-        id === gitExecute ||
-        APPROVAL_WAITING_TOOL_IDS.has(id) ||
-        gitReads.has(id)
-      )
-        continue;
+      if (widened.has(id)) continue;
       expect(tool.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
     }
   });

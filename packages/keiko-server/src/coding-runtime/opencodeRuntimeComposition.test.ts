@@ -12585,7 +12585,7 @@ describe("a governed task-branch ask naming an unsafe branch", () => {
         expect(response.status).toBe(409);
         expect(JSON.parse(response.body)).toMatchObject({
           git: { kind: "branch", status: "blocked", reason: "invalid-name" },
-          guidance: expect.stringContaining("not a branch name Keiko will create"),
+          guidance: expect.stringContaining("not a branch name Keiko will create") as string,
         });
         expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
       } finally {
