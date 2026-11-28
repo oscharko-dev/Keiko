@@ -24,12 +24,15 @@ const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   retry: vi.fn(),
 };
 
-function assistantMessage(outputLimitReached: boolean): CodingSafeActivityMessage {
+function assistantMessage(
+  outputLimitReached: boolean,
+  text = "A partial answer",
+): CodingSafeActivityMessage {
   return {
     messageId: "message-1",
     role: "assistant",
     occurredAt: AT,
-    segments: [{ kind: "text", text: "A partial answer", truncated: false }],
+    segments: text === "" ? [] : [{ kind: "text", text, truncated: false }],
     truncated: false,
     ...(outputLimitReached ? { outputLimitReached: true as const } : {}),
   };
@@ -47,10 +50,16 @@ function feedOf(message: CodingSafeActivityMessage): AvailableCodingSafeActivity
   };
 }
 
-function Subject({ limited }: { readonly limited: boolean }): React.ReactNode {
+function Subject({
+  limited,
+  text,
+}: {
+  readonly limited: boolean;
+  readonly text?: string;
+}): React.ReactNode {
   const activity: UseCodingWorkbenchSafeActivityResult = {
     status: "live",
-    feed: feedOf(assistantMessage(limited)),
+    feed: feedOf(assistantMessage(limited, text)),
     errorCode: null,
     retry: vi.fn(),
     answers: new Map(),
@@ -81,6 +90,17 @@ describe("CodingWorkbenchTimeline output limit note", () => {
     const { container } = render(<Subject limited />);
     expect(screen.getByText(NOTE_EN)).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("shows the note when the output budget ran out before any answer text arrived", () => {
+    render(<Subject limited text="" />);
+    expect(screen.getByText(NOTE_EN)).toBeInTheDocument();
+  });
+
+  it("shows no row for an empty answer that did not reach the limit", () => {
+    render(<Subject limited={false} text="" />);
+    expect(screen.queryByText(NOTE_EN)).not.toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
   });
 
   it("shows no note on an answer that finished normally", async () => {

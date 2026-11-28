@@ -655,6 +655,8 @@ function shownTool(
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   return (
     message.truncated ||
+    // A turn that spent its output budget before any answer text still says so.
+    message.outputLimitReached === true ||
     message.fullAnswer !== undefined ||
     message.fullReasoning !== undefined ||
     message.reasoning !== undefined ||
