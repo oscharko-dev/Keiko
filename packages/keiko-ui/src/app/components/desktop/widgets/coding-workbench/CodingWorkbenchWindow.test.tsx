@@ -3461,6 +3461,18 @@ describe("CodingWorkbenchWindow", () => {
     },
   );
 
+  it("ADR-0124 D6: Approve waits while the verification review loads and Deny stays available", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "loading",
+      review: null,
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult);
+    renderWorkbench(verificationAskState());
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
   // U-27: the person approves a NAMED branch, never a bare "create a task branch" card.
   function branchAskState(): CodingWorkbenchRuntimeState {
     const base = verificationAskState();

@@ -2827,8 +2827,11 @@ function approvalReviewBound(
   approvalReview: UseCodingWorkbenchApprovalReviewResult,
 ): boolean {
   if (approvalReviewRequestId(request) === undefined) return true;
-  // The preview only informs the decision: a failed lookup falls back to the named kind of check.
-  if (request.actionKind === "verification-command") return true;
+  // The preview only informs the decision: a failed lookup falls back to the named kind of check
+  // (ADR-0124 D6). A lookup still in flight is not a failure: Approve waits for its answer, so a
+  // slow response never lets the person authorize a script before its command lines can be read.
+  if (request.actionKind === "verification-command")
+    return approvalReview.status === "ready" || approvalReview.status === "unavailable";
   const review = approvalReview.status === "ready" ? approvalReview.review : null;
   if (review?.requestId !== request.requestId) return false;
   if (request.actionKind === "git-branch" && review.gitBranch === undefined) return false;
