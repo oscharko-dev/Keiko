@@ -1,3 +1,4 @@
+import { eachInSequence } from "../../sequential.js";
 import { randomBytes } from "node:crypto";
 
 import type {
@@ -528,14 +529,15 @@ async function configureInstrumentation(
 ): Promise<InstrumentationSnapshot> {
   let snapshot = initial;
   const fileIds = [...new Set(snapshot.breakpoints.map((breakpoint) => breakpoint.fileId))];
-  for (const fileId of fileIds) {
+  // One adapter request after the other: each reconciles the snapshot the next one sends.
+  await eachInSequence(fileIds, async (fileId) => {
     const breakpoints = snapshot.breakpoints.filter((breakpoint) => breakpoint.fileId === fileId);
     const response = await port.request("setBreakpoints", {
       source: { path: `${CAPSULE_ROOT}/${fileId}` },
       breakpoints: dapBreakpoints(breakpoints),
     });
     snapshot = reconcile(snapshot, fileId, response);
-  }
+  });
   const enabled = snapshot.exceptionFilters.filter((filter) => filter.enabled);
   const exceptionResponse = await port.request("setExceptionBreakpoints", {
     filters: enabled.map((filter) => filter.filterId),
@@ -1222,9 +1224,10 @@ async function reconcileRenamedInstrumentation(
   initial: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
 ): Promise<void> {
   let latest = initial;
-  for (const pair of applied) {
+  // Pairs reconcile one after the other: each starts from the previous pair's snapshot.
+  await eachInSequence(applied, async (pair) => {
     latest = await reconcileRenamedPair(service, workspace, pair, latest);
-  }
+  });
   publishInstrumentationChange(service, workspace, latest);
 }
 
@@ -1461,7 +1464,8 @@ async function reconfigureClearedInstrumentation(
   let unavailable =
     (await updateActiveExceptionBreakpoints(service, workspace, cleared)) === "unavailable";
   const fileIds = new Set(prior.breakpoints.map((breakpoint) => breakpoint.fileId));
-  for (const fileId of fileIds) {
+  // One file after the other, so the adapter sees the clears in order.
+  await eachInSequence([...fileIds], async (fileId) => {
     const update = await updateActiveBreakpoints(service, workspace, fileId, cleared);
     if (update.kind === "unavailable") unavailable = true;
     if (update.kind === "response") {
@@ -1469,7 +1473,7 @@ async function reconfigureClearedInstrumentation(
         verificationUpdates(fileId, cleared, update.response),
       );
     }
-  }
+  });
   return unavailable ? "unavailable" : "armed";
 }
 

@@ -1,3 +1,4 @@
+import { eachInSequence } from "../sequential.js";
 import { isUtf8 } from "node:buffer";
 import type {
   CodingRuntimeGitStatus,
@@ -689,17 +690,18 @@ async function conversionCandidates(
   hashLengths: ReadonlyMap<string, number>,
 ): Promise<readonly ConversionCandidate[]> {
   const candidates: ConversionCandidate[] = [];
-  for (const path of paths) {
+  // Authority and cancellation are checked again before each path is read.
+  await eachInSequence(paths, async (path) => {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
     const file = await inspectGitStageFile(context.workspace.root, path, {
       fs: runtimeWorkspaceFs(context),
       inlineMaxBytes: RUNTIME_GIT_SIDE_MAX_BYTES,
-    }); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
+    });
     // A file above the side bound is streamed elsewhere and never rendered, so it cannot be a CRLF candidate.
-    if (isGitStageLargeFile(file)) continue;
+    if (isGitStageLargeFile(file)) return;
     const bytes = file.bytes;
-    if (file.mode === "0" || !crTextBytes(bytes)) continue;
+    if (file.mode === "0" || !crTextBytes(bytes)) return;
     const length = hashLengths.get(path) ?? 40;
     const converted = Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
     candidates.push({
@@ -708,7 +710,7 @@ async function conversionCandidates(
       rawObjectId: gitBlobObjectId(bytes, length),
       convertedObjectId: gitBlobObjectId(Buffer.from(converted, "utf8"), length),
     });
-  }
+  });
   return candidates;
 }
 function conversionOf(

@@ -2466,6 +2466,7 @@
     "keiko-server/runtime/containerRunner",
     "keiko-server/runtime/containerRunner-errors",
     "keiko-server/runtime/containerRunner-evidence",
+    "keiko-server/sequential",
     "keiko-server/server",
     "keiko-server/server-instance",
     "keiko-server/sink",

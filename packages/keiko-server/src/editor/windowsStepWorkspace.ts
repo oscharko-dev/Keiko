@@ -113,6 +113,28 @@ function removeCopySync(root: string, correlationId: string | undefined): void {
   }
 }
 
+// One removal attempt, then (after a growing pause) the next, until it succeeds, the failure is not
+// retryable or the retries are spent; the attempts are sequential by construction.
+async function removeWithRetries(
+  remove: NonNullable<StepCopyRemovalHost["remove"]>,
+  sleep: (ms: number) => Promise<void>,
+  root: string,
+  correlationId: string | undefined,
+  retryCount: number,
+): Promise<number> {
+  try {
+    await remove(root, { recursive: true, force: true });
+    return retryCount;
+  } catch (error) {
+    if (retryCount >= REMOVE_MAX_RETRIES || !retryableRemoval(error)) {
+      reportCleanupFailure(error, correlationId);
+      return retryCount;
+    }
+    await sleep(REMOVE_RETRY_DELAY_MS * (retryCount + 1));
+    return removeWithRetries(remove, sleep, root, correlationId, retryCount + 1);
+  }
+}
+
 async function removeCopy(
   root: string,
   correlationId: string | undefined,
@@ -123,20 +145,7 @@ async function removeCopy(
     host.sleep ?? ((ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms)));
   const clock = host.now ?? Date.now;
   const startedAtMs = clock();
-  let retryCount = 0;
-  for (;;) {
-    try {
-      await remove(root, { recursive: true, force: true });
-      break;
-    } catch (error) {
-      if (retryCount >= REMOVE_MAX_RETRIES || !retryableRemoval(error)) {
-        reportCleanupFailure(error, correlationId);
-        break;
-      }
-      retryCount += 1;
-      await sleep(REMOVE_RETRY_DELAY_MS * retryCount);
-    }
-  }
+  const retryCount = await removeWithRetries(remove, sleep, root, correlationId, 0);
   return { durationMs: Math.max(0, clock() - startedAtMs), retryCount };
 }
 
