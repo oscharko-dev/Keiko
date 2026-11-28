@@ -4334,8 +4334,7 @@ function deactivateConversationModel(
   const config = currentGatewayConfig(deps);
   if (holder === undefined || config === undefined) return "unknown-model";
   if (!configuredChatModels(config).some((model) => model.id === modelId)) return "unknown-model";
-  if (isConversationReadinessCheckRunning(deps, modelId) || isExplicitCheckRunning(deps, modelId))
-    return "check-running";
+  if (isCheckPendingInAnyGeneration(deps, modelId)) return "check-running";
   const activated = currentConversationReady(deps, modelId);
   // The durable record of the activation goes with it (owner decision 2026-11-28). A removal the
   // record could not take is never reported as done: it would come back at the next start. The
@@ -4430,11 +4429,15 @@ async function trackExplicitCheck<T>(
   }
 }
 
-function isExplicitCheckRunning(deps: UiHandlerDeps, modelId: string): boolean {
+// A check that started in an earlier configuration generation can still be adopted by a later one
+// whose connection did not change, so a deactivation must wait for it too.
+function isCheckPendingInAnyGeneration(deps: UiHandlerDeps, modelId: string): boolean {
   const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const ofModel = (key: string): boolean => key.slice(key.indexOf(":") + 1) === modelId;
   return (
-    holder !== undefined &&
-    explicitChecksFor(holder).has(`${String(holder.generation())}:${modelId}`)
+    [...readinessProbesFor(holder).keys()].some(ofModel) ||
+    [...explicitChecksFor(holder).keys()].some(ofModel)
   );
 }
 

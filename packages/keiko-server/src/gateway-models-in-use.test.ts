@@ -823,6 +823,38 @@ it("refuses to deactivate the default model while a readiness request without a 
   expect(currentConversationReady(deps, CHAT_A)).toBe(false);
 });
 
+it("refuses to deactivate a model whose check started in an earlier configuration generation", async () => {
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  await activate(deps, CHAT_A);
+  const completion = holdChatCompletion(CHAT_A);
+  const checking = handleGatewayReadiness(
+    selectionRequest({ options: { probes: ["chat"] } }),
+    deps,
+  );
+  await vi.waitFor(() => {
+    expect(completion.held()).toBe(true);
+  });
+  // An unrelated catalogue edit keeps this model's connection, so its verdict can still be adopted.
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (holder === undefined || config === undefined) throw new TypeError("Expected a config.");
+  holder.set({ ...config }, true, "corr-unrelated-edit");
+  expect(
+    await handleGatewayDeactivation(deactivationRequest({ modelId: CHAT_A }, "corr-gen"), deps),
+  ).toMatchObject({ status: 409, body: { error: { code: "CONFLICT" } } });
+  completion.release();
+  expect(await checking).toMatchObject({ status: 200 });
+  expect(
+    await handleGatewayDeactivation(
+      deactivationRequest({ modelId: CHAT_A }, "corr-gen-after"),
+      deps,
+    ),
+  ).toMatchObject({ status: 200, body: { outcome: "deactivated" } });
+  expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+});
+
 it("reports a failed selection check instead of leaving an unhandled rejection", async () => {
   const sink = loggedSink();
   const gateway = gatewayDouble();
