@@ -1313,7 +1313,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.stopCause.server-shutdown-working":
     "Keiko was closed while this run was working. Changes it had already started may be incomplete. Start the task again to continue.",
   "codingWorkbench.runStatus.verificationGapDetail.unchanged-after-continuation":
-    "The check is still failing, and this run did not change it after Keiko asked. It may have been failing before this run started. The changes you asked for stay in the task workspace.",
+    "The check is still failing, and this run did not change it after Keiko asked. It may have been failing before this run started.",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Checking the run status.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",

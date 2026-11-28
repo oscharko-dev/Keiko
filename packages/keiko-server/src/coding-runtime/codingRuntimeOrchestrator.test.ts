@@ -9486,6 +9486,27 @@ describe("verification truth at task settlement", () => {
       });
     });
 
+    it.each([
+      ["refused", (): unknown => ({ ok: false })],
+      ["thrown", (): unknown => Promise.reject(new Error("transport down"))],
+    ])("names no detail when the continuation dispatch is %s", async (_label, outcome) => {
+      const run = await runningTask();
+      run.f.taskDispatcher.dispatch.mockReset();
+      run.f.taskDispatcher.dispatch.mockImplementation(outcome as never);
+      run.f.orchestrator.observeEditOutcome("run-1", {
+        kind: "applied",
+        changedPaths: ["src/a.js"],
+      });
+      await verification(run.f, "failed");
+      run.finish();
+      await vi.waitFor(() => {
+        expect(run.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      const snapshot = run.f.orchestrator.getSnapshot("run-1");
+      expect(snapshot?.verificationGap).toBe("check-failed");
+      expect(snapshot?.verificationGapDetail).toBeUndefined();
+    });
+
     it("names no detail when the run changed code after the continuation and the check still fails", async () => {
       const { f, endContinuation } = await continuedRun();
       f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/b.js"] });

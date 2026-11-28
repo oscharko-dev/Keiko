@@ -1358,7 +1358,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.stopCause.server-shutdown-working":
     "Keiko wurde geschlossen, während dieser Lauf arbeitete. Bereits begonnene Änderungen sind möglicherweise unvollständig. Starte die Aufgabe erneut, um fortzufahren.",
   "codingWorkbench.runStatus.verificationGapDetail.unchanged-after-continuation":
-    "Die Prüfung schlägt weiterhin fehl, und dieser Lauf hat daran nach der Aufforderung durch Keiko nichts geändert. Sie kann schon vor diesem Lauf fehlgeschlagen sein. Die gewünschten Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+    "Die Prüfung schlägt weiterhin fehl, und dieser Lauf hat daran nach der Aufforderung durch Keiko nichts geändert. Sie kann schon vor diesem Lauf fehlgeschlagen sein.",
   "codingWorkbench.resourceStatus.unavailable": "Nicht verfügbar",
   "codingWorkbench.announcement.runChecking": "Laufstatus wird geprüft.",
   "codingWorkbench.announcement.noActiveRun": "Kein aktiver Coding-Lauf.",

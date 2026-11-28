@@ -3882,13 +3882,14 @@ export class CodingRuntimeOrchestrator {
     const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
     const dispatchedAt = this.effort.verificationRevision(live.runId);
-    if (dispatchedAt !== undefined) this.continuationRevisions.set(live.runId, dispatchedAt);
     const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
     if (dispatched === undefined) return false;
     if (this.continuationSuperseded(live)) {
       recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
       return true;
     }
+    // Only a continuation the model actually received counts as "asked" (U-38).
+    if (dispatchedAt !== undefined) this.continuationRevisions.set(live.runId, dispatchedAt);
     recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "continued", {
       failure,
     });
