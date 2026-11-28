@@ -901,11 +901,15 @@ function compactTail(window: StreamWindow): void {
 }
 
 // A window that dropped its middle is cut on LINE boundaries: the head ends after its last newline and
-// the tail starts after its first one. A credential never spans a newline, so a secret lies wholly in
-// the kept text or wholly in the dropped text, and a prefix of one never survives at a cut, where the
-// redaction patterns could not recognize it (ADR-0006 D5). A cut side with no newline is dropped whole
-// (fail closed).
-function windowParts(window: StreamWindow): { readonly head: Buffer; readonly tail: Buffer } {
+// the tail starts after its first one. A single-line credential therefore lies wholly in the kept text
+// or wholly in the dropped text. A MULTI-line secret (a configured env value such as a key) can still
+// straddle the cut, leaving a prefix at the head's end or a suffix at the tail's start that the exact
+// match redaction cannot recognize (ADR-0006 D5): `dropStraddlingSecret*` removes those lines (fail
+// closed). A cut side with no newline is dropped whole.
+function windowParts(
+  window: StreamWindow,
+  secrets: readonly string[],
+): { readonly head: Buffer; readonly tail: Buffer } {
   const head = Buffer.concat(window.head);
   const tail = Buffer.concat(window.tail.slice(window.tailFirst));
   if (window.dropped === 0) return { head, tail };
@@ -913,14 +917,73 @@ function windowParts(window: StreamWindow): { readonly head: Buffer; readonly ta
   // A tail whose preceding dropped byte is a newline already starts on a line.
   const tailStart = window.lastDropped === 0x0a ? 0 : tail.indexOf(0x0a) + 1;
   const keepsTail = window.lastDropped === 0x0a || tailStart > 0;
+  const multiLine = secrets
+    .filter((secret) => secret.includes("\n"))
+    .map((secret) => secret.split("\n").map(stripCarriageReturn));
+  const keptHead = head.subarray(0, headEnd);
+  const keptTail = keepsTail ? tail.subarray(tailStart) : Buffer.alloc(0);
   return {
-    head: head.subarray(0, headEnd),
-    tail: keepsTail ? tail.subarray(tailStart) : Buffer.alloc(0),
+    head: multiLine.length === 0 ? keptHead : dropStraddlingSecretHead(keptHead, multiLine),
+    tail: multiLine.length === 0 ? keptTail : dropStraddlingSecretTail(keptTail, multiLine),
   };
 }
 
-function windowText(window: StreamWindow): Buffer {
-  const { head, tail } = windowParts(window);
+function stripCarriageReturn(line: string): string {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
+
+// The head ends with the first `m` lines of a secret (its first line as a line suffix): drop from there.
+function dropStraddlingSecretHead(head: Buffer, secrets: readonly (readonly string[])[]): Buffer {
+  const lines = head.toString("utf8").split("\n").map(stripCarriageReturn);
+  lines.pop(); // the empty remainder after the final newline
+  let dropFrom = lines.length;
+  for (const secret of secrets) {
+    for (let m = Math.min(secret.length - 1, lines.length); m >= 1; m -= 1) {
+      const start = lines.length - m;
+      if (start >= dropFrom) break;
+      const matches = lines.slice(start).every((line, index) => {
+        const expected = secret[index] ?? "";
+        return index === 0 ? line.endsWith(expected) : line === expected;
+      });
+      if (matches) {
+        dropFrom = start;
+        break;
+      }
+    }
+  }
+  if (dropFrom === lines.length) return head;
+  return Buffer.from(
+    lines
+      .slice(0, dropFrom)
+      .map((line) => `${line}\n`)
+      .join(""),
+    "utf8",
+  );
+}
+
+// The tail starts with the last `m` lines of a secret (its last line as a line prefix): drop them.
+function dropStraddlingSecretTail(tail: Buffer, secrets: readonly (readonly string[])[]): Buffer {
+  const lines = tail.toString("utf8").split("\n");
+  let dropTo = 0;
+  for (const secret of secrets) {
+    for (let m = Math.min(secret.length - 1, lines.length); m > dropTo; m -= 1) {
+      const matches = lines.slice(0, m).every((raw, index) => {
+        const line = stripCarriageReturn(raw);
+        const expected = secret[secret.length - m + index] ?? "";
+        return index === m - 1 ? line.startsWith(expected) : line === expected;
+      });
+      if (matches) {
+        dropTo = m;
+        break;
+      }
+    }
+  }
+  if (dropTo === 0) return tail;
+  return Buffer.from(lines.slice(dropTo).join("\n"), "utf8");
+}
+
+function windowText(window: StreamWindow, secrets: readonly string[]): Buffer {
+  const { head, tail } = windowParts(window, secrets);
   if (window.dropped === 0) return Buffer.concat([head, tail]);
   const omitted = window.headBytes + window.tailBytes + window.dropped - head.length - tail.length;
   const marker = Buffer.from(`[... ${String(omitted)} bytes of output omitted ...]\n`, "utf8");
@@ -1556,10 +1619,10 @@ function buildResult(options: BuildResultOptions): CommandResult {
     };
   }
   const originalOut = (
-    buffers.window ? windowText(buffers.window.out) : Buffer.concat(buffers.out)
+    buffers.window ? windowText(buffers.window.out, secrets) : Buffer.concat(buffers.out)
   ).toString("utf8");
   const originalErr = (
-    buffers.window ? windowText(buffers.window.err) : Buffer.concat(buffers.err)
+    buffers.window ? windowText(buffers.window.err, secrets) : Buffer.concat(buffers.err)
   ).toString("utf8");
   const scrub = deps.policy.outputScrub === "machine-metadata" ? credentialFloor : redact;
   const stdout = scrub(originalOut, secrets);
@@ -1575,20 +1638,23 @@ function buildResult(options: BuildResultOptions): CommandResult {
     durationMs: deps.now() - startedAt,
     timedOut: state.timedOut,
     truncated: buffers.truncated,
-    ...retainedCounts(buffers),
+    ...retainedCounts(buffers, secrets),
     ...attest,
   };
 }
 
 // What "retain-head-tail" kept and dropped, only when it dropped something.
-function retainedCounts(buffers: Buffers): {
+function retainedCounts(
+  buffers: Buffers,
+  secrets: readonly string[],
+): {
   readonly retainedByteCount?: number;
   readonly discardedByteCount?: number;
 } {
   const { window } = buffers;
   if (window === undefined || window.out.dropped + window.err.dropped === 0) return {};
   const kept = [window.out, window.err].reduce((sum, stream) => {
-    const { head, tail } = windowParts(stream);
+    const { head, tail } = windowParts(stream, secrets);
     return sum + head.length + tail.length;
   }, 0);
   return { retainedByteCount: kept, discardedByteCount: buffers.attempted - kept };

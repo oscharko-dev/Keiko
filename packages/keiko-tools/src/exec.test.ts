@@ -1710,6 +1710,34 @@ describe("runCommand — retain-head-tail output (output volume never ends healt
     );
   });
 
+  it("never leaves a prefix or suffix of a multi-line configured secret at a head or tail cut", async () => {
+    const secret = "alpha-secret-line-one\nbeta-secret-line-two\ngamma-secret-line-three";
+    for (let lead = 0; lead < 18; lead += 1) {
+      const spawn = recordingSpawn();
+      const base = retainDeps(spawn);
+      const deps = {
+        ...base,
+        policy: { ...base.policy, maxOutputBytes: 400 },
+        processEnv: { PATH: process.env.PATH ?? "", KEIKO_FIXTURE_MULTILINE: secret },
+      };
+      const promise = runCommand({ ...input, signal: controller().signal }, deps);
+      const filler = "f".repeat(5);
+      // As `lead` varies, the head window's end and the tail window's start fall between and
+      // inside the secret's lines.
+      spawn.child.stdout.emit(
+        "data",
+        Buffer.from(`${`${filler}\n`.repeat(lead)}${secret}\n${`${filler}\n`.repeat(40)}`),
+      );
+      spawn.child.stdout.emit(
+        "data",
+        Buffer.from(`${`${filler}\n`.repeat(40)}${secret}\n${`${filler}\n`.repeat(17 - lead)}`),
+      );
+      spawn.child.emit("close", 0, null);
+      const result = await promise;
+      expect(result.stdout).not.toContain("secret-line");
+    }
+  });
+
   // The retained window IS maxOutputBytes: stdout and stderr share it, so two flooded streams of
   // whole lines keep exactly that many bytes (the value the old flood guard cut at stays asserted).
   it("retains exactly maxOutputBytes across both streams when whole lines flood them", async () => {
