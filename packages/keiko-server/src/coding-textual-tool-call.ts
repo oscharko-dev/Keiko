@@ -365,7 +365,7 @@ export function detectTextualToolCall(
 // Lower-cases ASCII letters only, so the result has the length of the input and every index into it
 // is an index into the original (`toLowerCase` can change the length of some Unicode text).
 function asciiLower(text: string): string {
-  return text.replace(/[A-Z]/gu, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32));
+  return text.replace(/[A-Z]/gu, (letter) => String.fromCodePoint((letter.codePointAt(0) ?? 0) + 32));
 }
 
 const MAX_COMPANION_TAGS = 32;
