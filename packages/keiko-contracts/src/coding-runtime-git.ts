@@ -86,7 +86,10 @@ export const CODING_RUNTIME_GIT_STAGE_CAUSES = [
 ] as const;
 export type CodingRuntimeGitStageCause = (typeof CODING_RUNTIME_GIT_STAGE_CAUSES)[number];
 export function isCodingRuntimeGitStageCause(value: unknown): value is CodingRuntimeGitStageCause {
-  return CODING_RUNTIME_GIT_STAGE_CAUSES.some((cause) => cause === value);
+  return (
+    typeof value === "string" &&
+    (CODING_RUNTIME_GIT_STAGE_CAUSES as readonly string[]).includes(value)
+  );
 }
 export interface CodingRuntimeGitStage {
   readonly kind: "stage";

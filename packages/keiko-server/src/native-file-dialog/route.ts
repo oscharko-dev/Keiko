@@ -34,6 +34,7 @@ import { pathDeniedAsyncRecorded } from "../files-deny.js";
 import { FilesError, metadataIsSafe, readJsonObject, resolveRoot } from "../files.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { eachInSequence } from "../sequential.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import {
   createNativeFileDialogAdapter,
@@ -239,18 +240,15 @@ async function projectSelections(
   const selections: NativeFileDialogSelection[] = [];
   let firstRejection: SelectionRejection | undefined;
   let rejectedSelectionCount = 0;
-  for (const path of adapterResult.paths) {
+  await eachInSequence(adapterResult.paths, async (path) => {
     try {
       selections.push(await validateSelection(path, kind, deps, correlationId));
     } catch (error) {
-      if (error instanceof SelectionRejection) {
-        firstRejection ??= error;
-        rejectedSelectionCount += 1;
-        continue;
-      }
-      throw error;
+      if (!(error instanceof SelectionRejection)) throw error;
+      firstRejection ??= error;
+      rejectedSelectionCount += 1;
     }
-  }
+  });
   if (selections.length === 0) {
     throw firstRejection ?? new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }

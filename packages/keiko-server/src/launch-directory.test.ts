@@ -226,13 +226,13 @@ describe("installationDenialCause", () => {
     expect(installationDenialCause("/Users/me/Keiko/system/Keiko/app", process.env, program)).toBe(
       "installation-payload",
     );
-    expect(installationDenialCause(join(root, "no-such-folder"), process.env, program)).toBe(
-      undefined,
-    );
+    expect(
+      installationDenialCause(join(root, "no-such-folder"), process.env, program),
+    ).toBeUndefined();
   });
 
-  it("names a name the operating system cannot give as unresolvable, still refused", () => {
-    if (process.platform === "win32" || process.getuid?.() === 0) return;
+  it("names a name the operating system cannot give as unresolvable, still refused", (context) => {
+    if (process.platform === "win32" || process.getuid?.() === 0) context.skip();
     const { root } = folders();
     const locked = join(root, "locked");
     mkdirSync(join(locked, "inner"), { recursive: true });

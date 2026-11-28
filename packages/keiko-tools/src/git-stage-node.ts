@@ -191,10 +191,10 @@ function checkoutKeepsRawBytes(
 }
 // The staged object a plan chose, unless it is the raw one and checkout would rewrite its bytes.
 function checkedChoice(
-  chosen: "raw" | "converted" | undefined,
+  chosen: StagedChoice | undefined,
   plan: Extract<StagePlan, { kind: "convert" }>,
   shape: LineShape,
-): "raw" | "converted" | undefined {
+): StagedChoice | undefined {
   return chosen === "raw" && !checkoutKeepsRawBytes(plan, shape) ? undefined : chosen;
 }
 function withoutCrlf(bytes: Uint8Array): Uint8Array {
@@ -277,6 +277,8 @@ type StagePlan =
       // effective `core.autocrlf` did.
       readonly declared: boolean;
     };
+// Which of the two candidate objects a stage plan stores.
+type StagedChoice = "raw" | "converted";
 type StageCheckout = "crlf" | "lf" | "unknown";
 interface GitStageLineEndingAttributes {
   readonly text: string;
@@ -329,7 +331,7 @@ async function convertedChoice(
   plan: Extract<StagePlan, { kind: "convert" }>,
   converted: string,
   indexClass: string | undefined,
-): Promise<"raw" | "converted" | undefined> {
+): Promise<StagedChoice | undefined> {
   if (plan.auto && indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
   if (plan.auto && indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
   if (plan.checkout !== "crlf" || !allLineBreaksCrlf(file.bytes)) return undefined;
@@ -422,7 +424,7 @@ async function convertedLargeChoice(
   converted: string,
   indexClass: string | undefined,
   analysis: LargeFileAnalysis,
-): Promise<"raw" | "converted" | undefined> {
+): Promise<StagedChoice | undefined> {
   if (plan.auto && indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
   if (plan.auto && indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
   if (plan.checkout !== "crlf" || analysis.crlfBreaks === undefined) return undefined;
