@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   closeSync,
   fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -334,6 +336,39 @@ describe("production workspace HEAD reader worktree layouts", () => {
       const tools = await readGitHeadState({ workspace });
       expect(tools).toEqual({ kind: "unborn", branch: "main", objectIdLength: 64 });
       expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(64));
+    });
+
+    // The same repository read through every spelling Git accepts for the format: the reader's
+    // stand-in length must follow what Git itself reports, never the raw text of one line.
+    it.each([
+      ["objectFormat = sha256", 64],
+      ['objectFormat = "sha256"', 64],
+      ["objectformat = sha256 # a comment", 64],
+      ["objectformat = sha256 ; a comment", 64],
+      ["objectformat = sha1", 40],
+    ] as const)("keeps the unborn identity of a SHA-256 repository for `%s`", (line, length) => {
+      const root = unbornRepo();
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(root, ["init", "-q", "-b", "main", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories.
+      }
+      const configPath = join(root, ".git", "config");
+      const original = readFileSync(configPath, "utf8");
+      const respelled = original.replace(/^\s*objectformat\s*=.*$/imu, `\t${line}`);
+      expect(respelled).not.toBe(original);
+      writeFileSync(configPath, respelled);
+      const format = git(root, ["rev-parse", "--show-object-format"]).trim();
+      expect(format === "sha256" ? 64 : 40).toBe(length);
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(length));
+    });
+
+    it("ignores an objectformat key outside the extensions section", () => {
+      const root = unbornRepo();
+      const configPath = join(root, ".git", "config");
+      appendFileSync(configPath, '[other]\n\tobjectformat = sha256\n[remote "extensions"]\n');
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(40));
     });
 
     it("stays born once the first commit exists, and reads a packed branch as born", () => {

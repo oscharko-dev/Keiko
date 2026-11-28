@@ -177,16 +177,62 @@ function objectIdLength(
   return config !== undefined && declaresSha256(config) ? 64 : 40;
 }
 
-// A line of the form `objectformat = sha256`, read line by line so no pattern backtracks.
+// Git's own config grammar for the one key that matters: `extensions.objectformat` (section and key
+// names are case-insensitive, the value may be quoted and followed by a `#` or `;` comment, and the
+// last assignment wins). Read line by line with no backtracking pattern.
 function declaresSha256(config: string): boolean {
-  return config.split(/\r?\n/u).some((line) => {
-    const [key, value, ...rest] = line.split("=");
-    return (
-      rest.length === 0 &&
-      key?.trim().toLowerCase() === "objectformat" &&
-      value?.trim().toLowerCase() === "sha256"
-    );
-  });
+  let section = "";
+  let format: string | undefined;
+  for (const raw of config.split(/\r?\n/u)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      section = sectionName(line);
+    } else if (section === "extensions") {
+      const assignment = assignmentOf(line);
+      if (assignment?.key === "objectformat") format = assignment.value;
+    }
+  }
+  return format === "sha256";
+}
+
+// The lower-cased name of a `[section]` or `[section "subsection"]` header; a subsection or a
+// malformed header names no section that counts.
+function sectionName(line: string): string {
+  const close = line.indexOf("]");
+  const name = close < 0 ? "" : line.slice(1, close).trim();
+  return /^[A-Za-z][A-Za-z0-9-]*$/u.test(name) ? name.toLowerCase() : "";
+}
+
+function assignmentOf(line: string): { readonly key: string; readonly value: string } | undefined {
+  const equals = line.indexOf("=");
+  if (equals < 0) return undefined;
+  const key = line.slice(0, equals).trim().toLowerCase();
+  return /^[a-z][a-z0-9-]*$/u.test(key)
+    ? { key, value: configValue(line.slice(equals + 1)).toLowerCase() }
+    : undefined;
+}
+
+// A value as Git reads it: quotes group text and are dropped, a backslash escapes the next
+// character, and an unquoted `#` or `;` starts a comment. Surrounding blanks are not part of it.
+function configValue(text: string): string {
+  let value = "";
+  let quoted = false;
+  let escaped = false;
+  for (const character of text) {
+    if (escaped) {
+      value += character;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (!quoted && (character === "#" || character === ";")) {
+      break;
+    } else {
+      value += character;
+    }
+  }
+  return value.trim();
 }
 
 function localBranch(reference: string): string | undefined {
