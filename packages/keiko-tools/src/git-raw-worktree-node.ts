@@ -43,6 +43,7 @@ import {
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
+import { join } from "node:path";
 import { workspaceFsOf } from "./exec.js";
 import { eachInSequence } from "./sequential.js";
 import { CommandCancelledError } from "./errors.js";
@@ -543,6 +544,13 @@ async function settleConvertedFiles(
     return change.staged ? [{ ...change, worktreeStatus: " " as const, unstaged: false }] : [];
   });
 }
+function gitlinkWorkingStatus(scan: ScanInputs, path: string): WorkingInspection {
+  const fs = workspaceFsOf(scan.deps);
+  const absolute = join(scan.deps.workspace.root, path);
+  if (!fs.exists(absolute)) return { status: "D", bytes: 0, untracked: false };
+  const present = fs.stat(absolute).isDirectory;
+  return { status: present ? " " : "M", bytes: 0, untracked: false };
+}
 async function workingStatus(
   scan: ScanInputs,
   path: string,
@@ -552,8 +560,12 @@ async function workingStatus(
   const clean: WorkingInspection = { status: " ", bytes: 0, untracked: false };
   // A submodule is a gitlink, not a file: its directory is never read. Keiko's governed lane does not
   // enter a submodule, so a moved or dirty submodule HEAD is not judged here (`git status` would say
-  // ` M`); the gitlink commit itself is still compared head-to-index by `indexStatus`.
-  if (entry?.mode === GITLINK_MODE || scan.head.get(path)?.mode === GITLINK_MODE) return clean;
+  // ` M`); the gitlink commit itself is still compared head-to-index by `indexStatus`. Only the
+  // directory entry itself is looked at, without following it: a submodule that is gone or was
+  // replaced by something else is a change `git status` reports. The index mode decides: a gitlink
+  // that was staged away as a regular file is compared like any file.
+  if (entry?.mode === GITLINK_MODE) return gitlinkWorkingStatus(scan, path);
+  if (entry === undefined && scan.head.get(path)?.mode === GITLINK_MODE) return clean;
   return entry !== undefined &&
     entry.mode === scan.head.get(path)?.mode &&
     indexStatMatches(

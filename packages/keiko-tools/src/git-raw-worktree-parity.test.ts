@@ -118,6 +118,42 @@ describe("a tracked submodule", () => {
   });
 });
 
+describe("a tracked submodule whose directory entry is gone or replaced", () => {
+  function withSubmodule(): string {
+    const root = repository();
+    const upstream = repository();
+    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "sub"]);
+    git(root, ["commit", "-qm", "add submodule"]);
+    return root;
+  }
+  it("reports a deleted submodule directory as an unstaged deletion, as git status does", async () => {
+    const root = withSubmodule();
+    rmSync(join(root, "sub"), { recursive: true, force: true });
+    expect(gitStatusTracked(root)).toEqual([" D sub"]);
+    expect(await readerStatus(root)).toEqual([" D sub"]);
+  });
+  it("reports a submodule directory replaced by a file as modified", async () => {
+    const root = withSubmodule();
+    rmSync(join(root, "sub"), { recursive: true, force: true });
+    writeFileSync(join(root, "sub"), "now a file\n");
+    expect(gitStatusTracked(root)).toEqual([" T sub"]);
+    expect(await readerStatus(root)).toEqual([" M sub"]);
+  });
+  it("compares a gitlink that was staged away as a regular file like any file", async () => {
+    const root = withSubmodule();
+    git(root, ["rm", "-q", "--cached", "sub"]);
+    rmSync(join(root, "sub"), { recursive: true, force: true });
+    writeFileSync(join(root, "sub"), "staged file\n");
+    git(root, ["add", "sub"]);
+    expect(gitStatusTracked(root)).toEqual(["T  sub"]);
+    writeFileSync(join(root, "sub"), "edited after staging\n");
+    expect(gitStatusTracked(root)).toEqual(["TM sub"]);
+    const status = await readerStatus(root);
+    expect(status).toHaveLength(1);
+    expect(status[0]?.endsWith("M sub")).toBe(true);
+  });
+});
+
 describe("a tracked symlink the staging lane would refuse", () => {
   it.each([
     ["absolute", "/etc/hosts"],
