@@ -394,6 +394,20 @@ function branchRefsBase(gitdir: string): string {
 /** The message of the failure thrown when the sequencer state of a repository cannot be read. */
 export const GIT_SEQUENCER_STATE_UNAVAILABLE = "git-sequencer-state-unavailable";
 
+// Whether a gitdir entry exists, through the port's `stat` (an lstat on the Node port). Only a
+// missing entry is "absent": `WorkspaceFs.exists` reads EACCES, EIO or a sharing violation as absent
+// too, which would let a commit proceed in the middle of a merge, so every other error propagates.
+function entryPresent(fs: WorkspaceFs, path: string): boolean {
+  try {
+    fs.stat(path);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
 const SEQUENCER_HEAD_FILES = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const;
 
 /**
@@ -408,7 +422,7 @@ export async function gitSequencerOperationInProgress(
   try {
     const base = await resolveGitdir(fs, workspaceRoot);
     if (base === undefined) throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE);
-    return SEQUENCER_HEAD_FILES.some((name) => fs.exists(join(base.path, name)));
+    return SEQUENCER_HEAD_FILES.some((name) => entryPresent(fs, join(base.path, name)));
   } catch (error) {
     throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE, { cause: error });
   }
@@ -434,7 +448,7 @@ export async function removeGitCommitState(
   for (const name of COMMIT_MESSAGE_STATE_FILES) {
     const path = join(base.path, name);
     const failed = stepFailed(() => {
-      if (fs.exists(path)) removePath(path, "file");
+      if (entryPresent(fs, path)) removePath(path, "file");
     });
     if (failed) stayed += 1;
   }

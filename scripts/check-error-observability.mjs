@@ -123,6 +123,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
   Object.entries({
     "packages/keiko-workspace/src/gitIndexTransaction.ts:stepFailed":
       "A cleanup step that threw is counted into the GitIndexCleanupReport / GitRefLockCleanupReport the caller's log port receives (git.index-transaction.cleanup-incomplete, with the mutation's correlation id); the settled transaction result is never replaced by a cleanup failure and the error class is intentionally not recorded, because every class leaves the same leftover (#4491).",
+    "packages/keiko-tools/src/git-mutation-node.ts:deliverCommitRefusal":
+      "A log port that throws cannot replace the closed commit refusal it was told about; the lost line surfaces only as the closed Node process warning KEIKO_GIT_COMMIT_REFUSAL_UNREPORTED, which no product code forwards to the Activity Log today (the same accepted gap as KEIKO_GIT_CLEANUP_UNREPORTED); the port the server wires (logGitCommitRefused) is a plain log write that does not throw (#4491).",
     "packages/keiko-workspace/src/gitIndexTransaction.ts:attempt":
       "A lock or directory check that threw is treated as an unreleased lock in the cleanup report the caller's log port receives (git.index-transaction.cleanup-incomplete); the check cannot change the settled result (#4491).",
     "packages/keiko-workspace/src/gitIndexTransaction.ts:deliverCleanupReport":

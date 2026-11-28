@@ -6881,8 +6881,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "loss-state",
       "safe-platform-class",
     ],
-    requiredFrameOperations: ["git.delivery.commit-refused", "git.delivery.mutation.failed"],
-    requiredCauseOperations: ["git.delivery.commit-refused", "git.delivery.mutation.failed"],
+    requiredFrameOperations: [
+      "git.delivery.commit-refused",
+      "git.delivery.mutation.failed",
+      "git.index-transaction.cleanup-incomplete",
+    ],
+    requiredCauseOperations: [
+      "git.delivery.commit-refused",
+      "git.delivery.mutation.failed",
+      "git.index-transaction.cleanup-incomplete",
+    ],
   },
   {
     contractKind: "activity-log-failure-class",

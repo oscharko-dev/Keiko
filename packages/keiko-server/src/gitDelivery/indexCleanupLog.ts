@@ -7,6 +7,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, errorKindOf, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { correlationIdOrUnknown } from "../correlation.js";
 
 export const GIT_INDEX_CLEANUP_CALLERS = [
@@ -29,6 +30,8 @@ export interface GitIndexCleanupIncompleteFacts {
   readonly descriptors?: number;
   /** Merge or squash state files a successful commit could not remove. */
   readonly stateFiles?: number;
+  /** The error that ended the cleanup, when one did: only its class, frames and chain are logged. */
+  readonly error?: unknown;
 }
 
 const CLEANUP_INCOMPLETE_OPERATION = defineActivityLogOperation({
@@ -52,6 +55,21 @@ const CLEANUP_INCOMPLETE_OPERATION = defineActivityLogOperation({
     directoryFailures: { type: "integer", dataClass: "count", required: true },
     descriptorFailures: { type: "integer", dataClass: "count", required: false },
     stateFileFailures: { type: "integer", dataClass: "count", required: false },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -67,6 +85,7 @@ export function logGitIndexCleanupIncomplete(
   facts: GitIndexCleanupIncompleteFacts,
   correlationId: string | undefined,
 ): void {
+  const structured = facts.error === undefined ? undefined : failureFieldsOf(facts.error);
   log.write(
     activityLogEvent(
       CLEANUP_INCOMPLETE_OPERATION,
@@ -84,7 +103,22 @@ export function logGitIndexCleanupIncomplete(
         directoryFailures: facts.directories,
         descriptorFailures: facts.descriptors ?? 0,
         stateFileFailures: facts.stateFiles ?? 0,
+        ...structured,
       },
     ),
   );
+}
+
+function failureFieldsOf(error: unknown): {
+  readonly failureKind: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+} {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
+  return {
+    failureKind: errorKindOf(error),
+    ...(frames.length > 0 ? { frames } : {}),
+    ...(chain.length > 0 ? { causeChain: chain } : {}),
+  };
 }

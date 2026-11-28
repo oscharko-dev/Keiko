@@ -36406,6 +36406,12 @@
               "required": true
             },
             {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
               "name": "descriptorFailures",
               "type": "integer",
               "dataClass": "count",
@@ -36416,6 +36422,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
+              "required": false
             },
             {
               "name": "lockLeft",
@@ -36448,10 +36466,17 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class"
+          ],
           "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
+            "frames": true,
+            "causeChain": true
           },
           "proofIds": ["git.index-transaction.cleanup-incomplete.emitted-line"],
           "replayReferences": [],

@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import type {
   GitDeliveryRepoPolicyPack,
   GitDeliveryApprovalRequirement,
@@ -423,11 +423,22 @@ describe("node git mutation adapter — the bound commit leaves the repository a
   }
 
   it.each([
-    ["a normal commit", true, "subject  \n\nbody"],
-    ["a normal commit with a multi-line first paragraph", true, "first\nsecond\n\nbody"],
-    ["the root commit of an unborn branch", false, "root subject\n"],
-    ["a message with leading blank lines", true, "\n\n  lead\nbody\n"],
-  ])("writes the reflog git commit writes for %s", async (_name, born, message) => {
+    ["a normal commit", true, "subject  \n\nbody", "commit: subject"],
+    [
+      "a normal commit with a multi-line first paragraph",
+      true,
+      "first\nsecond\n\nbody",
+      "commit: first",
+    ],
+    ["an indented continuation line", true, "first\n  second\nthird", "commit: first"],
+    [
+      "the root commit of an unborn branch",
+      false,
+      "root subject\n",
+      "commit (initial): root subject",
+    ],
+    ["a message with leading blank lines", true, "\n\n  lead\nbody\n", "commit: lead"],
+  ])("writes the reflog git commit writes for %s", async (_name, born, message, expected) => {
     const plainRepo = newRepo();
     const boundRepo = newRepo();
     if (born) {
@@ -439,7 +450,10 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     expect((await commitOn(boundRepo, true, message)).outcome).toBe("succeeded");
 
     expect(reflogs(boundRepo)).toEqual(reflogs(plainRepo));
-    expect(reflogs(boundRepo).branch[0]).toMatch(/^commit( \(initial\))?: \S/u);
+    // What real git writes, not only what the two lanes agree on: the first line, on both refs.
+    expect(reflogs(plainRepo).branch[0]).toBe(expected);
+    expect(reflogs(boundRepo).branch[0]).toBe(expected);
+    expect(reflogs(boundRepo).head[0]).toBe(expected);
   });
 
   it("leaves the same merge state files as git commit after a squash merge", async () => {
@@ -495,7 +509,7 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     ]);
   });
 
-  it("follows git for a repository whose commit.cleanup would strip comment lines", async () => {
+  it("records the same message on both lanes under a repository commit.cleanup=strip (the pin, not git's own cleanup)", async () => {
     const message = "# heading\nbody\n";
     const plainRepo = newRepo();
     const boundRepo = newRepo();
@@ -508,6 +522,75 @@ describe("node git mutation adapter — the bound commit leaves the repository a
 
     const body = (repo: string): string => gitIn(repo, ["log", "-1", "--format=%B"]);
     expect(body(boundRepo)).toBe(body(plainRepo));
+  });
+
+  // A port that fails the way the Node port does: the real lstat error codes of one entry.
+  function statFaultOn(name: string, code: string): WorkspaceFs {
+    return {
+      ...nodeWorkspaceFs,
+      stat: (path): ReturnType<WorkspaceFs["stat"]> => {
+        if (path.endsWith(`${sep}${name}`)) throw Object.assign(new Error(code), { code });
+        return nodeWorkspaceFs.stat(path);
+      },
+    };
+  }
+
+  it("counts an unreadable merge state file instead of reading it as absent", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    writeFileSync(join(repo, ".git", "SQUASH_MSG"), "squash\n", "utf8");
+    const reports: GitCleanupIncompleteReport[] = [];
+
+    const committed = await commitOn(repo, true, "lands", {
+      metadataFs: statFaultOn("SQUASH_MSG", "EACCES"),
+      onCleanupIncomplete: (report) => reports.push(report),
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(reports.map((report) => [report.caller, report.stateFiles])).toEqual([
+      ["commit-state", 1],
+    ]);
+  });
+
+  it("keeps the error class when the merge state cannot be examined at all", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const reports: GitCleanupIncompleteReport[] = [];
+    let refUpdates = 0;
+    const committed = await commitOn(repo, true, "lands", {
+      // The last authorization runs right before the ref update: from there on the gitdir cannot
+      // be resolved, so the cleanup after the commit cannot examine the merge state.
+      beforeCommitRefUpdate: (): boolean => {
+        refUpdates += 1;
+        return true;
+      },
+      metadataFs: {
+        ...nodeWorkspaceFs,
+        realPath: (path) => {
+          if (refUpdates >= 2) throw Object.assign(new Error("EIO"), { code: "EIO" });
+          return nodeWorkspaceFs.realPath(path);
+        },
+      },
+      onCleanupIncomplete: (report) => reports.push(report),
+    });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.stateFiles).toBe(1);
+    expect(reports[0]?.error).toBeInstanceOf(Error);
+  });
+
+  it("cuts a long reflog subject by code points, never inside a surrogate pair", async () => {
+    const repo = newRepo();
+    seedBase(repo);
+    const message = `${"x".repeat(1_023)}\u{1F600}\u{1F600}`;
+
+    expect((await commitOn(repo, true, message)).outcome).toBe("succeeded");
+
+    const subject = reflogs(repo).branch[0] ?? "";
+    expect(subject).toBe(`commit: ${"x".repeat(1_023)}\u{1F600}`);
+    expect(Buffer.from(subject, "utf8").toString("utf8")).toBe(subject);
+    expect(subject).not.toContain("\uFFFD");
   });
 
   it("commits a message of 60 KiB through stdin, byte for byte as git cleans it", async () => {
@@ -563,17 +646,71 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       seedBase(repo);
       const reports: { cause: string; error?: unknown }[] = [];
       const { result } = await refused(repo, "m", true, {
-        metadataFs: {
-          ...nodeWorkspaceFs,
-          exists: () => {
-            throw new Error("EIO");
-          },
-        },
+        metadataFs: statFaultOn("MERGE_HEAD", "EACCES"),
         onCommitRefused: (report) => reports.push(report),
       });
       expect(result.errorCode).toBe("precondition-failed");
       expect(reports.map((report) => report.cause)).toEqual(["sequencer-unreadable"]);
       expect(reports[0]?.error).toBeInstanceOf(Error);
+    });
+
+    it("does not read an unreadable MERGE_HEAD as no merge in progress", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      writeFileSync(join(repo, ".git", "MERGE_HEAD"), "x\n", "utf8");
+      const before = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+      const { result, causes } = await refused(repo, "m", true, {
+        metadataFs: statFaultOn("MERGE_HEAD", "EIO"),
+      });
+      expect(result.outcome).toBe("failed");
+      expect(causes).toEqual(["sequencer-unreadable"]);
+      expect(gitIn(repo, ["rev-parse", "HEAD"]).trim()).toBe(before);
+    });
+
+    it("keeps a git failure that is not a moved branch out of `conflict`", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const before = gitIn(repo, ["rev-parse", "HEAD"]).trim();
+      let authorizations = 0;
+      const { result, causes } = await refused(repo, "mine", true, {
+        // A held ref lock makes `update-ref` fail while the branch itself did not move.
+        beforeCommitRefUpdate: (): boolean => {
+          authorizations += 1;
+          if (authorizations === 2)
+            writeFileSync(join(repo, ".git", "refs", "heads", "main.lock"), "");
+          return true;
+        },
+      });
+      rmSync(join(repo, ".git", "refs", "heads", "main.lock"), { force: true });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["git-command-failed"]);
+      expect(gitIn(repo, ["rev-parse", "HEAD"]).trim()).toBe(before);
+    });
+
+    it("refuses the same oversized message on the plain lane", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const causes: string[] = [];
+      const ad = adapterFor(repo, false, {
+        onCommitRefused: (report) => causes.push(report.cause),
+      });
+      const result = await ad.commit({ message: "x".repeat(70_000), allowEmpty: true });
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["message-too-large"]);
+      expect(gitIn(repo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    });
+
+    it("never lets a throwing log port replace the refusal", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      const { result } = await refused(repo, " \n", true, {
+        onCommitRefused: () => {
+          throw new Error("port failed");
+        },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
     });
 
     it("names an empty message", async () => {

@@ -56,7 +56,15 @@ export type GitCommitMessageViolationCode =
   | "disallowed-type"
   | "subject-too-long"
   | "missing-issue-key"
-  | "missing-signoff";
+  | "missing-signoff"
+  | "message-too-large";
+
+/**
+ * The most bytes of message text a governed commit accepts (UTF-8). The commit object is written
+ * from a bounded standard input of 64 KiB that also carries the closing line break, so a message
+ * above this is refused up front, by every commit lane, instead of failing inside Git.
+ */
+export const GIT_COMMIT_MESSAGE_MAX_BYTES = 65_535;
 
 export const GIT_COMMIT_MESSAGE_VIOLATION_CODES: readonly GitCommitMessageViolationCode[] =
   Object.freeze([
@@ -66,6 +74,7 @@ export const GIT_COMMIT_MESSAGE_VIOLATION_CODES: readonly GitCommitMessageViolat
     "subject-too-long",
     "missing-issue-key",
     "missing-signoff",
+    "message-too-large",
   ] as const);
 
 // ─── Validation result (content-free: codes only, never message text) ────────────────────────────
@@ -239,6 +248,19 @@ function checkSignoff(
   return hasSignoff ? undefined : "missing-signoff";
 }
 
+function utf8Length(text: string): number {
+  let bytes = 0;
+  for (const char of text) {
+    const point = char.codePointAt(0) ?? 0;
+    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+function checkMessageSize(message: string): GitCommitMessageViolationCode | undefined {
+  return utf8Length(message) > GIT_COMMIT_MESSAGE_MAX_BYTES ? "message-too-large" : undefined;
+}
+
 // ─── Validator (PURE; content in, codes out) ──────────────────────────────────────────────────────
 
 export function validateGitCommitMessage(
@@ -254,6 +276,7 @@ export function validateGitCommitMessage(
     checkSubjectLength(subject, policy.subjectMaxLength),
     checkIssueKey(message, policy.requireIssueKey),
     checkSignoff(hasSignoff, policy.requireSignoff),
+    checkMessageSize(message),
   ];
   const violations = candidates.filter(
     (code): code is GitCommitMessageViolationCode => code !== undefined,

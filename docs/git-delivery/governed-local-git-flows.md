@@ -32,7 +32,7 @@ both content-free, neither a Model Gateway call.
 - **keiko-contracts** (strict leaf, pure, content-free):
   - `git-commit-policy.ts` — `validateGitCommitMessage(message, policy)` returns a closed
     `GitCommitMessageViolationCode` union (`empty-subject`, `missing-conventional-prefix`,
-    `disallowed-type`, `subject-too-long`, `missing-issue-key`, `missing-signoff`). Content in, codes
+    `disallowed-type`, `subject-too-long`, `missing-issue-key`, `missing-signoff`, `message-too-large`). Content in, codes
     out; the message is never retained. `KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY` encodes this repository's
     own Conventional Commit style; the server applies it to another repository only when that
     repository declares commitlint or a person selects it (ADR-0084 amendment, G-4).

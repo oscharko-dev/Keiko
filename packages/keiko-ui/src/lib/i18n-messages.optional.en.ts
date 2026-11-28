@@ -3409,6 +3409,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.violation.subject-too-long": "The subject line is too long",
   "commitComposer.violation.missing-issue-key": "Missing the required issue key",
   "commitComposer.violation.missing-signoff": "Missing the Signed-off-by trailer",
+  "commitComposer.violation.message-too-large":
+    "The commit message is too large (more than 64 KiB)",
   "gitClientWindow.error.noRepository": "Select a repository first.",
   "promptEnhancer.error.cancelled": "Request cancelled.",
   "promptEnhancer.error.failed": "Prompt enhancement failed. Please try again.",

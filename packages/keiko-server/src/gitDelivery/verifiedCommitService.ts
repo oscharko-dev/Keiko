@@ -194,7 +194,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 6,
+      maxItems: 7,
       values: [
         "empty-subject",
         "missing-conventional-prefix",
@@ -202,6 +202,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
         "subject-too-long",
         "missing-issue-key",
         "missing-signoff",
+        "message-too-large",
       ],
     },
     violationCount: { type: "integer", dataClass: "count", required: false },

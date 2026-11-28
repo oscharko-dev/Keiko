@@ -64,6 +64,7 @@ import {
   readGitTreeDigest,
   readGitHeadState,
   readGitCheckoutBranch,
+  readGitLocalBranchTip,
   readGitBaseState,
   readGitWorktreeSnapshot,
   createGitReadSession,
@@ -99,6 +100,7 @@ import type {
   GitRefLockCleanupReport,
   RemovePath,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import { GIT_COMMIT_MESSAGE_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
   GIT_REF_LOCK_HELD,
@@ -133,6 +135,8 @@ export interface GitCleanupIncompleteReport {
   readonly directories: number;
   /** Merge or squash state files a successful commit could not remove. */
   readonly stateFiles: number;
+  /** The error that ended the cleanup, when one did (never a statement about its text). */
+  readonly error?: unknown;
 }
 
 /**
@@ -655,6 +659,7 @@ async function execInteractiveCommit(
 ): Promise<GitDeliveryExecutionResult> {
   const branch = ctx.preparedCheckout?.branchName;
   if (branch !== undefined) return execBoundCommit(ctx, request, sign, branch);
+  if (!commitMessageFits(request.message)) return reportCommitRefusal(ctx, "message-too-large");
   const prepared = await checkoutStillPrepared(ctx).catch((error: unknown) => error);
   if (prepared === false) return reportCommitRefusal(ctx, "not-on-prepared-branch");
   if (prepared !== true) {
@@ -678,8 +683,20 @@ function reportCommitRefusal(
   error?: unknown,
   errorCode: GitDeliveryExecutionErrorCode = "precondition-failed",
 ): GitDeliveryExecutionResult {
-  ctx.onCommitRefused?.(error === undefined ? { cause } : { cause, error });
+  deliverCommitRefusal(ctx, error === undefined ? { cause } : { cause, error });
   return failureFromExit(0, 0, errorCode);
+}
+
+// A log port that throws can never replace the real failure it was told about; the lost line
+// surfaces as a closed Node process warning instead.
+function deliverCommitRefusal(ctx: RunContext, report: GitCommitRefusedReport): void {
+  try {
+    ctx.onCommitRefused?.(report);
+  } catch {
+    process.emitWarning("Git commit refusal was not recorded", {
+      code: "KEIKO_GIT_COMMIT_REFUSAL_UNREPORTED",
+    });
+  }
 }
 
 // The interactive commit on a prepared branch, written with Git's own plumbing: the staged tree, one
@@ -727,8 +744,11 @@ function boundFailureCause(error: unknown): GitCommitRefusalCause {
   return error instanceof GitObjectCommandFailure ? "git-command-failed" : "unexpected-error";
 }
 
-// The input of the bound commit's own object write is bounded by the spawn boundary.
-const BOUND_COMMIT_MESSAGE_MAX_BYTES = 65_535;
+// Both interactive lanes refuse the same input: the cleaned message must fit the bounded input the
+// bound lane writes its commit object from (the plain lane's argument would not be safe either).
+function commitMessageFits(message: string): boolean {
+  return Buffer.byteLength(cleanedCommitMessage(message), "utf8") <= GIT_COMMIT_MESSAGE_MAX_BYTES;
+}
 
 interface PreparedBoundCommit {
   readonly head: GitHeadState;
@@ -748,8 +768,7 @@ async function prepareBoundCommit(
   const message = cleanedCommitMessage(request.message);
   if (message === "") return reportCommitRefusal(ctx, "empty-message");
   if (message.includes("\0")) return reportCommitRefusal(ctx, "message-invalid");
-  if (Buffer.byteLength(message, "utf8") > BOUND_COMMIT_MESSAGE_MAX_BYTES)
-    return reportCommitRefusal(ctx, "message-too-large");
+  if (!commitMessageFits(message)) return reportCommitRefusal(ctx, "message-too-large");
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
   if (!request.allowEmpty && (await commitsNothing(ctx, bound.head, tree)))
     return reportCommitRefusal(ctx, "nothing-to-commit");
@@ -821,10 +840,12 @@ async function commitsNothing(ctx: RunContext, head: GitHeadState, tree: string)
 // The reflog entry `git commit` writes: its subject is the first line of the cleaned message, and
 // the root commit of an unborn branch says so. Capped so the argument stays far below the
 // command-line limit of the smallest platform; a first line that long is not a subject.
-const REFLOG_SUBJECT_MAX_CHARS = 1_024;
+const REFLOG_SUBJECT_MAX_CODE_POINTS = 1_024;
 
 function commitReflogMessage(head: GitHeadState, message: string): string {
-  const subject = (message.split("\n")[0] ?? "").slice(0, REFLOG_SUBJECT_MAX_CHARS);
+  const subject = Array.from(message.split("\n")[0] ?? "")
+    .slice(0, REFLOG_SUBJECT_MAX_CODE_POINTS)
+    .join("");
   return `commit${head.kind === "born" ? "" : " (initial)"}: ${subject}`;
 }
 
@@ -841,10 +862,23 @@ async function updateBoundCommitRef(
     ["update-ref", "-m", commitReflogMessage(head, message), "--stdin"],
     `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
   );
-  // The compare-and-swap on the HEAD this commit was built on failed: the branch moved meanwhile.
-  if (result.exitCode !== 0) return reportCommitRefusal(ctx, "ref-moved", undefined, "conflict");
+  if (result.exitCode !== 0) return classifyRefUpdateFailure(ctx, branch, head);
   await removeCommitState(ctx);
   return executionResult("succeeded", result.durationMs, { externalId: commit });
+}
+
+// A non-zero `update-ref` is a conflict only when the branch really is not at the value the commit
+// was built on; a held ref lock or any other Git failure leaves it there and is a plain failure of
+// the command (its exit class only, never its text), as the plain lane reports it.
+async function classifyRefUpdateFailure(
+  ctx: RunContext,
+  branch: string,
+  head: GitHeadState,
+): Promise<GitDeliveryExecutionResult> {
+  const tip = await readGitLocalBranchTip(commitReadDeps(ctx), branch);
+  const expected = head.kind === "born" ? head.sha : undefined;
+  if (tip !== expected) return reportCommitRefusal(ctx, "ref-moved", undefined, "conflict");
+  return reportCommitRefusal(ctx, "git-command-failed");
 }
 
 // A successful `git commit` removes the merge and squash message state it consumed. A failure to
@@ -857,14 +891,16 @@ async function removeCommitState(ctx: RunContext): Promise<void> {
       ctx.removePath,
     );
     if (stayed > 0) reportCommitStateLeft(ctx, stayed);
-  } catch {
-    // The state of the repository could not even be examined: one unit stayed unproven.
-    reportCommitStateLeft(ctx, 1);
+  } catch (error) {
+    // The state of the repository could not even be examined: one unit stayed unproven, and the
+    // report carries the error for the log port's structured failure fields.
+    reportCommitStateLeft(ctx, 1, error);
   }
 }
 
-function reportCommitStateLeft(ctx: RunContext, stateFiles: number): void {
+function reportCommitStateLeft(ctx: RunContext, stateFiles: number, error?: unknown): void {
   ctx.onCleanupIncomplete?.({
+    ...(error === undefined ? {} : { error }),
     caller: "commit-state",
     quarantines: 0,
     temporaryIndex: false,

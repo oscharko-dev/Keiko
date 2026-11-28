@@ -1162,6 +1162,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The message is missing a required issue key",
   "codingWorkbench.commitResult.messageViolation.missing-signoff":
     "The message is missing a required Signed-off-by trailer",
+  "codingWorkbench.commitResult.messageViolation.message-too-large":
+    "The commit message is too large (more than 64 KiB)",
   "codingWorkbench.approval.commit.message": "Reviewed commit message",
   "codingWorkbench.approval.commit.binding": "Exact commit binding",
   "codingWorkbench.approval.commit.proposal": "Proposal",

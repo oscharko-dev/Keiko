@@ -1,6 +1,7 @@
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "./coding-workbench-runtime-approval-review.js";
 import { describe, expect, it } from "vitest";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import { GIT_COMMIT_MESSAGE_VIOLATION_CODES } from "./git-commit-policy.js";
 import {
   GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
   GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
@@ -95,7 +96,12 @@ describe("message-policy violation codes on a blocked receipt (#3390)", () => {
   });
   it.each([
     { violations: [] }, // never zero: even "empty-subject" alone short-circuits to one code
-    { violations: Array.from({ length: 7 }, () => "missing-conventional-prefix") }, // exceeds the closed vocabulary size (6)
+    {
+      violations: Array.from(
+        { length: GIT_COMMIT_MESSAGE_VIOLATION_CODES.length + 1 },
+        () => "missing-conventional-prefix",
+      ),
+    }, // exceeds the closed vocabulary size, whatever it is
     { violations: ["not-a-real-code"] },
     { violations: ["empty-subject", "not-a-real-code"] },
   ])("rejects a malformed violation list $violations", ({ violations }) => {

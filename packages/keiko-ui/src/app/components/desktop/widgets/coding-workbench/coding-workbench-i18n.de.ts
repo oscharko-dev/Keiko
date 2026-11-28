@@ -1202,6 +1202,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Nachricht fehlt ein erforderlicher Issue-Schlüssel",
   "codingWorkbench.commitResult.messageViolation.missing-signoff":
     "Der Nachricht fehlt ein erforderlicher Signed-off-by-Trailer",
+  "codingWorkbench.commitResult.messageViolation.message-too-large":
+    "Die Commit-Nachricht ist zu groß (mehr als 64 KiB)",
   "codingWorkbench.approval.commit.message": "Geprüfte Commit-Nachricht",
   "codingWorkbench.approval.commit.binding": "Exakte Commit-Bindung",
   "codingWorkbench.approval.commit.proposal": "Vorschlag",

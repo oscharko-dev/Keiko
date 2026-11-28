@@ -29,6 +29,7 @@ import {
   observeGitIndexTransactions,
   isGitStageLargeFile,
   readGitStageFile,
+  removeGitCommitState,
   repointSymbolicHead,
   streamGitStageFile,
   withGitBranchRefLocks,
@@ -870,16 +871,35 @@ describe("cleanup ownership and distinct facts", () => {
 
 describe("gitSequencerOperationInProgress", () => {
   it("reads the sequencer files through the injected port and fails closed when it throws", async () => {
-    const existsFails = {
+    // The Node port's `exists` reads every lstat error as "absent"; the probe must not.
+    writeFileSync(join(root, ".git", "MERGE_HEAD"), "x\n");
+    const statFails = {
       ...nodeWorkspaceFs,
-      exists: (path: string): boolean => {
-        if (path.endsWith("MERGE_HEAD")) throw new Error("EIO");
-        return nodeWorkspaceFs.exists(path);
+      stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
+        if (path.endsWith("MERGE_HEAD"))
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        return nodeWorkspaceFs.stat(path);
       },
     };
-    await expect(gitSequencerOperationInProgress(root, existsFails)).rejects.toThrow(
+    await expect(gitSequencerOperationInProgress(root, statFails)).rejects.toThrow(
       GIT_SEQUENCER_STATE_UNAVAILABLE,
     );
+    await expect(gitSequencerOperationInProgress(root)).resolves.toBe(true);
+  });
+
+  it("counts a merge state file it cannot examine and removes the others", async () => {
+    writeFileSync(join(root, ".git", "MERGE_MSG"), "m\n");
+    writeFileSync(join(root, ".git", "SQUASH_MSG"), "s\n");
+    const statFails = {
+      ...nodeWorkspaceFs,
+      stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
+        if (path.endsWith("MERGE_MSG")) throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+        return nodeWorkspaceFs.stat(path);
+      },
+    };
+    await expect(removeGitCommitState(root, statFails)).resolves.toBe(1);
+    expect(existsSync(join(root, ".git", "MERGE_MSG"))).toBe(true);
+    expect(existsSync(join(root, ".git", "SQUASH_MSG"))).toBe(false);
   });
 
   it.each(["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])(

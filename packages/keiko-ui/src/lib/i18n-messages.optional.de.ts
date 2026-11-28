@@ -3594,6 +3594,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.violation.subject-too-long": "Die Betreffzeile ist zu lang",
   "commitComposer.violation.missing-issue-key": "Der erforderliche Issue-Schlüssel fehlt",
   "commitComposer.violation.missing-signoff": "Der Signed-off-by-Trailer fehlt",
+  "commitComposer.violation.message-too-large":
+    "Die Commit-Nachricht ist zu groß (mehr als 64 KiB)",
   "gitClientWindow.error.noRepository": "Wählen Sie zuerst ein Repository aus.",
   "promptEnhancer.error.cancelled": "Anfrage abgebrochen.",
   "promptEnhancer.error.failed":

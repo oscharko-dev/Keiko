@@ -32091,6 +32091,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
     },
     causal: "correlation",
     lifecycle: "failure",
@@ -34061,7 +34081,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string-array",
         dataClass: "closed-enum",
         required: false,
-        maxItems: 6,
+        maxItems: 7,
         values: [
           "empty-subject",
           "missing-conventional-prefix",
@@ -34069,6 +34089,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "subject-too-long",
           "missing-issue-key",
           "missing-signoff",
+          "message-too-large",
         ],
       },
       violationCount: {
