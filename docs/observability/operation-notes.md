@@ -952,6 +952,11 @@ again before anything is written; a task branch asks Git for `refs/heads/<name>`
 (the adapter binds the commit to the verified head and branch, so no other branch can receive it) and
 one fresh `git remote`. The session ends with the call, so a promisor verdict never authorizes a later one.
 
+A stage refused as `unsupported-transformation` carries `stageCause` on its `git.runtime-action`
+line: one closed word (`config-unsupported`, `filter-driver`, `attribute-filter`,
+`attribute-encoding`, `attribute-ident`, `attribute-line-ending`, `attribute-unreadable` or
+`content-conversion`) that names which check refused, never a path, an attribute value or a setting.
+
 ## Coding Workbench request deadlines, Editor and window binding
 
 `client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
