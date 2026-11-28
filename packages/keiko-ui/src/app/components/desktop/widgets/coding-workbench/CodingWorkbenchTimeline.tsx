@@ -740,9 +740,9 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
   return marked;
 }
 
-// A Git step an execute may still redeem, by the same predicate family as
-// markSupersededGitProposals: any non-execute call answered as waiting for approval or prepared,
-// and a stage-class proposal answered ready, which carries no outcome (Full access).
+// A Git step an execute may still redeem, shared by markSupersededGitProposals and
+// markRedeemedGitProposals: any non-execute call that succeeded as waiting for approval or
+// prepared, and a stage-class proposal answered ready, which carries no outcome (Full access).
 function isOpenGitProposal(tool: CodingSafeActivityTool): boolean {
   if (tool.tool === "keiko_git_execute" || tool.state !== "succeeded") return false;
   const outcome = tool.presentation?.gitOutcome;

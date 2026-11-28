@@ -882,6 +882,49 @@ describe("CodingWorkbenchTimeline", () => {
     expect(bothRedeemed.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
   });
 
+  // Audit of the U-40/U-49 merge: a ready stage proposal (Full access, no outcome) is still open,
+  // so one completed execute redeems one of two open proposals and the commit stays waiting.
+  it("counts a ready stage proposal as open, so one execute leaves a later commit waiting", () => {
+    const tools: CodingSafeActivityTool[] = [
+      {
+        callId: "stage-ready",
+        tool: "keiko_git_stage",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { bridgeDurationMs: 9 },
+      },
+      {
+        callId: "commit-proposal",
+        tool: "keiko_git_commit",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+      },
+      {
+        callId: "exec-1",
+        tool: "keiko_git_execute",
+        state: "succeeded",
+        occurredAt: AT,
+        presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+      },
+    ];
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike({
+          ...feedWithRepeatedTools(),
+          turns: [{ turnId: "turn-ready", messages: [], tools, truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelectorAll('[data-tool-state="waiting-for-approval"]')).toHaveLength(1);
+    expect(container.querySelector('[data-tool-state="committed"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+  });
+
   // U-49 (real macOS Full-access run, 2026-11-28): an unstage proposal read "Git stage" and every
   // execute read "Git operation", so the run's Git rows could not be told apart.
   describe("names the Git action a row stands for (U-49)", () => {
