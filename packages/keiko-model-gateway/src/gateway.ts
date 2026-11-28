@@ -1463,15 +1463,20 @@ async function* withoutReasoningChunks(
   }
 }
 
-// The first chunk of a stream that carries an answer: empty deltas are skipped, each one awaited
-// before the next is pulled.
+// The first chunk of a stream that carries an answer, or undefined when the stream ends without
+// one. Empty deltas are skipped in constant memory. The view has no `return`, so leaving the loop
+// does not close the generator the caller goes on to read.
 async function firstNonEmptyStreamChunk(
   iterator: AsyncGenerator<GatewayStreamChunk>,
-): Promise<IteratorResult<GatewayStreamChunk>> {
-  const next = await iterator.next();
-  return !next.done && next.value.type === "delta" && next.value.token.length === 0
-    ? firstNonEmptyStreamChunk(iterator)
-    : next;
+): Promise<GatewayStreamChunk | undefined> {
+  const view: AsyncIterable<GatewayStreamChunk> = {
+    [Symbol.asyncIterator]: () => ({ next: () => iterator.next() }),
+  };
+  for await (const chunk of view) {
+    if (chunk.type === "delta" && chunk.token.length === 0) continue;
+    return chunk;
+  }
+  return undefined;
 }
 
 export class Gateway {
@@ -2483,8 +2488,8 @@ export class Gateway {
     );
     try {
       const first = await firstNonEmptyStreamChunk(iterator);
-      if (first.done) throw new TransportError("provider stream ended without an answer");
-      return { first: first.value, iterator };
+      if (first === undefined) throw new TransportError("provider stream ended without an answer");
+      return { first, iterator };
     } catch (error) {
       await iterator.return(undefined);
       throw error;
