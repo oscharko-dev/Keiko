@@ -25,6 +25,7 @@ import {
   isEditorVerificationEvent,
   isEditorVerificationRun,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
   fetchVerificationCatalog,
@@ -428,12 +429,16 @@ function scheduleSharedSourceReconnect(): void {
   }, delay);
 }
 
+// Releases the connection the shared verification stream holds outside the shared stream pool.
+let releaseSharedSourceBudget = (): void => undefined;
+
 function handleSharedSourceLoss(source: EventSource): void {
   if (sharedSource !== source) return;
   if (sharedSourceOpen) rememberUncertainRoots();
   sharedSource = null;
   sharedSourceOpen = false;
   source.close();
+  releaseSharedSourceBudget();
   setDependentSourceHealth("reconnecting");
   scheduleSharedSourceReconnect();
 }
@@ -453,6 +458,7 @@ function createSharedSource(): void {
   }
   sharedSource = source;
   sharedSourceOpen = false;
+  releaseSharedSourceBudget = holdUnbudgetedBrowserStream();
   source.addEventListener("open", () => {
     if (sharedSource !== source) return;
     sharedSourceOpen = true;
@@ -481,6 +487,7 @@ function closeSharedSource(): void {
   clearSharedSourceReconnectTimer();
   sharedSourceReconnectAttempts = 0;
   source?.close();
+  releaseSharedSourceBudget();
   settleSharedSourceReady(false);
 }
 

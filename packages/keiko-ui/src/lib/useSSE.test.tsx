@@ -5,6 +5,11 @@ import {
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "./client-diagnostics";
+import {
+  holdUnbudgetedBrowserStream,
+  resetBrowserStreamCapacityForTests,
+  sharedStreamConnectionBudget,
+} from "./browser-stream-capacity";
 import { useSSE } from "./useSSE";
 
 interface StreamRepair {
@@ -183,6 +188,20 @@ describe("useSSE", () => {
     expect(source?.close).not.toHaveBeenCalled();
     second.unmount();
     expect(source?.close).toHaveBeenCalled();
+  });
+
+  // Review #4573 finding 11: the run stream is a long-lived connection outside the shared pool.
+  it("counts its open run stream against the persistent connection budget until it closes", () => {
+    resetBrowserStreamCapacityForTests();
+    holdUnbudgetedBrowserStream();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const before = sharedStreamConnectionBudget();
+    const view = renderHook(() => useSSE("run 1"));
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(sharedStreamConnectionBudget()).toBe(before - 1);
+    view.unmount();
+    expect(sharedStreamConnectionBudget()).toBe(before);
+    resetBrowserStreamCapacityForTests();
   });
 
   it("does not open an EventSource when no run id is selected", () => {

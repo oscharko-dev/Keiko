@@ -15,6 +15,11 @@ import {
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
+import {
+  holdUnbudgetedBrowserStream,
+  resetBrowserStreamCapacityForTests,
+  sharedStreamConnectionBudget,
+} from "../../../../../lib/browser-stream-capacity";
 import { BrowserWidget } from "./BrowserWidget";
 
 vi.mock("../../../../../lib/browser-api", () => ({
@@ -117,6 +122,21 @@ describe("BrowserWidget", () => {
       "aria-disabled",
       "false",
     );
+  });
+
+  // Review #4573 finding 11: the session's event stream is a long-lived direct connection.
+  it("counts its event stream against the persistent connection budget until it unmounts", async () => {
+    resetBrowserStreamCapacityForTests();
+    holdUnbudgetedBrowserStream();
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    const before = sharedStreamConnectionBudget();
+    const view = render(<BrowserWidget />);
+    await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(sharedStreamConnectionBudget()).toBe(before - 1);
+    view.unmount();
+    expect(sharedStreamConnectionBudget()).toBe(before);
+    resetBrowserStreamCapacityForTests();
   });
 
   it("POSTs navigate and reflects the SSE navigated event", async () => {

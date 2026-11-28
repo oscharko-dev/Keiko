@@ -12,6 +12,7 @@ import {
   repairLocalCodingAppSessionForStream,
   reportStreamSessionRecovered,
 } from "./coding-app-session-client";
+import { holdUnbudgetedBrowserStream } from "./browser-stream-capacity";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -56,6 +57,8 @@ const lastSeqBySubscriber = new Map<RunEventSubscriber, number>();
 let everObservedEvent = false;
 let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
+// Releases the connection this document's run-event stream holds outside the shared stream pool.
+let releaseSharedEventSourceBudget: (() => void) | null = null;
 let reconnectTimer: number | undefined;
 let reconnectAttempts = 0;
 // Set once an `onerror` in the current failure streak has a session repair in flight OR
@@ -117,6 +120,8 @@ function closeSharedEventSource(): void {
   sharedEventSource?.close();
   sharedEventSource = null;
   sharedEventSourceLive = false;
+  releaseSharedEventSourceBudget?.();
+  releaseSharedEventSourceBudget = null;
 }
 
 function reconnectDelay(): number {
@@ -251,6 +256,7 @@ function openSharedEventSource(): void {
   closeSharedEventSource();
   sharedEventSource = createSameOriginApiEventSource(runEventsUrl());
   if (sharedEventSource === null) return;
+  releaseSharedEventSourceBudget = holdUnbudgetedBrowserStream();
 
   sharedEventSource.onopen = () => {
     endFailureStreak();

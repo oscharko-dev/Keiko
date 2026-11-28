@@ -22,6 +22,7 @@ import {
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
+import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   BrowserEventEnvelope,
@@ -230,11 +231,14 @@ function useBrowserEventStream(
     }
     const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
     if (source === null) return;
+    // A direct stream outside the shared pool: counted so finite requests keep a connection.
+    const releaseStream = holdUnbudgetedBrowserStream();
     attachBrowserEventListeners(source, pushEvent);
     attachBrowserStreamErrorHandler(source, setError, t);
     eventSourceRef.current = source;
     return (): void => {
       source.close();
+      releaseStream();
       eventSourceRef.current = null;
     };
   }, [session, pushEvent, setError, eventSourceRef, t]);

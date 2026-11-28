@@ -32,6 +32,7 @@ import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
+import { holdUnbudgetedBrowserStream } from "../../../../../lib/browser-stream-capacity";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import { secureRandomInt } from "../../../../../lib/secure-random";
 
@@ -465,6 +466,7 @@ export function useRelationshipActivityStream(
 
     let closed = false;
     let es: EventSource | null = null;
+    let releaseStreamBudget: (() => void) | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectAttempts = 0;
 
@@ -490,6 +492,8 @@ export function useRelationshipActivityStream(
     function closeStream(): void {
       es?.close();
       es = null;
+      releaseStreamBudget?.();
+      releaseStreamBudget = null;
     }
 
     function scheduleReconnect(): void {
@@ -521,6 +525,7 @@ export function useRelationshipActivityStream(
         scheduleReconnect();
         return;
       }
+      releaseStreamBudget = holdUnbudgetedBrowserStream();
 
       es.onopen = (): void => {
         reconnectAttempts = 0;
