@@ -1371,9 +1371,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.native-subagents-changed": "Subagent activity updated",
   "codingWorkbench.event.native-agent-models-refused": "Agent model settings not used",
   "codingWorkbench.event.agentModelsRefused":
-    "{count} agent model settings in the configuration were not used: they name a model Keiko's gateway does not serve. Those agents keep the model another setting or the run gives them.",
+    "{count} agent model settings in the configuration were not used: the agent name is not a valid one, or the setting names a model Keiko's gateway does not serve. Those agents keep the model another setting or the run gives them.",
   "codingWorkbench.event.agentModelsRefused.one":
-    "1 agent model setting in the configuration was not used: it names a model Keiko's gateway does not serve. That agent keeps the model another setting or the run gives it.",
+    "1 agent model setting in the configuration was not used: the agent name is not a valid one, or the setting names a model Keiko's gateway does not serve. That agent keeps the model another setting or the run gives it.",
   "codingWorkbench.event.model-gateway-retrying": "Model gateway unavailable, retrying",
   "codingWorkbench.event.model-gateway-recovered": "Model gateway answered again",
   "codingWorkbench.event.model-gateway-retry-stopped": "Model gateway retry stopped",

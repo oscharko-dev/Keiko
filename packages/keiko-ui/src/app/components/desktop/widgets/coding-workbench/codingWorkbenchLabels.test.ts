@@ -1549,4 +1549,19 @@ describe("a refused repository agent model fact (U-53)", () => {
     expect(detail).not.toMatch(/run's model|Modell des Laufs/u);
     expect(eventTitle(fact(count), translate)).not.toContain("codingWorkbench.");
   });
+
+  // The event carries only a count: an agent name that fails the name check is refused before its
+  // model is looked up, so the notice must not claim the model is the cause (#4573 thread).
+  it.each([
+    ["en", "the agent name is not a valid one, or the setting names a model"],
+    ["de", "Der Agentenname ist nicht gültig, oder die Einstellung nennt ein Modell"],
+  ] as const)(
+    "names the invalid agent name as a cause in %s, not only the model",
+    (language, cause) => {
+      const translate: CodingWorkbenchTranslate = (key, values) =>
+        translateCodingWorkbench(language, key, values);
+      expect(eventDetail(fact(1), translate)).toContain(cause);
+      expect(eventDetail(fact(3), translate)).toContain(cause);
+    },
+  );
 });
