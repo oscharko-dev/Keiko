@@ -38945,6 +38945,12 @@
               "required": false
             },
             {
+              "name": "requestedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",

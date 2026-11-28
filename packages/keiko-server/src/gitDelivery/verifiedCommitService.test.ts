@@ -1946,10 +1946,17 @@ describe("productive runtime status/diff/stage lane", () => {
           phase: "stage-propose",
           state: "blocked",
           reason: "selection-unreviewed",
-          pathCount: 2,
+          // Strengthened (U-28): the line names the entries requested; no expanded set formed, so it
+          // carries no pathCount (the model-facing result above keeps the request's length).
+          requestedCount: 2,
         }) as unknown,
       }),
     );
+    const refusal = events.find(
+      (event) =>
+        event.op === "git.runtime-action" && event.extra?.reason === "selection-unreviewed",
+    );
+    expect(refusal?.extra).not.toHaveProperty("pathCount");
   });
 
   // Relocated pin (was "does not admit an already-staged path through a truncated mixed-stage
@@ -2332,6 +2339,48 @@ describe("productive runtime status/diff/stage lane", () => {
           pathCount: paths.length,
         });
       expect(git(["ls-files", "src"])).toBe("");
+    });
+
+    // U-28 audit: pathCount is the expanded count wherever an expansion happened; requestedCount is
+    // what the request named. A refusal before any expansion carries only the latter.
+    it(
+      "logs the requested entries beside the expanded file count",
+      { timeout: 90_000 },
+      async () => {
+        writeRename();
+        const gitService = indexService();
+        const proposed = await index(gitService, "stage", ["src", "test"]);
+        if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+        await execute(gitService, "stage", proposed.proposalId);
+        const line = (phase: string): Record<string, unknown> | undefined =>
+          events.find((event) => event.op === "git.runtime-action" && event.extra?.phase === phase)
+            ?.extra;
+        expect(line("stage-propose")).toMatchObject({ requestedCount: 2, pathCount: 302 });
+        expect(line("stage-execute")).toMatchObject({ pathCount: 302 });
+        expect(line("stage-execute")).not.toHaveProperty("requestedCount");
+        const persisted = expectActivityLogProof(
+          "git.runtime-action.emitted-line",
+          formatActivityLogProofLine(
+            events.find((event) => event.extra?.phase === "stage-propose") ?? {},
+          ),
+        );
+        expect(persisted).toMatchObject({ requestedCount: 2, pathCount: 302 });
+      },
+    );
+
+    it("logs an unstage refusal before expansion with its requested count only", async () => {
+      const gitService = indexService();
+      expect(await index(gitService, "unstage", ["nowhere", "elsewhere"])).toMatchObject({
+        kind: "unstage",
+        status: "blocked",
+        reason: "selection-unreviewed",
+        pathCount: 2,
+      });
+      const line = events.find(
+        (event) => event.op === "git.runtime-action" && event.extra?.phase === "unstage-propose",
+      )?.extra;
+      expect(line).toMatchObject({ requestedCount: 2, reason: "selection-unreviewed" });
+      expect(line).not.toHaveProperty("pathCount");
     });
 
     it("answers a gitlink under a directory with a result the model can act on", async () => {

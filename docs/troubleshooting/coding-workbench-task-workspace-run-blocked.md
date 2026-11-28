@@ -929,7 +929,7 @@ otherwise keep working in the folder with edits, commands and verification.
 A run that has just passed verification asks to stage its changes and does not deliver. The activity
 log carries `op: "git.runtime-action"` with `phase: "stage-propose"` on the run's correlation id and
 one of three shapes: `state: "blocked"` with `reason: "selection-unreviewed"` (or `buffers-dirty`,
-`proposal-limit`) and the request's `pathCount`; `state: "refused"` with a `reason` naming the
+`proposal-limit`) and the request's `requestedCount` (a refusal before any expansion carries no `pathCount`); `state: "refused"` with a `reason` naming the
 condition (`guard-rejected`, `signal-aborted`, `run-not-live`, `mode-unavailable`,
 `proposal-unknown`); or `state: "failed"` at warn level with `errorKind: "internal"`, the thrown
 class and, when the helper threw a closed literal, its `code` (for example

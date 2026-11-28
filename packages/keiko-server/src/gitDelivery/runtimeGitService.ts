@@ -184,7 +184,10 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
     state: RUNTIME_GIT_STATE_FIELD,
     reason: RUNTIME_GIT_REASON_FIELD,
     proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // The files a stage or unstage proposal bound after directory pathspecs expanded; absent on a
+    // refusal that came before any expansion. `requestedCount` is the entries the request named.
     pathCount: { type: "integer", dataClass: "count", required: false },
+    requestedCount: { type: "integer", dataClass: "count", required: false },
     fileCount: { type: "integer", dataClass: "count", required: false },
     countsUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
     readFailure: {
@@ -262,6 +265,7 @@ interface RuntimeGitActivityFields {
     | "deadline-exceeded";
   readonly proposalId?: string;
   readonly pathCount?: number;
+  readonly requestedCount?: number;
   readonly fileCount?: number;
   readonly countsUnavailable?: boolean;
   readonly readFailure?: GitReadFailureReason;
@@ -472,17 +476,37 @@ function branchOutcome(result: CodingRuntimeGitBranch): RuntimeGitLogOutcome {
   return result.status === "blocked" ? "refused" : "failed";
 }
 
-function resultEvidence(result: RuntimeGitOutcome): RuntimeGitActivityFields {
+// Refusals that end a proposal before its directory pathspecs were expanded: the result still
+// carries the request's length (its contract needs a positive count), but no expanded set exists.
+const PRE_EXPANSION_REASONS: ReadonlySet<string> = new Set([
+  "proposal-limit",
+  "buffers-dirty",
+  "selection-unreviewed",
+]);
+
+function indexEvidence(
+  result: CodingRuntimeGitStage | CodingRuntimeGitUnstage,
+  request: RuntimeGitRequest,
+): RuntimeGitActivityFields {
+  const proposing = "phase" in request && request.phase === "propose" && "paths" in request;
+  const expanded = !(result.status === "blocked" && PRE_EXPANSION_REASONS.has(result.reason));
+  return {
+    state: result.status,
+    reason: result.reason,
+    proposalId: result.proposalId,
+    ...(expanded || !proposing ? { pathCount: result.pathCount } : {}),
+    ...(proposing ? { requestedCount: request.paths.length } : {}),
+  };
+}
+
+function resultEvidence(
+  result: RuntimeGitOutcome,
+  request: RuntimeGitRequest,
+): RuntimeGitActivityFields {
   if (result.kind === "refused") return { state: "refused", reason: result.reason };
   if (result.kind === "branch") return { state: result.status, reason: result.reason };
   if (result.kind === "fetch" || result.kind === "pull") return syncEvidence(result);
-  if (result.kind === "stage" || result.kind === "unstage")
-    return {
-      state: result.status,
-      reason: result.reason,
-      proposalId: result.proposalId,
-      pathCount: result.pathCount,
-    };
+  if (result.kind === "stage" || result.kind === "unstage") return indexEvidence(result, request);
   return result.kind === "status"
     ? { state: "completed", fileCount: result.changes.length, truncated: result.truncated }
     : { state: "completed", fileCount: result.diff.totalFiles, truncated: result.diff.truncated };
@@ -606,7 +630,7 @@ export class RuntimeGitService {
         const result = await this.dispatch(context, request, guard);
         if (result.kind !== "refused" && !isCodingRuntimeGitResult(result))
           throw new Error("git-runtime-result-invalid");
-        this.log(context, phase, resultEvidence(result), resultOutcome(result));
+        this.log(context, phase, resultEvidence(result, request), resultOutcome(result));
         if (context.stillAuthorized()) return result;
         this.log(
           context,
@@ -925,7 +949,11 @@ export class RuntimeGitService {
     );
     if (!(await readGitStageSupport(runtimeGitReadDeps(context, execution), paths, workspaceFs)))
       return this.result(proposal, "blocked", "unsupported-transformation");
-    this.proposals.set(proposalId, proposal);
+    return this.stored(proposal);
+  }
+  // The open proposal's answer: it waits for the operator under Ask for approval, else it is ready.
+  private stored(proposal: RuntimeGitProposal): IndexProposalResult {
+    this.proposals.set(proposal.proposalId, proposal);
     return this.options.mode() === "governed-assist"
       ? this.result(proposal, "approval-required", "approval-required")
       : this.result(proposal, "ready", "none");
@@ -989,12 +1017,7 @@ export class RuntimeGitService {
       this.now(),
       proposalId,
     );
-    this.proposals.set(proposalId, proposal);
-    const result =
-      this.options.mode() === "governed-assist"
-        ? this.result(proposal, "approval-required", "approval-required")
-        : this.result(proposal, "ready", "none");
-    return { ...result, kind: "unstage" };
+    return { ...this.stored(proposal), kind: "unstage" };
   }
   private async redeem(
     context: VerifiedCommitRunContext,

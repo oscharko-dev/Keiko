@@ -32983,6 +32983,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      requestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       fileCount: {
         type: "integer",
         dataClass: "count",
