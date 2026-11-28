@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { resolveWindowsSystemBinary, type SecurityLogSink } from "@oscharko-dev/keiko-security";
-import { emitCliWindowsSystemFailure } from "./security-log.js";
+import {
+  resolveWindowsSystemBinary,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
 
 /**
  * The state of Windows 11 Smart App Control, read when a portable start fails (#4569). Smart App
@@ -93,22 +96,23 @@ export function readSmartAppControlState(
 }
 
 /**
- * The state for a failed start's line. A refused system root or a missing reg.exe leaves its own
- * closed line on the portable failure surface and reads as `unknown`, so the failed start is still
- * reported with its own reason; any other error is not this contract's and propagates.
+ * The state for a failed start's line. A refused system root or a missing reg.exe reads as the
+ * closed `unknown` that `portable.launch.failed` records: the probe is a diagnostic, never the owner
+ * of the refusal, which keeps its single line where the system root is actually used (the shortcut,
+ * launcher and alert surfaces). Any other error is not this contract's and propagates.
  */
 export function probeSmartAppControlState(
   platform: NodeJS.Platform,
   env: EnvSource,
-  sink: SecurityLogSink | undefined,
   regQuery: RegQueryFn = defaultRegQuery,
   regExecutable: RegExecutableFn = trustedRegExecutable,
 ): SmartAppControlState {
   try {
     return readSmartAppControlState(platform, env, regQuery, regExecutable);
   } catch (error) {
-    if (!emitCliWindowsSystemFailure(error, sink, "portable-failure-alert")) throw error;
-    return "unknown";
+    if (error instanceof WindowsSystemDirectoryError) return "unknown";
+    if (error instanceof WindowsSystemBinaryMissingError) return "unknown";
+    throw error;
   }
 }
 

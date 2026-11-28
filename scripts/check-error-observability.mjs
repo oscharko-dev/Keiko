@@ -173,6 +173,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "The caught hook failure returns as its closed kind, which the process.exiting line records.",
     "packages/keiko-cli/src/gateway-service.ts:resolveRunHelper":
       "The caught resolution failure is carried unchanged in HelperResolution; runAction rethrows it inside its own catch, which persists the registered helper-unavailable failure line with the error's closed kind.",
+    "packages/keiko-cli/src/windows-smart-app-control.ts:probeSmartAppControlState":
+      "#4569: only the trusted resolver's own refused-system-root and missing-reg.exe errors become the closed unknown that portable.launch.failed records as smartAppControl; every other error propagates. The probe is a diagnostic read after a start already failed and never the owner of the refusal, which keeps its single line on the surface that uses the system root (pinned by the hostile shortcut host root test in portable.test.ts).",
     "packages/keiko-cli/src/node-support.ts:declaredNodeRange":
       "An absent, unreadable or invalid own manifest declares no Node.js range; the verdict becomes the closed unknown value that process.started records as nodeSupport. Start is never refused on it.",
     "packages/keiko-server/src/launch-directory.ts:systemName":

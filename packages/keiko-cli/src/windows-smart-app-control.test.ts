@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
-  type SecurityLogEvent,
-  type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import {
   probeSmartAppControlState,
@@ -133,39 +131,36 @@ describe("readSmartAppControlState", () => {
 describe("probeSmartAppControlState", () => {
   const env = { SystemRoot: String.raw`C:\Windows` };
 
-  function probeWith(error: Error): { state: string; logged: SecurityLogEvent[] } {
-    const logged: SecurityLogEvent[] = [];
-    const sink: SecurityLogSink = { write: (event): void => void logged.push(event) };
-    const state = probeSmartAppControlState(
+  function probeWith(error: Error): string {
+    return probeSmartAppControlState(
       "win32",
       env,
-      sink,
       () => regOutput("0x1"),
       () => {
         throw error;
       },
     );
-    return { state, logged };
   }
 
-  it("records a refused system root on the portable failure surface and reads unknown", () => {
-    const { state, logged } = probeWith(new WindowsSystemDirectoryError("refused"));
-    expect(state).toBe("unknown");
-    expect(logged.map((event) => [event.op, event.errorKind, event.extra?.surface])).toEqual([
-      [
-        "security.windows-portable-alert.system-root-refused",
-        "unsafe-target",
-        "portable-failure-alert",
-      ],
-    ]);
+  // The refusal keeps its single line on the surface that uses the system root (#4569 next to the
+  // hostile shortcut host root pin in portable.test.ts); the probe only reads as unknown.
+  it("reads a refused system root and a missing reg.exe as unknown", () => {
+    expect(probeWith(new WindowsSystemDirectoryError("refused"))).toBe("unknown");
+    expect(probeWith(new WindowsSystemBinaryMissingError())).toBe("unknown");
   });
 
-  it("records a missing reg.exe on the portable failure surface and reads unknown", () => {
-    const { state, logged } = probeWith(new WindowsSystemBinaryMissingError());
+  it("reads a hostile system root as unknown through the default trusted resolver", () => {
+    let calls = 0;
+    const state = probeSmartAppControlState(
+      "win32",
+      { SystemRoot: String.raw`\\attacker\share` },
+      () => {
+        calls += 1;
+        return regOutput("0x1");
+      },
+    );
     expect(state).toBe("unknown");
-    expect(logged.map((event) => [event.op, event.errorKind])).toEqual([
-      ["security.windows-portable-alert.system-binary-missing", "unavailable"],
-    ]);
+    expect(calls).toBe(0);
   });
 
   it("propagates an error that is not the resolver's own", () => {
@@ -173,17 +168,13 @@ describe("probeSmartAppControlState", () => {
     expect(() => probeWith(foreign)).toThrow(foreign);
   });
 
-  it("returns the read state and logs nothing when the read succeeds", () => {
-    const logged: SecurityLogEvent[] = [];
-    const sink: SecurityLogSink = { write: (event): void => void logged.push(event) };
+  it("returns the read state when the read succeeds", () => {
     const state = probeSmartAppControlState(
       "win32",
       env,
-      sink,
       () => regOutput("0x2"),
       () => String.raw`C:\Windows\System32\reg.exe`,
     );
     expect(state).toBe("evaluation");
-    expect(logged).toEqual([]);
   });
 });

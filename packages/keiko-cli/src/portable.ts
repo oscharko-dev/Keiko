@@ -464,7 +464,7 @@ async function upgradeManagedFromClickedPackage(
 }
 
 function emitUpgradeFailed(sink: SecurityLogSink | undefined, env: EnvSource): void {
-  const smartAppControl = probeSmartAppControlState(process.platform, env, sink);
+  const smartAppControl = probeSmartAppControlState(process.platform, env);
   emitPortableLaunchFailed(sink, "upgrade-failed", "not-requested", smartAppControl);
 }
 
@@ -893,11 +893,9 @@ function smartAppControlForFailure(
   env: EnvSource,
   io: CliIo,
   deps: PortableSetupDeps,
-  sink: SecurityLogSink | undefined,
 ): SmartAppControlState {
   const platform = (deps.platform ?? ((): NodeJS.Platform => process.platform))();
-  const state =
-    deps.smartAppControlStateFn?.(env) ?? probeSmartAppControlState(platform, env, sink);
+  const state = deps.smartAppControlStateFn?.(env) ?? probeSmartAppControlState(platform, env);
   if (state === "on") io.err(SMART_APP_CONTROL_BLOCK_MESSAGE);
   return state;
 }
@@ -918,7 +916,7 @@ function notifyPortableFailureIfNeeded(
     options.launchFailure?.reason ??
     (options.command === "setup" ? "setup-failed" : "launch-error");
   const note = leaveLaunchFailureNote(env, reason, io);
-  const smartAppControl = smartAppControlForFailure(env, io, deps, options.securityLogSink);
+  const smartAppControl = smartAppControlForFailure(env, io, deps);
   emitPortableLaunchFailed(options.securityLogSink, reason, note, smartAppControl);
   const notify =
     deps.notifyFailureFn ??
