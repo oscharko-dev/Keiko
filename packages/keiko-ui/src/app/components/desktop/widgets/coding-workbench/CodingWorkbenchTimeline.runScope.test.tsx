@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AvailableCodingSafeActivityFeed,
@@ -108,6 +109,12 @@ describe("model texts stay with their own run", () => {
     const text = container.textContent;
     expect(text).toContain("EARLIER excerpt");
     expect(text).not.toContain("Loading the rest");
+    // The earlier row says honestly that its text is cut; the current row, whole, does not.
+    const [earlierRow, currentRow] = Array.from(
+      container.querySelectorAll('[data-timeline-kind="message"]'),
+    );
+    expect(earlierRow?.textContent).toContain("Output truncated");
+    expect(currentRow?.textContent).not.toContain("Output truncated");
     expect(text.match(/CURRENT answer/gu)?.length).toBe(40);
   });
 
@@ -131,6 +138,7 @@ describe("model texts stay with their own run", () => {
     fireEvent(earlierDetails, new Event("toggle"));
     expect(readReasoning).not.toHaveBeenCalled();
     expect(earlierDetails.textContent).toContain("earlier thought");
+    expect(earlierDetails.textContent).toContain("Output truncated");
     expect(earlierDetails.textContent).not.toContain("CURRENT reasoning");
   });
 
@@ -155,5 +163,38 @@ describe("model texts stay with their own run", () => {
       "plan",
     ]);
     expect(rows[1]?.textContent).toContain("CURRENT head");
+  });
+
+  it("keys the plan row by its run, so another run's plan on the same message is a new row", () => {
+    const planOf = (): CodingSafeActivityPlan => ({
+      revision: 1,
+      anchorMessageId: "m-1",
+      updatedAt: "2026-07-19T12:05:01.000Z",
+      steps: [],
+      truncated: false,
+    });
+    const tree = (runId: string): ReactNode => (
+      <I18nProvider>
+        <Timeline
+          active={false}
+          events={[]}
+          activity={{
+            status: "ended",
+            errorCode: null,
+            retry: vi.fn(),
+            feed: feedOf(runId, [assistant("m-1", "2026-07-19T12:05:00.000Z", "head")], planOf()),
+          }}
+          questions={IDLE_QUESTIONS}
+        />
+      </I18nProvider>
+    );
+    const view = render(tree("run-2"));
+    const first = view.container.querySelector('[data-timeline-kind="plan"]');
+    view.rerender(tree("run-2"));
+    expect(view.container.querySelector('[data-timeline-kind="plan"]')).toBe(first);
+    view.rerender(tree("run-3"));
+    const other = view.container.querySelector('[data-timeline-kind="plan"]');
+    expect(other).not.toBeNull();
+    expect(other).not.toBe(first);
   });
 });

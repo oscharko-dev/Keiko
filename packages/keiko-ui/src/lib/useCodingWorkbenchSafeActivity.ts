@@ -121,7 +121,7 @@ export function useCodingWorkbenchSafeActivity(
     runStateRef.current = runState;
     setState((current) => stateForLifecycle(current, runState));
   }, [runState]);
-  useSettledActivityConfirmation({ runId, runState, state, retry });
+  useSettledActivityConfirmation({ runId, runState, state, setState });
   const earlierFeeds = useCodingWorkbenchEarlierRunFeeds({
     runId,
     runState,
@@ -380,14 +380,16 @@ function stateForLifecycle(
 }
 
 // A feed held from the live stream is only relabelled `ended` when its run settles. Read it once
-// more then, so a tool call that landed between the last frame and the settlement is not missing.
+// more then, silently: the shown feed and status stay, no loading caption and no error appears for
+// this read. A failed read leaves the feed unconfirmed (the no-tools notice stays hidden) and is
+// retried within the reconnect delays.
 function useSettledActivityConfirmation(input: {
   readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly state: CodingWorkbenchSafeActivityState;
-  readonly retry: () => void;
+  readonly setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>;
 }): void {
-  const { retry, runId, runState, state } = input;
+  const { runId, runState, setState, state } = input;
   const unconfirmed =
     runId !== undefined &&
     terminalRunState(runState) &&
@@ -395,8 +397,46 @@ function useSettledActivityConfirmation(input: {
     state.feed !== null &&
     state.finalConfirmed !== true;
   useEffect(() => {
-    if (unconfirmed) retry();
-  }, [unconfirmed, retry]);
+    if (!unconfirmed || runId === undefined) return undefined;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (index: number): void => {
+      void confirmSettledActivity(controller.signal, runId, runState, setState).then((done) => {
+        if (done || controller.signal.aborted) return;
+        const delay = CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS[index];
+        if (delay === undefined) {
+          reportClientDiagnostic("[keiko] coding settled activity confirmation gave up");
+          return;
+        }
+        timer = setTimeout(() => attempt(index + 1), delay);
+      });
+    };
+    attempt(0);
+    return (): void => {
+      controller.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [unconfirmed, runId, runState, setState]);
+}
+
+// True once the run's activity was read after it settled and is held as confirmed. A read that
+// fails or names no projection returns false and changes nothing on screen.
+async function confirmSettledActivity(
+  signal: AbortSignal,
+  runId: string,
+  runState: CodingWorkbenchRuntimeStateName | undefined,
+  setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>,
+): Promise<boolean> {
+  const snapshot = await getCodingAppSessionChannelSnapshot(signal).then(
+    (value) => value,
+    () => undefined,
+  );
+  if (signal.aborted) return true;
+  if (snapshot === undefined) return false;
+  const next = stateFromSnapshot(snapshot, runId, runState, true);
+  if (next.feed === null) return false;
+  setState((current) => (current.feed?.runId === runId ? next : current));
+  return true;
 }
 
 function lifecycleStatus(

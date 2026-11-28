@@ -1226,4 +1226,80 @@ describe("useCodingWorkbenchSafeActivity final activity confirmation", () => {
     expect(getSnapshotMock).toHaveBeenCalledTimes(2);
     expect(view.result.current.feed?.turns).toHaveLength(1);
   });
+
+  it("re-reads silently: the shown feed and status stay, no loading caption appears at run end", async () => {
+    const statuses: string[] = [];
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) => {
+        const result = useCodingWorkbenchSafeActivity({
+          runId: "run-1",
+          runState,
+          runtimeEventSignal: 0,
+        });
+        statuses.push(result.status);
+        return result;
+      },
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    statuses.length = 0;
+    getSnapshotMock.mockResolvedValue(repliedSnapshot());
+    view.rerender({ runState: "succeeded" });
+    await waitFor(() => expect(view.result.current.finalConfirmed).toBe(true));
+    expect(statuses).not.toContain("loading");
+    expect(statuses).not.toContain("unavailable");
+    expect(view.result.current.status).toBe("ended");
+    expect(streamSnapshotsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a failed settle re-read unconfirmed without an error, then retries within the bounds", async () => {
+    vi.useFakeTimers();
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    const settle = async (): Promise<void> => {
+      await act(async () => {
+        for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    };
+    await settle();
+    expect(view.result.current.status).toBe("live");
+
+    getSnapshotMock.mockRejectedValueOnce(new TypeError("network"));
+    getSnapshotMock.mockResolvedValue(repliedSnapshot());
+    view.rerender({ runState: "succeeded" });
+    await settle();
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+    expect(view.result.current.errorCode).toBeNull();
+
+    await act(async () =>
+      vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS[0] ?? 0),
+    );
+    await settle();
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.finalConfirmed).toBe(true);
+    expect(getSnapshotMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after the bounded attempts and never shows the run's activity as unavailable", async () => {
+    vi.useFakeTimers();
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "succeeded" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "succeeded" } },
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    getSnapshotMock.mockRejectedValue(new TypeError("network"));
+    view.rerender({ runState: "succeeded" });
+    await act(async () => vi.advanceTimersByTimeAsync(120_000));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(
+      1 + 1 + CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS.length,
+    );
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.finalConfirmed).not.toBe(true);
+  });
 });
