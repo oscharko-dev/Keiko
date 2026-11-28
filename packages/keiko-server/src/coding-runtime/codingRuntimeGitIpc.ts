@@ -120,7 +120,11 @@ function parseValidatedRuntimeGitRequest(
   if (value.operation === "diff") return diffRequest(value, base);
   if (value.operation !== "stage" && value.operation !== "unstage") return undefined;
   const operation = value.operation;
-  if (value.phase === "propose" && exact(value, ["phase", "paths"]) && runtimeGitIndexPaths(value.paths))
+  if (
+    value.phase === "propose" &&
+    exact(value, ["phase", "paths"]) &&
+    runtimeGitIndexPaths(value.paths)
+  )
     return { ...base, operation, phase: "propose", paths: value.paths };
   return indexExecution(value, base, operation);
 }
