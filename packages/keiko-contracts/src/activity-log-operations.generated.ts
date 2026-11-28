@@ -6684,6 +6684,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "status",
+          "readiness",
           "snapshot",
           "start",
           "approval",

@@ -35,6 +35,9 @@ export const AMBIENT_MAX_INTERVAL_MS = 60_000;
 export const AMBIENT_FOCUS_DEBOUNCE_MS = 250;
 // A check asked for by focus that finds a read or mutation running is retried this soon.
 export const AMBIENT_BUSY_RETRY_MS = 500;
+// A probe that has not answered by then is a failed one (U-45): a read that never settles must not
+// hold the loop's single in-flight slot forever. A status read answers in well under a second.
+export const AMBIENT_PROBE_TIMEOUT_MS = 30_000;
 // Triggers closer together than this share one refresh; a trailing one covers the later trigger.
 export const REFRESH_COALESCE_MS = 300;
 
@@ -208,6 +211,20 @@ function reportProbeFailure(error: unknown): void {
   });
 }
 
+// The probe's own read carries no deadline of its own on every transport, so the loop bounds it: a
+// late answer is ignored, the failure takes the ordinary failure path.
+function boundedProbe(probe: Promise<boolean>): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new DOMException("The ambient status check did not answer in time.", "TimeoutError"));
+    }, AMBIENT_PROBE_TIMEOUT_MS);
+  });
+  return Promise.race([probe, expired]).finally((): void => {
+    clearTimeout(timer);
+  });
+}
+
 // The visible-only, non-overlapping, backed-off probe: it re-reads only when the status differs.
 // Focus and visibility use the same comparison, so an unchanged repository never invalidates the
 // commit evidence or the diff.
@@ -289,8 +306,7 @@ class ProbeLoop {
     }
     this.pending = false;
     this.inFlight = true;
-    ambient
-      .probe()
+    boundedProbe(ambient.probe())
       .then(
         (changed) => this.settle(changed),
         (error: unknown) => this.fail(error),

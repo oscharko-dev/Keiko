@@ -92,6 +92,7 @@ const RUNTIME_START_TIMEOUT_MS = 180_000;
 // its deadline.
 const RUNTIME_CALL_DEADLINE_MS: Readonly<Record<ClientCodingRuntimeCall, number>> = {
   status: RUNTIME_STATUS_TIMEOUT_MS,
+  readiness: RUNTIME_STATUS_TIMEOUT_MS,
   snapshot: RUNTIME_STATUS_TIMEOUT_MS,
   start: RUNTIME_START_TIMEOUT_MS,
   stop: RUNTIME_STOP_TIMEOUT_MS,
@@ -458,17 +459,19 @@ export interface CodingWorkbenchRuntimeLifecycleBody {
   readonly requestId: string;
 }
 
+// Bounded like the status read (U-45): the read used to carry no deadline and shared one in-flight
+// request, so a first read that never settled stood in for every later one. A read with its own
+// signal is never shared, which is what keeps one hung request from answering the rest.
 export function getCodingWorkbenchRuntimeReadiness(
   requestedMode: CodingWorkbenchMode,
 ): Promise<CodingWorkbenchRuntimeReadiness> {
   const query = new URLSearchParams({ requestedMode });
-  return bffFetchJson(
-    `${RUNTIME_ROOT}/readiness?${query.toString()}`,
-    { cache: "no-store" },
-    {
-      validator: readinessValidator,
-      shareInflight: true,
-    },
+  return sendBounded("readiness", undefined, (signal, correlationId) =>
+    bffFetchJson(
+      `${RUNTIME_ROOT}/readiness?${query.toString()}`,
+      { cache: "no-store", signal },
+      { validator: readinessValidator, correlationId },
+    ),
   );
 }
 

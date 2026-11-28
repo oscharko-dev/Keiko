@@ -48,7 +48,9 @@ export const GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT =
 
 let pending = false;
 let catalogRefreshConsumers = 0;
-let unservedCatalogRefresh: { readonly check: boolean } | undefined;
+let unservedCatalogRefresh: { readonly check: boolean; readonly at: number } | undefined;
+/** A kept request older than this is stale: the shell it waited for did not appear in time. */
+const UNSERVED_CATALOG_REFRESH_TTL_MS = 10_000;
 
 /**
  * Request that the Settings panel open the gateway-setup dialog (Figma access-token section).
@@ -101,21 +103,32 @@ export function notifyGatewayModelCatalogUpdated(correlationId?: string): void {
  */
 export function requestGatewayModelCatalogRefresh(
   options: { readonly check?: boolean } = {},
-): void {
-  if (typeof window === "undefined") return;
+): () => void {
+  if (typeof window === "undefined") return noop;
   // A window that mounts in the same commit as the shell runs its effects before the shell's
   // catalog consumer has subscribed, so the event would reach nobody and the catalog would stay the
-  // bootstrap's activated-only list (U-45). The request is kept until a consumer attaches.
-  if (catalogRefreshConsumers === 0) {
-    unservedCatalogRefresh = {
-      check: unservedCatalogRefresh?.check === true || options.check === true,
-    };
-  }
+  // bootstrap's activated-only list (U-45). The request is kept, for a short while and only while
+  // its requester is mounted: the returned cleanup (an unmounting window) drops it.
+  const kept =
+    catalogRefreshConsumers === 0
+      ? {
+          check: unservedCatalogRefresh?.check === true || options.check === true,
+          at: Date.now(),
+        }
+      : undefined;
+  if (kept !== undefined) unservedCatalogRefresh = kept;
   window.dispatchEvent(
     new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
       detail: { check: options.check === true },
     }),
   );
+  return (): void => {
+    if (kept !== undefined && unservedCatalogRefresh === kept) unservedCatalogRefresh = undefined;
+  };
+}
+
+function noop(): void {
+  // nothing was kept, so there is nothing to drop
 }
 
 /** Whether a catalog refresh request came from a person's own step and asks for a check. */
@@ -143,7 +156,9 @@ export function attachGatewayModelCatalogRefreshConsumer():
   catalogRefreshConsumers += 1;
   const unserved = unservedCatalogRefresh;
   unservedCatalogRefresh = undefined;
-  return unserved;
+  return unserved !== undefined && Date.now() - unserved.at <= UNSERVED_CATALOG_REFRESH_TTL_MS
+    ? { check: unserved.check }
+    : undefined;
 }
 
 /** The consumer stopped listening; later requests are kept for the next one. */

@@ -132,4 +132,20 @@ describe("catalog refresh requests without a consumer (U-45)", () => {
     expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
     detachGatewayModelCatalogRefreshConsumer();
   });
+
+  it("drops a kept request when its requester unmounts and when it has gone stale", () => {
+    const drop = requestGatewayModelCatalogRefresh({ check: true });
+    drop();
+    expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
+    detachGatewayModelCatalogRefreshConsumer();
+    vi.useFakeTimers();
+    try {
+      requestGatewayModelCatalogRefresh();
+      vi.advanceTimersByTime(60_000);
+      expect(attachGatewayModelCatalogRefreshConsumer()).toBeUndefined();
+      detachGatewayModelCatalogRefreshConsumer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

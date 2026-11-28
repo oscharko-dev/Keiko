@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchGitBranches } from "./api";
 import { bffFetchJson } from "./http";
-import { coalescedFetch, endInflightReads } from "./inflight-reads";
+import { INFLIGHT_READ_MAX_MS, coalescedFetch, endInflightReads } from "./inflight-reads";
 
 interface Deferred {
   readonly respond: (body: unknown) => void;
@@ -159,5 +159,33 @@ describe("coalescedFetch", () => {
     const settled = await Promise.allSettled(reads);
     expect(settled.map((entry) => entry.status)).toEqual(["rejected", "rejected"]);
     expect(failing).toHaveBeenCalledTimes(1);
+  });
+});
+
+// U-45: a shared read that never settles must not keep its entry for good; every later identical read
+// used to join it and no request ever reached the network again.
+describe("coalescedFetch bounded lifetime", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends a new request once a hung shared read has outlived its bound", async () => {
+    vi.useFakeTimers();
+    const hung = deferredResponse();
+    const fresh = deferredResponse();
+    const fetchMock = mockFetchWith(hung, fresh);
+    const options = { joinable: true };
+    void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    const joiner = coalescedFetch("/api/x", { cache: "no-store" }, options);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(INFLIGHT_READ_MAX_MS);
+    // The joiner is not left waiting for the hung read: it reads for itself.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fresh.respond({ ok: true });
+    await expect((await joiner).json()).resolves.toEqual({ ok: true });
+    // And the hung entry is gone: a read now sends its own request.
+    mockFetchWith(deferredResponse());
+    void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 });

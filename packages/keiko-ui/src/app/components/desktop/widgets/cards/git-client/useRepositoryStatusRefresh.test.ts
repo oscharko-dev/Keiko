@@ -16,6 +16,7 @@ import {
   AMBIENT_BUSY_RETRY_MS,
   AMBIENT_FOCUS_DEBOUNCE_MS,
   AMBIENT_MAX_INTERVAL_MS,
+  AMBIENT_PROBE_TIMEOUT_MS,
   REFRESH_COALESCE_MS,
   statusFingerprintDiffers,
   useRefreshOnWindowReturn,
@@ -227,7 +228,8 @@ describe("useRepositoryStatusRefresh ambient refresh (U-35)", () => {
           release = resolve;
         }),
     });
-    await advance(AMBIENT_MAX_INTERVAL_MS * 5);
+    // Within its bound a probe is the only one: the bound itself is pinned below (U-45).
+    await advance(AMBIENT_PROBE_TIMEOUT_MS - AMBIENT_BASE_INTERVAL_MS - 1);
     expect(probe).toHaveBeenCalledTimes(1);
     await act(async (): Promise<void> => {
       release(false);
@@ -261,6 +263,24 @@ describe("useRepositoryStatusRefresh ambient refresh (U-35)", () => {
     await advance(AMBIENT_MAX_INTERVAL_MS * 2);
     expect(probe).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  // U-45: a probe whose read never settles used to hold `inFlight` forever, so the loop never probed
+  // again. A probe that does not settle within its bound counts as a failed one (one diagnostic) and
+  // the loop goes on.
+  it("counts a probe that never settles as failed and probes again", async (): Promise<void> => {
+    const probe = vi
+      .fn<() => Promise<boolean>>()
+      .mockImplementationOnce(() => new Promise<boolean>(() => undefined))
+      .mockResolvedValue(false);
+    mount({ probe });
+    await advance(AMBIENT_BASE_INTERVAL_MS);
+    expect(probe).toHaveBeenCalledTimes(1);
+    await advance(AMBIENT_PROBE_TIMEOUT_MS);
+    expect(reportClientDiagnostic).toHaveBeenCalledTimes(1);
+    expect(reportClientDiagnostic.mock.calls[0]?.[1]).toMatchObject({ errorKind: "timeout" });
+    await advance(AMBIENT_MAX_INTERVAL_MS * 2);
+    expect(probe.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("reports a failed probe once per failure streak and again after a success", async (): Promise<void> => {

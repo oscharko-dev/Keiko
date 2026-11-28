@@ -16,8 +16,6 @@
 
 import { CORRELATION_HEADER } from "./bff-correlation";
 
-const inflight = new Map<string, Promise<Response>>();
-
 export interface CoalescedReadOptions {
   /** `false` when the caller names its own correlation id or supplies its own abort signal. */
   readonly joinable: boolean;
@@ -56,7 +54,47 @@ function copyOf(response: Response): Response {
 
 /** Ends every join window; a request that may change server state calls it before and after. */
 export function endInflightReads(): void {
-  inflight.clear();
+  sharedReads.clear();
+}
+
+/**
+ * How long a shared read may stay joinable (U-45). A read that never settles (a request the BFF
+ * accepted and never answered) used to keep its entry for good, so every later identical read
+ * joined it and no request ever reached the network again. After this bound the entry is evicted
+ * and every joiner still waiting reads for itself. A status-class read answers in milliseconds.
+ */
+export const INFLIGHT_READ_MAX_MS = 15_000;
+
+interface SharedRead {
+  readonly response: Promise<Response>;
+  readonly expired: Promise<void>;
+}
+
+const sharedReads = new Map<string, SharedRead>();
+
+function share(key: string, read: Promise<Response>): void {
+  let evict: () => void = () => undefined;
+  const expired = new Promise<void>((resolve) => {
+    evict = resolve;
+  });
+  const timer = setTimeout(evict, INFLIGHT_READ_MAX_MS);
+  const entry: SharedRead = { response: read, expired };
+  sharedReads.set(key, entry);
+  const release = (): void => {
+    clearTimeout(timer);
+    if (sharedReads.get(key) === entry) sharedReads.delete(key);
+  };
+  read.then(release, release);
+  void expired.then(release);
+}
+
+// A joiner waits for the shared read, but never longer than that read may live.
+function joinSharedRead(
+  path: string,
+  init: RequestInit | undefined,
+  shared: SharedRead,
+): Promise<Response> {
+  return Promise.race([shared.response.then(copyOf), shared.expired.then(() => fetch(path, init))]);
 }
 
 export function coalescedFetch(
@@ -75,13 +113,9 @@ export function coalescedFetch(
   }
   if (!options.joinable) return Promise.resolve(fetch(path, init));
   const key = readKey(path, init);
-  const shared = inflight.get(key);
-  if (shared !== undefined) return shared.then(copyOf);
+  const shared = sharedReads.get(key);
+  if (shared !== undefined) return joinSharedRead(path, init, shared);
   const read = Promise.resolve(fetch(path, init));
-  inflight.set(key, read);
-  const settle = (): void => {
-    if (inflight.get(key) === read) inflight.delete(key);
-  };
-  read.then(settle, settle);
+  share(key, read);
   return read.then(copyOf);
 }

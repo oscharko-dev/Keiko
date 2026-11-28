@@ -9,6 +9,7 @@ import {
   CodingWorkbenchPreemptedError,
   codingWorkbenchRuntimeApiError,
   decideCodingWorkbenchRuntimeApproval,
+  getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeSnapshot,
   getCodingWorkbenchRuntimeStatus,
   isCodingWorkbenchPreempted,
@@ -72,6 +73,12 @@ const OPERATION = { requestId: "r1", expectedRevision: 1 } as never;
 const TIMEOUT_CASES: readonly TimeoutCase[] = [
   // Measured against real Gemma under shared load (issue #4109): status p95 6 ms.
   { call: "status", deadlineMs: 10_000, invoke: () => getCodingWorkbenchRuntimeStatus() },
+  // U-45: a readiness read that never settled used to stay shared for good; it has its own bound.
+  {
+    call: "readiness",
+    deadlineMs: 10_000,
+    invoke: () => getCodingWorkbenchRuntimeReadiness("supervised-coding"),
+  },
   {
     call: "snapshot",
     deadlineMs: 10_000,

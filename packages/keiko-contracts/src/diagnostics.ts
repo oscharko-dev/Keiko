@@ -2858,6 +2858,7 @@ function isClientDiagnosticCodingWorkbenchInteraction(
  */
 export const CLIENT_CODING_RUNTIME_CALLS = [
   "status",
+  "readiness",
   "snapshot",
   "start",
   "approval",
