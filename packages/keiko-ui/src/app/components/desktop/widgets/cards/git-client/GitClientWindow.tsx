@@ -2121,8 +2121,7 @@ export function GitClientWindow({
 
   const draftController = useCommitDraftController(
     {
-      previewRevision: commitPreviewRevision,
-      draftRevision: `${commitDraftRevision}:${commitNonce.toString()}`,
+      revision: `${commitDraftRevision}:${commitNonce.toString()}`,
       summaryValue: commitSummary,
       bodyValue: commitBody,
       onSummaryChange: setCommitSummary,

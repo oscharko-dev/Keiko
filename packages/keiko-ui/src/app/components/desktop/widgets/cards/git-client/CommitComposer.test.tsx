@@ -10,7 +10,30 @@ import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { ApiError, type GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
-import { CommitComposer, composeCommitMessage } from "./CommitComposer";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import {
+  CommitComposer as RepositoryCommitComposer,
+  composeCommitMessage,
+  useCommitDraftController,
+} from "./CommitComposer";
+import type { ReactNode } from "react";
+
+type CommitComposerFixtureProps = Omit<
+  Parameters<typeof RepositoryCommitComposer>[0],
+  "draftController"
+> &
+  Omit<Parameters<typeof useCommitDraftController>[0], "revision"> & {
+    readonly draftRevision?: string;
+  };
+
+function CommitComposer(props: CommitComposerFixtureProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const draftController = useCommitDraftController(
+    { ...props, revision: props.draftRevision ?? String(props.previewRevision) },
+    t,
+  );
+  return <RepositoryCommitComposer {...props} draftController={draftController} />;
+}
 
 function makePreview(
   overrides: Partial<GitDeliveryCommitPreviewResponse> = {},

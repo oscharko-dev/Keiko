@@ -87,20 +87,9 @@ interface CommitComposerProps {
   readonly previewRequestRevision?: number | null;
   readonly previewError: string | null;
   readonly previewRevision: number;
-  /**
-   * What a generated draft describes: it is cleared, unless edited, once this moves. Defaults to
-   * `previewRevision`; the Git window passes the staged selection, so a status read or a new branch
-   * that keeps the staged changes keeps the draft.
-   */
-  readonly draftRevision?: string | undefined;
   readonly layout?: CommitComposerLayout | undefined;
-  readonly summaryValue?: string | undefined;
-  readonly bodyValue?: string | undefined;
-  readonly onSummaryChange?: ((value: string) => void) | undefined;
-  readonly onBodyChange?: ((value: string) => void) | undefined;
   readonly onPreview: (messageDraft: string) => void;
-  readonly onGenerateDraft?: ((signal: AbortSignal) => Promise<string>) | undefined;
-  readonly draftController?: CommitDraftController | undefined;
+  readonly draftController: CommitDraftController;
   readonly onCommit: (message: string) => void;
   readonly onCreateBranch?: ((trigger: HTMLButtonElement) => void) | undefined;
   readonly onCreatePullRequest?: (() => void) | undefined;
@@ -540,13 +529,12 @@ function GenerateCommitDraftAction({
       <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 11.5, color: "var(--fg-faint)" }}>
         {t("commitComposer.draft.generateHint")}
       </p>
-      <p
-        role="status"
+      <output
         className={draftGeneration.notice === null ? "rv-sr-only" : undefined}
         style={SUBTLE_TEXT_STYLE}
       >
         {draftGeneration.notice ?? draftGeneration.announcement}
-      </p>
+      </output>
       {draftGeneration.error === null ? null : (
         <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--danger)" }}>
           {draftGeneration.error}
@@ -1167,7 +1155,7 @@ function useCommitDraftFields(props: CommitDraftControllerInput): CommitDraftFie
   );
   const [body, setBody] = useControlledComposerField(props.bodyValue, props.onBodyChange);
   const appliedDraftRef = useRef<AppliedCommitDraft | null>(null);
-  const draftRevision = props.draftRevision ?? String(props.previewRevision);
+  const draftRevision = props.revision;
   useClearStaleCommitDraft({
     appliedDraftRef,
     revision: draftRevision,
@@ -1283,7 +1271,7 @@ function draftGenerationFeedback(
 }
 
 function useCommitDraftGeneration(
-  onGenerateDraft: CommitComposerProps["onGenerateDraft"],
+  onGenerateDraft: CommitDraftControllerInput["onGenerateDraft"],
   applyDraft: CommitDraftFields["applyDraft"],
   readToken: () => DraftGenerationToken,
   revision: string,
@@ -1362,16 +1350,14 @@ function useDraftGenerationTokenReader(
   return useCallback((): DraftGenerationToken => tokenRef.current, []);
 }
 
-type CommitDraftControllerInput = Pick<
-  CommitComposerProps,
-  | "draftRevision"
-  | "previewRevision"
-  | "summaryValue"
-  | "bodyValue"
-  | "onSummaryChange"
-  | "onBodyChange"
-  | "onGenerateDraft"
->;
+interface CommitDraftControllerInput {
+  readonly revision: string;
+  readonly summaryValue?: string | undefined;
+  readonly bodyValue?: string | undefined;
+  readonly onSummaryChange?: ((value: string) => void) | undefined;
+  readonly onBodyChange?: ((value: string) => void) | undefined;
+  readonly onGenerateDraft?: ((signal: AbortSignal) => Promise<string>) | undefined;
+}
 
 interface CommitDraftController extends CommitDraftFields {
   readonly draftGeneration: DraftGenerationController;
@@ -1383,7 +1369,7 @@ export function useCommitDraftController(
   t: OptionalWidgetTranslate,
 ): CommitDraftController {
   const fields = useCommitDraftFields(props);
-  const revision = props.draftRevision ?? String(props.previewRevision);
+  const revision = props.revision;
   const readToken = useDraftGenerationTokenReader(fields, revision);
   const draftGeneration = useCommitDraftGeneration(
     props.onGenerateDraft,
@@ -1485,33 +1471,7 @@ function CommitComposerContents({
 
 export function CommitComposer(props: CommitComposerProps): ReactNode {
   const t = useOptionalWidgetTranslate();
-  return props.draftController === undefined ? (
-    <LocalCommitComposer props={props} t={t} />
-  ) : (
-    <CommitComposerView props={props} draft={props.draftController} t={t} />
-  );
-}
-
-function LocalCommitComposer({
-  props,
-  t,
-}: {
-  readonly props: CommitComposerProps;
-  readonly t: OptionalWidgetTranslate;
-}): ReactNode {
-  return <CommitComposerView props={props} draft={useCommitDraftController(props, t)} t={t} />;
-}
-
-function CommitComposerView({
-  props,
-  draft,
-  t,
-}: {
-  readonly props: CommitComposerProps;
-  readonly draft: CommitDraftController;
-  readonly t: OptionalWidgetTranslate;
-}): ReactNode {
-  const controller = useCommitComposerController(props, draft, t);
+  const controller = useCommitComposerController(props, props.draftController, t);
   return (
     <section
       style={props.layout === "workspace" ? COMMIT_WORKSPACE_PANEL_STYLE : COMMIT_PANEL_STYLE}

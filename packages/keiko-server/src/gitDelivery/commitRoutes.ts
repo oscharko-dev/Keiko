@@ -1427,7 +1427,7 @@ function commitDraftCancellation(ctx: RouteContext): {
   };
   ctx.req.once("aborted", onDisconnect);
   ctx.res.once("close", onResponseClosed);
-  if (ctx.req.aborted || ctx.res.destroyed) onDisconnect();
+  if (ctx.req.readableAborted || ctx.res.destroyed) onDisconnect();
   // The route deadline itself is armed per model, behind that model's gateway budget, where the
   // model is resolved (`generateModelCommitMessage`); this signal only carries the disconnect.
   return {

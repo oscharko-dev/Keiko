@@ -701,7 +701,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       await user.click(await screen.findByRole("button", { name: "Branch: main" }));
       await user.click(screen.getByRole("menuitemradio", { name: /feat\/a11y/ }));
 
-      const dialog = screen.getByRole("alertdialog", { name: "Branchwechsel bestätigen" });
+      const dialog = await screen.findByRole("alertdialog", { name: "Branchwechsel bestätigen" });
       expect(within(dialog).getByRole("button", { name: "Branch wechseln" })).toBeEnabled();
       expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeEnabled();
       expect(await axe(dialog)).toHaveNoViolations();
