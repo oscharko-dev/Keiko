@@ -1463,6 +1463,17 @@ async function* withoutReasoningChunks(
   }
 }
 
+// The first chunk of a stream that carries an answer: empty deltas are skipped, each one awaited
+// before the next is pulled.
+async function firstNonEmptyStreamChunk(
+  iterator: AsyncGenerator<GatewayStreamChunk>,
+): Promise<IteratorResult<GatewayStreamChunk>> {
+  const next = await iterator.next();
+  return !next.done && next.value.type === "delta" && next.value.token.length === 0
+    ? firstNonEmptyStreamChunk(iterator)
+    : next;
+}
+
 export class Gateway {
   private readonly spendBudget: GatewaySpendBudget | undefined;
   private readonly promptCounter: ProviderPromptCounter;
@@ -2471,10 +2482,7 @@ export class Gateway {
       admission,
     );
     try {
-      let first = await iterator.next();
-      while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
-        first = await iterator.next();
-      }
+      const first = await firstNonEmptyStreamChunk(iterator);
       if (first.done) throw new TransportError("provider stream ended without an answer");
       return { first: first.value, iterator };
     } catch (error) {
