@@ -4367,6 +4367,47 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.getByText(/does not know whether the last action went through/)).toBeVisible();
     });
 
+    // U-22a: the card claimed the last action may have gone through even when the run never started
+    // a tool. The activity feed says so; when it cannot, the fail-safe wording stays.
+    function recoveryFeed(toolCount: number, over?: object): AvailableCodingSafeActivityFeed {
+      const feed = activityFeed();
+      const [turn] = feed.turns;
+      if (turn === undefined) throw new Error("expected a turn");
+      const tools = Array.from({ length: toolCount }, (_, index) => ({
+        callId: `call-${String(index)}`,
+        tool: "workspace.read",
+        state: "succeeded" as const,
+        occurredAt: AT,
+      }));
+      return {
+        ...feed,
+        truncated: false,
+        droppedEventCount: 0,
+        turns: [{ ...turn, tools }],
+        ...over,
+      };
+    }
+
+    it.each([
+      ["no tool started", recoveryFeed(0), /No action had started/],
+      ["a tool started", recoveryFeed(1), /does not know whether the last action went through/],
+      ["no feed at all", null, /does not know whether the last action went through/],
+      [
+        "a shortened feed with no tool in it",
+        recoveryFeed(0, { truncated: true }),
+        /does not know whether the last action went through/,
+      ],
+      [
+        "another run's feed",
+        recoveryFeed(0, { runId: "run-2" }),
+        /does not know whether the last action went through/,
+      ],
+    ] as const)("words the recovery card for %s", (_name, feed, text) => {
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
+      renderWorkbench(recoveryState(false));
+      expect(screen.getByText(text)).toBeVisible();
+    });
+
     it("offers the error report for the run that needs recovery", async () => {
       const runId = "run-272120967981827964065820685403290179367";
       const create = vi

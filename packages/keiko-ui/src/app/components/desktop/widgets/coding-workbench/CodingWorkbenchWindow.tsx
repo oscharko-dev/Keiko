@@ -2,6 +2,7 @@
 
 import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { anyToolStarted } from "./codingWorkbenchRecovery";
 import type {
   ClientCodingWorkbenchActivationTrigger,
   ClientModelCatalogEvidence,
@@ -2243,6 +2244,7 @@ function WorkbenchColumns(
               expectedRoot={repositoryRoot}
               onNewTask={() => void history.newTask()}
               newTaskPending={history.pending}
+              anyToolStarted={anyToolStarted(activity.feed, state.run.value?.runId)}
             />
             <ResearchGrantChip
               grant={research.grant ?? undefined}
@@ -3396,7 +3398,10 @@ function RecoveryPanel({
   expectedRoot,
   onNewTask,
   newTaskPending,
+  anyToolStarted: toolStarted,
 }: LiveSectionProps & {
+  /** Whether the run's activity shows a started tool; undefined when it cannot say. */
+  readonly anyToolStarted: boolean | undefined;
   readonly taskIntent: string;
   /** The repository the Workbench shows; a retry states it like a start. */
   readonly expectedRoot: string | null;
@@ -3414,7 +3419,7 @@ function RecoveryPanel({
       <PanelTitle eyebrow={t("codingWorkbench.recovery.eyebrow")} id="recovery-title">
         {t("codingWorkbench.recovery.title")}
       </PanelTitle>
-      <p className={styles.summary}>{t("codingWorkbench.recovery.summary")}</p>
+      <RecoverySummary toolStarted={toolStarted} />
       <RecoveryButtons
         actions={actions}
         acknowledged={acknowledged}
@@ -3436,6 +3441,23 @@ function RecoveryPanel({
       ) : null}
       <RecoverySupportReport runId={snapshot.runId} />
     </section>
+  );
+}
+
+function RecoverySummary({
+  toolStarted,
+}: {
+  readonly toolStarted: boolean | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <p className={styles.summary}>
+      {t(
+        toolStarted === false
+          ? "codingWorkbench.recovery.summaryNoAction"
+          : "codingWorkbench.recovery.summary",
+      )}
+    </p>
   );
 }
 
