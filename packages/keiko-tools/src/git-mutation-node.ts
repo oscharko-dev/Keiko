@@ -98,6 +98,7 @@ import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
   GIT_REF_LOCK_HELD,
+  gitSequencerOperationInProgress,
   GIT_REF_LOCK_UNAVAILABLE,
   withGitBranchRefLocks,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -128,6 +129,8 @@ export interface NodeGitMutationAdapterDeps {
    * never land an unsigned commit on a branch that requires signatures.
    */
   readonly preparedCheckout?: { readonly branchName: string | undefined } | undefined;
+  /** The filesystem port the repository's sequencer state is read through (default: workspace port). */
+  readonly metadataFs?: WorkspaceFs | undefined;
   // The repository root the mutations run in. Reused as the spawn-boundary workspace root.
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -240,6 +243,7 @@ interface RunContext {
   readonly beforeCommitRefUpdate: (() => boolean) | undefined;
   readonly beforeIndexUpdate: (() => boolean) | undefined;
   readonly preparedCheckout: { readonly branchName: string | undefined } | undefined;
+  readonly metadataFs: WorkspaceFs | undefined;
   readonly readSession: GitReadSession | undefined;
   readonly signingRequiredByBranchProtection: (() => Promise<boolean | "unavailable">) | undefined;
   readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
@@ -600,6 +604,8 @@ async function execBoundCommit(
   try {
     const head = await boundCommitHead(ctx, branch);
     if (head === undefined) return failureFromExit(0, 0);
+    const message = cleanedCommitMessage(request.message);
+    if (message === "") return failureFromExit(0, 0);
     const tree = await checkedObjectCommand(ctx, ["write-tree"]);
     if (!request.allowEmpty && (await commitsNothing(ctx, head, tree)))
       return failureFromExit(0, 0);
@@ -609,7 +615,7 @@ async function execBoundCommit(
       ...(sign ? ["-S"] : []),
       ...(head.kind === "born" ? ["-p", head.sha] : []),
       "-m",
-      request.message,
+      message,
     ]);
     if (!(await checkoutOnBranch(ctx, branch))) return failureFromExit(0, 0);
     refAttempted = true;
@@ -619,19 +625,34 @@ async function execBoundCommit(
   }
 }
 
+// The message `git commit --message` records: Git's default `whitespace` cleanup (as `git
+// stripspace`), which drops trailing blanks of every line, collapses runs of empty lines and trims
+// the empty lines around the text. Nothing else changes it, so the bytes match a plain commit; a
+// message that is empty afterwards is not a commit, as for Git.
+function cleanedCommitMessage(message: string): string {
+  const lines = message.split("\n").map(trimTrailingBlanks);
+  const kept = lines.filter((line, index) => line !== "" || lines[index - 1] !== "");
+  while (kept[0] === "") kept.shift();
+  while (kept.at(-1) === "") kept.pop();
+  return kept.join("\n");
+}
+
+function trimTrailingBlanks(line: string): string {
+  let end = line.length;
+  while (end > 0 && " \t\r\f\v".includes(line.charAt(end - 1))) end -= 1;
+  return line.slice(0, end);
+}
+
 // The HEAD a bound commit builds on; undefined when it cannot be bound to the prepared branch.
 async function boundCommitHead(ctx: RunContext, branch: string): Promise<GitHeadState | undefined> {
   if (!(await checkoutOnBranch(ctx, branch))) return undefined;
-  const deps = commitReadDeps(ctx);
-  // A merge in progress has parents this commit does not bind.
-  if (
-    await readGitRevision(deps, "MERGE_HEAD").then(
-      () => true,
-      () => false,
-    )
-  )
-    return undefined;
-  return readGitHeadState(deps);
+  // A merge, cherry-pick or revert in progress has state this commit does not bind; a state that
+  // cannot be read is refused like one that is there.
+  const sequencing = await gitSequencerOperationInProgress(
+    ctx.runDeps.workspace.root,
+    ctx.metadataFs ?? workspaceFsOf(ctx.runDeps),
+  ).catch(() => true);
+  return sequencing ? undefined : readGitHeadState(commitReadDeps(ctx));
 }
 
 async function checkoutOnBranch(ctx: RunContext, branch: string): Promise<boolean> {
@@ -1095,6 +1116,7 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     beforeCommitRefUpdate: deps.beforeCommitRefUpdate,
     beforeIndexUpdate: deps.beforeIndexUpdate,
     preparedCheckout: deps.preparedCheckout,
+    metadataFs: deps.metadataFs,
     readSession: deps.readSession,
     signingRequiredByBranchProtection: deps.signingRequiredByBranchProtection,
     onSigningReadFailure: deps.onSigningReadFailure,

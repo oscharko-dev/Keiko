@@ -20,7 +20,9 @@ import { PathDeniedError } from "./errors.js";
 import { nodeWorkspaceFs } from "./fs.js";
 import {
   GIT_STAGE_FILE_MAX_BYTES,
+  GIT_SEQUENCER_STATE_UNAVAILABLE,
   assertGitStageFileUnchanged,
+  gitSequencerOperationInProgress,
   inspectGitStageFile,
   observeGitIndexTransactions,
   isGitStageLargeFile,
@@ -558,5 +560,28 @@ describe("the object quarantine of an index transaction", () => {
         (accepted) => accepted,
       ),
     ).resolves.toBe(true);
+  });
+});
+
+describe("gitSequencerOperationInProgress", () => {
+  it.each(["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])(
+    "reports %s as an operation in progress, whatever it holds",
+    async (name) => {
+      await expect(gitSequencerOperationInProgress(root)).resolves.toBe(false);
+      writeFileSync(join(root, ".git", name), "not a commit id\n");
+      await expect(gitSequencerOperationInProgress(root)).resolves.toBe(true);
+    },
+  );
+
+  it("fails closed when the repository metadata cannot be resolved", async () => {
+    const unreadable = {
+      ...nodeWorkspaceFs,
+      realPath: (): string => {
+        throw new Error("EACCES");
+      },
+    };
+    await expect(gitSequencerOperationInProgress(root, unreadable)).rejects.toThrow(
+      GIT_SEQUENCER_STATE_UNAVAILABLE,
+    );
   });
 });

@@ -300,6 +300,31 @@ function branchRefsBase(gitdir: string): string {
   return basename(dirname(gitdir)) === "worktrees" ? dirname(dirname(gitdir)) : gitdir;
 }
 
+/** The message of the failure thrown when the sequencer state of a repository cannot be read. */
+export const GIT_SEQUENCER_STATE_UNAVAILABLE = "git-sequencer-state-unavailable";
+
+const SEQUENCER_HEAD_FILES = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const;
+
+/**
+ * Whether a merge, cherry-pick or revert is in progress in this worktree: one of Git's sequencer
+ * head files exists in its own gitdir. Any entry counts, whatever it holds, and a gitdir or entry
+ * that cannot be examined throws, so an unreadable state is never reported as "none".
+ */
+export async function gitSequencerOperationInProgress(
+  workspaceRoot: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): Promise<boolean> {
+  try {
+    const base = await resolveGitdir(fs, workspaceRoot);
+    if (base === undefined) throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE);
+    return SEQUENCER_HEAD_FILES.some(
+      (name) => lstatSync(join(base.path, name), { throwIfNoEntry: false }) !== undefined,
+    );
+  } catch (error) {
+    throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE, { cause: error });
+  }
+}
+
 function branchLockPath(heads: string, branch: string): string | undefined {
   const parts = branch.split("/");
   if (parts.some((part) => part === "" || part === "." || part === ".." || part.includes("\\")))

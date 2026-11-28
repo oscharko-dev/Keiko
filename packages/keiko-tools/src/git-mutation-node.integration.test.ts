@@ -24,7 +24,11 @@ import type {
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  nodeWorkspaceFs,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import {
   createGitReadSession,
   createNodeGitMutationAdapter,
@@ -221,7 +225,7 @@ describe("node git mutation adapter — an interactive commit stays on the branc
     expect(git(["log", "-1", "--format=%P"]).trim()).toBe("");
   });
 
-  it("refuses an empty commit unless it is allowed, and a commit inside a merge", async () => {
+  it("refuses an empty commit unless it is allowed", async () => {
     git(["config", "commit.gpgsign", "false"]);
     writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
     git(["add", "a.txt"]);
@@ -230,10 +234,119 @@ describe("node git mutation adapter — an interactive commit stays on the branc
 
     expect((await ad.commit({ message: "nothing", allowEmpty: false })).outcome).toBe("failed");
     expect((await ad.commit({ message: "empty ok", allowEmpty: true })).outcome).toBe("succeeded");
-
-    writeFileSync(join(root, ".git", "MERGE_HEAD"), `${git(["rev-parse", "HEAD"]).trim()}\n`);
-    expect((await ad.commit({ message: "merge", allowEmpty: true })).outcome).toBe("failed");
     expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("2");
+  });
+
+  it.each(["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])(
+    "refuses a commit while %s is present",
+    async (name) => {
+      git(["config", "commit.gpgsign", "false"]);
+      writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+      git(["add", "a.txt"]);
+      git(["commit", "-q", "-m", "base"]);
+      const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+      writeFileSync(join(root, ".git", name), `${git(["rev-parse", "HEAD"]).trim()}\n`);
+
+      expect((await ad.commit({ message: "mid", allowEmpty: true })).outcome).toBe("failed");
+      expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    },
+  );
+
+  it("refuses the commit and writes nothing when the sequencer state cannot be read", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    let failedReads = 0;
+    const unreadable: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      // Only the sequencer-state read uses this port, so every resolution of it fails.
+      realPath: () => {
+        failedReads += 1;
+        throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      },
+    };
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      preparedCheckout: { branchName: git(["branch", "--show-current"]).trim() },
+      metadataFs: unreadable,
+    });
+    const objectsBefore = git(["count-objects", "-v"]);
+
+    const committed = await ad.commit({ message: "must not land", allowEmpty: true });
+
+    expect(failedReads).toBeGreaterThan(0);
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("precondition-failed");
+    expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    expect(git(["count-objects", "-v"])).toBe(objectsBefore);
+  });
+
+  // The plumbing commit must record what `git commit` records: the same identity, the same dates
+  // from the same environment and the same message bytes after Git's own cleanup.
+  it.each([
+    ["plain", "subject"],
+    ["trailing blanks and tabs", "subject  \t\n\nbody line \n"],
+    ["blank runs and edges", "\n\n  lead\n\n\n\nbody\r\n\n\n"],
+    ["a carriage return line", "subject\r\n\r\nbody\r\n"],
+    ["non-ASCII", "Änderung   \n\nKörper"],
+  ])("records the same commit object as git commit for %s", async (_name, message) => {
+    git(["config", "commit.gpgsign", "false"]);
+    const env = {
+      PATH: process.env.PATH ?? "",
+      GIT_AUTHOR_NAME: "Author Env",
+      GIT_AUTHOR_EMAIL: "author@env.example",
+      GIT_AUTHOR_DATE: "2026-01-02T03:04:05Z",
+      GIT_COMMITTER_NAME: "Committer Env",
+      GIT_COMMITTER_EMAIL: "committer@env.example",
+      GIT_COMMITTER_DATE: "2026-02-03T04:05:06Z",
+    };
+    const branch = git(["branch", "--show-current"]).trim();
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: env,
+      now: () => Date.now(),
+      preparedCheckout: { branchName: branch },
+    });
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    expect((await ad.commit({ message, allowEmpty: false })).outcome).toBe("succeeded");
+    const bound = git(["cat-file", "commit", "HEAD"]);
+
+    git(["update-ref", "-d", `refs/heads/${branch}`]);
+    // The reference is the plain `git commit` of the same adapter lane (no prepared checkout).
+    const plain = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: env,
+      now: () => Date.now(),
+    });
+    expect((await plain.commit({ message, allowEmpty: false })).outcome).toBe("succeeded");
+
+    // Dates come from the same lane; only a second boundary between the two runs may differ.
+    const undated = (object: string): string => object.replace(/ \d+ [+-]\d{4}$/gmu, " <date>");
+    expect(undated(bound)).toBe(undated(git(["cat-file", "commit", "HEAD"])));
+  });
+
+  it("signs the bound commit as git commit would, and fails closed when signing fails", async () => {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+    writeFileSync(join(root, "b.txt"), "more\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["b.txt"] })).outcome).toBe("succeeded");
+
+    expect((await ad.commit({ message: "signed", allowEmpty: false })).outcome).toBe("succeeded");
+    expectLastCommitSigned(root);
+
+    const tip = git(["rev-parse", "HEAD"]).trim();
+    git(["config", "user.signingkey", join(signingRoot, "missing-key.pub")]);
+    writeFileSync(join(root, "c.txt"), "again\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["c.txt"] })).outcome).toBe("succeeded");
+
+    expect((await ad.commit({ message: "unsignable", allowEmpty: false })).outcome).toBe("failed");
+    expect(git(["rev-parse", "HEAD"]).trim()).toBe(tip);
   });
 
   it("commits on the prepared branch when the checkout did not move", async () => {
