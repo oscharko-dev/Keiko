@@ -167,16 +167,17 @@ export class PromptCalibrationLedger {
     modelId: string,
     request: PromptCalibrationInput,
   ): PromptCalibrationRecord | undefined {
-    const records = this.byModel.get(modelId) ?? [];
-    for (let index = records.length - 1; index >= 0; index -= 1) {
-      const record = records[index];
+    // The longest matching prefix is the most specific measurement; recency only breaks a tie, so
+    // the order in which requests complete never changes what the same prompt is estimated at.
+    let best: PromptCalibrationRecord | undefined;
+    for (const record of this.byModel.get(modelId) ?? []) {
       if (
-        record !== undefined &&
         request.messages.length >= record.messageCount &&
+        (best === undefined || record.messageCount >= best.messageCount) &&
         promptPrefixDigest(request, record.messageCount) === record.digest
       )
-        return record;
+        best = record;
     }
-    return undefined;
+    return best;
   }
 }

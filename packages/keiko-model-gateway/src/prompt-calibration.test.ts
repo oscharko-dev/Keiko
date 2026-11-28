@@ -12,6 +12,7 @@ import type { GatewayCallRequest } from "./gateway.js";
 import {
   MIN_PLAUSIBLE_USAGE_RATIO,
   PromptCalibrationLedger,
+  promptCalibrationMark,
   type PromptCalibrationMark,
 } from "./prompt-calibration.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
@@ -473,4 +474,35 @@ describe("gateway wiring of provider usage", () => {
       expect(admissions[1]?.extra?.calibratedPromptTokens).toBeGreaterThan(2_000);
     },
   );
+});
+
+describe("most specific measured prefix", () => {
+  it("calibrates from the longest matching prefix, whichever request finished last", () => {
+    const ledger = new PromptCalibrationLedger();
+    const long = conversation(1_000);
+    const short = long.slice(0, 2);
+    const longLocal = localTokens(long);
+    const shortLocal = localTokens(short);
+    const request = extended(long, 200);
+    const requestLocal = localTokens(request);
+
+    ledger.record(promptCalibrationMark("m", { messages: long }, longLocal), longLocal);
+    // The shorter request completes last: recency must not displace the exact measurement.
+    ledger.record(promptCalibrationMark("m", { messages: short }, shortLocal), shortLocal);
+
+    const growth = requestLocal - longLocal;
+    expect(ledger.calibrate("m", { messages: request }, requestLocal)).toBe(
+      longLocal + Math.ceil(growth * 1.1),
+    );
+  });
+
+  it("breaks a tie between equally long prefixes by recency", () => {
+    const ledger = new PromptCalibrationLedger();
+    const messages = conversation(500);
+    const local = localTokens(messages);
+    const mark = promptCalibrationMark("m", { messages }, local);
+    ledger.record(mark, local);
+    ledger.record(mark, local + 10);
+    expect(ledger.calibrate("m", { messages }, local)).toBe(local + 10);
+  });
 });
