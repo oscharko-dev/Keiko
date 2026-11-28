@@ -240,9 +240,10 @@ export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
 // hash pass alone, inside the 674 s the hash itself is allowed (work-ending limits, owner decision
 // 2026-11-24: a fixed bound that ends healthy work is a defect). The backstop is therefore the
 // longest run the product can authorize, eight hours (`MAX_RUNTIME_MAX_DURATION_MINUTES`, pinned
-// against it in the server tests): the call can never outlive its Authority Envelope, whose expiry
+// against it in the contract tests): the call can never outlive its Authority Envelope, whose expiry
 // (`context.deadlineAt`) still ends it earlier, and a staging deadline that scales with file size is
 // never cut by a shorter outer one. It is not the global default.
+//
 // The governed Git read tools (`keiko_git_status`, `keiko_git_diff`) share this budget. A raw
 // status is a sequence of Git processes (one per index, tree, attribute and hash read), and on a
 // host whose process creation is slow (Windows with a real-time scanner, W-4: ~14 s for one status

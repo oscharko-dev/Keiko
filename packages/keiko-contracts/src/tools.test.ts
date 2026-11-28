@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "./coding-workbench-runtime.js";
 import {
   copyNetworkGatewayPolicy,
   DEFAULT_COMMAND_RULES,
@@ -162,6 +163,7 @@ describe("the budget of a governed tool that waits for a human decision", () => 
   // the reads follow the delivery backstop (the longest authorizable run) and end at authority expiry.
   it("gives the Git read tools a budget well above the sandbox default", () => {
     expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBe(8 * 60 * 60 * 1_000);
+    expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBe(MAX_RUNTIME_MAX_DURATION_MINUTES * 60_000);
     expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBeGreaterThan((6_144 / 10) * 1_000);
     expect(GOVERNED_GIT_TOOL_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
