@@ -8,7 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
-import { pathIsDeniedAsync } from "./files-deny.js";
+import { pathDeniedAsyncRecorded } from "./files-deny.js";
 import { isProjectAvailable, type Project, type UiStore } from "./store/index.js";
 import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
@@ -158,18 +158,19 @@ export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: str
 }
 
 /** Whether the Files and Git routes would read this folder; the project is listed either way. */
-export async function projectReadable(project: Project): Promise<boolean> {
-  return !(await pathIsDeniedAsync(project.path));
+export async function projectReadable(project: Project, correlationId?: string): Promise<boolean> {
+  return !(await pathDeniedAsyncRecorded(project.path, correlationId));
 }
 
 export async function projectWithWorkspaceAvailability(
   store: UiStore,
   project: Project,
+  correlationId?: string,
 ): Promise<ProjectWithAvailability> {
   return {
     ...project,
     available: isProjectAvailable(project),
-    readable: await projectReadable(project),
+    readable: await projectReadable(project, correlationId),
     workspaceAvailable: hasCurrentWorkspaceRootMembership(store, project.path),
   };
 }
@@ -177,9 +178,12 @@ export async function projectWithWorkspaceAvailability(
 export async function projectsWithWorkspaceAvailability(
   store: UiStore,
   projects: readonly Project[],
+  correlationId?: string,
 ): Promise<readonly ProjectWithAvailability[]> {
   // A folder whose readability cannot be settled is listed unreadable, never readable.
-  const readable = await Promise.all(projects.map((project) => projectReadable(project)));
+  const readable = await Promise.all(
+    projects.map((project) => projectReadable(project, correlationId)),
+  );
   let snapshot: WorkspaceRootMembershipSnapshot;
   try {
     snapshot = membershipSnapshot(store);

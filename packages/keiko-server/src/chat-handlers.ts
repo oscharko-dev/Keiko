@@ -436,6 +436,7 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
 async function pickProjectPath(
   body: Record<string, unknown>,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): Promise<string> {
   const supplied =
     typeof body.projectPath === "string" && body.projectPath.length > 0
@@ -446,7 +447,9 @@ async function pickProjectPath(
   }
   // A program-files row is only ever kept as a fallback for a folderless Chat, never a default pick.
   const listed = deps.store.listProjects();
-  const readable = await Promise.all(listed.map((project) => projectReadable(project)));
+  const readable = await Promise.all(
+    listed.map((project) => projectReadable(project, correlationId)),
+  );
   const projects = listed.filter((_project, index) => readable[index] === true);
   const preferred = projects.find(
     (project) => project.path === deps.preferredProjectPath && isProjectAvailable(project),
@@ -471,9 +474,13 @@ async function pickRegisteredProjectPath(
   correlationId: string | undefined,
 ): Promise<string> {
   try {
-    return resolveRegisteredWorkspaceProjectPath(deps.store, await pickProjectPath(body, deps), {
-      preserveLegacyProjectIdentity: true,
-    });
+    return resolveRegisteredWorkspaceProjectPath(
+      deps.store,
+      await pickProjectPath(body, deps, correlationId),
+      {
+        preserveLegacyProjectIdentity: true,
+      },
+    );
   } catch (error) {
     if (error instanceof UiStoreError && error.code === "PROJECT_IDENTITY_CHANGED")
       logChatCreationIntent("refused", correlationId, "project-identity-changed");
@@ -504,13 +511,14 @@ async function chatEnvelope(
   deps: UiHandlerDeps,
   project: Project,
   chat: Chat,
+  correlationId: string | undefined,
 ): Promise<Record<string, unknown>> {
   const projects = await Promise.all(
     userFacingProjects(deps.store.listProjects(), deps.managedTaskWorkspaceRoot).map(
       async (item) => ({
         ...item,
         available: isProjectAvailable(item),
-        readable: await projectReadable(item),
+        readable: await projectReadable(item, correlationId),
       }),
     ),
   );
@@ -522,7 +530,7 @@ async function chatEnvelope(
     project: {
       ...project,
       available: isProjectAvailable(project),
-      readable: await projectReadable(project),
+      readable: await projectReadable(project, correlationId),
     },
     chat,
     messages: browserChatMessages(messages),
@@ -3531,7 +3539,7 @@ async function persistDesktopChat(
           }
         : {}),
     });
-    const envelope = await chatEnvelope(deps, project, chat);
+    const envelope = await chatEnvelope(deps, project, chat, ctx.correlationId);
     logChatCreationOpenedEvent(
       ctx.correlationId,
       readinessObservationOf(deps, chat.selectedModel) ?? "ready",
@@ -3575,7 +3583,7 @@ async function replayDesktopChat(
     if (chat === undefined) return undefined;
     const project = deps.store.listProjects().find((item) => item.path === projectPath);
     if (project === undefined) throw new UiStoreError("NOT_FOUND", "Project not found.", 404);
-    return { status: 201, body: await chatEnvelope(deps, project, chat) };
+    return { status: 201, body: await chatEnvelope(deps, project, chat, ctx.correlationId) };
   } catch (error) {
     if (error instanceof UiStoreError) {
       return {

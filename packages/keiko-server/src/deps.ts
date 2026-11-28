@@ -253,9 +253,8 @@ import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/k
 import {
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
-  type WorkspaceRootDenialReason,
 } from "./workspace-root-denial-log.js";
-import { pathDenialCause } from "./files-deny.js";
+import { pathDenialCause, pathDenialReason } from "./files-deny.js";
 import { insideProgramFolder } from "./launch-directory.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -3644,13 +3643,6 @@ export function reconcileTaskWorkspacesAtStartup(
     });
 }
 
-function seedDenialReason(
-  cause: NonNullable<ReturnType<typeof pathDenialCause>>,
-): WorkspaceRootDenialReason {
-  if (cause === "installation-payload") return "installation-payload";
-  return cause === "unresolvable-name" ? "installation-name-unresolvable" : "denied-locus";
-}
-
 function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
@@ -3684,7 +3676,7 @@ function seedInitialProject(
   const denial = pathDenialCause(normalizedPath);
   if (denial !== undefined) {
     recordWorkspaceRootDenied(
-      { reason: seedDenialReason(denial), failureKind: "DENIED", errorKind: "authority-denied" },
+      { reason: pathDenialReason(denial), failureKind: "DENIED", errorKind: "authority-denied" },
       { correlationId },
     );
     return undefined;

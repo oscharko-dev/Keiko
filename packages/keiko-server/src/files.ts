@@ -60,7 +60,12 @@ import {
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { recordFilesCopyRefusal, type FilesCopyRefusalStage } from "./files-copy-log.js";
-import { DENIED_MESSAGE, pathIsDenied, pathIsDeniedAsync } from "./files-deny.js";
+import {
+  DENIED_MESSAGE,
+  pathDeniedAsyncRecorded,
+  pathIsDenied,
+  pathIsDeniedAsync,
+} from "./files-deny.js";
 import { errorBody } from "./route-error.js";
 import { STREAMING } from "./route-outcome.js";
 import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
@@ -260,7 +265,7 @@ export async function resolveRequestRoot(
   const deferManagedAuthority = options.managedRootAuthority === "defer-to-caller";
   const managedRootInput = requestedManagedRoot(deps, rootInput);
   if (managedRootInput === undefined || deferManagedAuthority) {
-    return resolveRoot(deps.store, rootInput, deps.redactor);
+    return resolveRoot(deps.store, rootInput, deps.redactor, ctx.correlationId);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     recordManagedRootRequestDenial("managed-root-session-authority-missing", {
@@ -369,8 +374,8 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return store.listProjects().find((project) => project.path === projectId);
 }
 
-function rootPathIsDenied(rootPath: string): Promise<boolean> {
-  return pathIsDeniedAsync(rootPath);
+function rootPathIsDenied(rootPath: string, correlationId?: string): Promise<boolean> {
+  return pathDeniedAsyncRecorded(rootPath, correlationId);
 }
 
 function assertMetadataSafe(value: string, redactor: FilesMetadataRedactor): void {
@@ -391,14 +396,15 @@ export function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): 
 async function resolveRegisteredRoot(
   project: Project,
   redactor: FilesMetadataRedactor,
+  correlationId?: string,
 ): Promise<ResolvedProjectRoot> {
   assertMetadataSafe(project.path, redactor);
-  if (await rootPathIsDenied(project.path)) {
+  if (await rootPathIsDenied(project.path, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(project.path);
   assertMetadataSafe(realRoot, redactor);
-  if (await rootPathIsDenied(realRoot)) {
+  if (await rootPathIsDenied(realRoot, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return {
@@ -418,17 +424,18 @@ async function resolveRegisteredRoot(
 async function resolveArbitraryRoot(
   rootInput: string,
   redactor: FilesMetadataRedactor,
+  correlationId?: string,
 ): Promise<ResolvedProjectRoot> {
   if (!isAbsolute(rootInput)) {
     throw new FilesError(400, "BAD_ROOT", "The root must be an absolute directory path.");
   }
   assertMetadataSafe(rootInput, redactor);
-  if (await pathIsDeniedAsync(rootInput)) {
+  if (await rootPathIsDenied(rootInput, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(rootInput);
   assertMetadataSafe(realRoot, redactor);
-  if (await pathIsDeniedAsync(realRoot)) {
+  if (await rootPathIsDenied(realRoot, correlationId)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return { root: rootInput, realRoot, access: createOrdinaryWorkspaceRootAccess(realRoot) };
@@ -438,14 +445,15 @@ export async function resolveRoot(
   store: UiStore,
   rootInput: string | null,
   redactor: FilesMetadataRedactor,
+  correlationId?: string,
 ): Promise<ResolvedProjectRoot> {
   if (rootInput === null || rootInput.trim().length === 0) {
     throw new FilesError(400, "BAD_REQUEST", "The root query parameter is required.");
   }
   const project = projectFor(store, rootInput);
   return project === undefined
-    ? resolveArbitraryRoot(rootInput.trim(), redactor)
-    : resolveRegisteredRoot(project, redactor);
+    ? resolveArbitraryRoot(rootInput.trim(), redactor, correlationId)
+    : resolveRegisteredRoot(project, redactor, correlationId);
 }
 
 export function normalizeRelativePath(pathInput: unknown): string {

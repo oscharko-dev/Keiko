@@ -59,6 +59,7 @@ import {
   type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
   type ChatRole,
+  type Project,
   type UpdateChatMessagePatch,
   type UpdateChatPatch,
   type UpdateProjectPatch,
@@ -84,7 +85,7 @@ import {
   type CapsuleStampSource,
 } from "./local-knowledge-capsule-stamps.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
-import { pathIsDenied, pathIsDeniedAsync } from "./files-deny.js";
+import { pathDeniedAsyncRecorded, pathIsDenied } from "./files-deny.js";
 import {
   clearGroundedContextIndexesForConversation,
   clearGroundedContextIndexesForWorkspace,
@@ -422,7 +423,7 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 // ──────────────────────────────────────────────────────────────────────────
 
 export async function handleListProjects(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   // Managed worktrees are registered so server-owned trust, manifests, and verification resolve
@@ -433,7 +434,7 @@ export async function handleListProjects(
     deps.managedTaskWorkspaceRoot,
   );
   const projects = putPreferredProjectFirst(
-    await projectsWithWorkspaceAvailability(deps.store, visibleProjects),
+    await projectsWithWorkspaceAvailability(deps.store, visibleProjects, ctx.correlationId),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -486,6 +487,15 @@ function isExplicitProjectSelection(body: Record<string, unknown>): boolean {
 // Route 14 — POST /api/projects
 // ──────────────────────────────────────────────────────────────────────────
 
+// The project projection with its readability refusal recorded under the request's correlation id.
+function withAvailability(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  project: Project,
+): Promise<ProjectWithAvailability> {
+  return projectWithWorkspaceAvailability(deps.store, project, ctx.correlationId);
+}
+
 export async function handleCreateProject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -496,7 +506,7 @@ export async function handleCreateProject(
     const name = optionalString(body, "name");
     const explicitSelection = isExplicitProjectSelection(body);
     const normalizedPath = validateProjectPath(path, { mustExist: true });
-    if (await pathIsDeniedAsync(normalizedPath)) {
+    if (await pathDeniedAsyncRecorded(normalizedPath, ctx.correlationId)) {
       return forbiddenResult(
         "DENIED",
         "The project path is excluded from Keiko's safe read surface.",
@@ -524,7 +534,7 @@ export async function handleCreateProject(
         ctx.correlationId ?? randomUUID(),
         error,
       );
-      const projectWithAvailability = await projectWithWorkspaceAvailability(deps.store, project);
+      const projectWithAvailability = await withAvailability(deps, ctx, project);
       // The trust write and its bounded-history prune are separate store operations. If the write
       // committed before pruning failed, re-read the governed state instead of falsely telling the
       // operator that authority stayed restricted.
@@ -545,7 +555,7 @@ export async function handleCreateProject(
     }
     return {
       status: 201,
-      body: { project: await projectWithWorkspaceAvailability(deps.store, project) },
+      body: { project: await withAvailability(deps, ctx, project) },
     };
   });
 }
@@ -573,6 +583,7 @@ async function reconnectExistingProject(
     const project = await projectWithWorkspaceAvailability(
       deps.store,
       deps.store.reconnectProject(targetPath),
+      ctx.correlationId,
     );
     processServerLogSink().write(
       activityLogEvent(
@@ -624,7 +635,7 @@ export async function handleUpdateProject(
     const project = deps.store.updateProject(targetPath, patch);
     return {
       status: 200,
-      body: { project: await projectWithWorkspaceAvailability(deps.store, project) },
+      body: { project: await withAvailability(deps, ctx, project) },
     };
   });
 }

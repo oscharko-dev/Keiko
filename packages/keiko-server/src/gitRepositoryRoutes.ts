@@ -9,7 +9,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
-import { pathIsDeniedAsync } from "./files-deny.js";
+import { pathDeniedAsyncRecorded } from "./files-deny.js";
 import { assertUiDbOutsideProject, UiStoreError, validateProjectPath } from "./store/index.js";
 import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
 import {
@@ -290,10 +290,13 @@ function containsControlCharacter(input: string): boolean {
   return false;
 }
 
-async function assertDestination(candidate: string): Promise<RouteResult | string> {
+async function assertDestination(
+  candidate: string,
+  correlationId: string | undefined,
+): Promise<RouteResult | string> {
   if (!isAbsolute(candidate)) return invalid("Destination path must be absolute.");
   const normalized = normalize(candidate);
-  if (await pathIsDeniedAsync(normalized)) {
+  if (await pathDeniedAsyncRecorded(normalized, correlationId)) {
     return forbidden("The destination path is excluded from Keiko's safe repository surface.");
   }
   try {
@@ -303,7 +306,7 @@ async function assertDestination(candidate: string): Promise<RouteResult | strin
     // Expected: git clone creates the final directory.
   }
   const parent = dirname(normalized);
-  if (await pathIsDeniedAsync(parent)) {
+  if (await pathDeniedAsyncRecorded(parent, correlationId)) {
     return forbidden("The destination parent is excluded from Keiko's safe repository surface.");
   }
   try {
@@ -514,7 +517,7 @@ export function createCloneRepositoryHandler(
       }
       if (!(await repositoryDnsAllowed(repositoryUrl, lookup)))
         return forbidden("The repository host could not be verified. Use a resolvable host.");
-      const destination = await assertDestination(destinationInput);
+      const destination = await assertDestination(destinationInput, ctx.correlationId);
       if (typeof destination !== "string") return destination;
       assertUiDbOutsideProject(deps.uiDbPath, destination);
       const cloneResult = await cloneRunner(
@@ -529,7 +532,9 @@ export function createCloneRepositoryHandler(
       const project = deps.store.createProject(normalizedPath, name);
       return {
         status: 201,
-        body: { project: await projectWithWorkspaceAvailability(deps.store, project) },
+        body: {
+          project: await projectWithWorkspaceAvailability(deps.store, project, ctx.correlationId),
+        },
       };
     } catch (error) {
       return handleCloneError(ctx, deps, error);
