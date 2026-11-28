@@ -510,6 +510,22 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
+  // What a definitive provider rejection of a turn records (conversation-readiness-admission): the
+  // model's observation stays, with conversationReady withdrawn.
+  function provenConversationFailure(deps: UiHandlerDeps, modelId: string): void {
+    const holder = deps.gatewayConfig;
+    const observation = holder?.verifiedCapability(modelId);
+    if (holder === undefined || observation === undefined)
+      throw new Error("expected an observation");
+    holder.recordVerifiedCapability(
+      modelId,
+      { ...observation.fields, conversationReady: false },
+      observation.checkedAt,
+      holder.generation(),
+      new Date().toISOString(),
+    );
+  }
+
   it("selects the initialized warm OCR fallback after configuration reload without chat probes", async () => {
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
@@ -522,12 +538,18 @@ describe("strict LiteLLM field twin", () => {
       // The declared chat model goes down AFTER setup; the OCR model stays warm. The walk must
       // still land a working conversation — the rank de-prioritizes dotsocr but never bans it.
       behavior.emptyChatModels.add("qwen-chat");
+      const beforeReload = log.chatModels.length;
       deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
       initializeConfiguredConversationReadiness(deps, "corr-field-reload");
       await settleStartupConversationReadiness(deps);
+      // A configuration saved again keeps every unchanged activation and sends no model request
+      // (owner decision 2026-11-28): the reload alone cannot learn that qwen-chat went down.
+      expect(log.chatModels).toHaveLength(beforeReload);
       expect(deps.gatewayConfig?.verifiedCapability("qwen-chat")?.fields.conversationReady).toBe(
-        false,
+        true,
       );
+      // The outage is proven the way a definitive provider rejection of a turn proves it.
+      provenConversationFailure(deps, "qwen-chat");
       const mark = log.chatModels.length;
       const chat = await handleCreateDesktopChat(
         ctx("POST", { projectPath: fixture.projectDir, title: "Notbetrieb" }),
@@ -1055,12 +1077,12 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
-  it("answers the first pod question after a restart once the person activated the model", async () => {
-    // 2026-11-16 product decision: readiness observations stay process-local, and after every
-    // restart the person activates the model in Settings > Models. Until then the grounded ask —
-    // the customer's primary journey — answers "not ready" without any provider probe; after the
-    // activation it answers. This twin restarts the server half-way: same stored config, same UI
-    // DB, fresh process state.
+  it("answers the first pod question after a restart with the model the person activated before it", async () => {
+    // Owner decision 2026-11-28 (ADR-0171 D2): a model the person activated is remembered across
+    // restarts and restored without any model request while its installation, product version,
+    // configuration and credential still match. The grounded ask — the customer's primary journey —
+    // therefore answers right after the restart, with no new activation and no startup probe. This
+    // twin restarts the server half-way: same stored config, same UI DB, fresh process state.
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     // The installed Knowledge MCP catalog requires an actually verified tool-capable model.
     // This HTTP twin answers the real forced-call proof; no capability flag is injected.
@@ -1123,7 +1145,8 @@ describe("strict LiteLLM field twin", () => {
       expect(scoped.status).toBe(200);
 
       // ── Restart: dispose and rebuild against the SAME storage. The new process holds the
-      // stored gateway config but ZERO readiness observations.
+      // stored gateway config and restores the remembered activation without a model request.
+      const beforeRestart = log.chatModels.length;
       await deps.dispose?.();
       deps = buildUiHandlerDeps({
         configPath: undefined,
@@ -1134,27 +1157,22 @@ describe("strict LiteLLM field twin", () => {
       expect(deps.gatewayConfig?.present()).toBe(true);
       expectVerifiedFieldToolModel(deps);
 
-      // Tri-state models wire: a model nobody activated in this process is reported without
-      // `conversationReady`; the browser treats it as not activated.
+      // The restart sent no model request: the activation came back from its record.
+      expect(log.chatModels).toHaveLength(beforeRestart);
+
+      // Tri-state models wire: the remembered model is reported ready; a model nobody activated
+      // stays without `conversationReady`, which the browser treats as not activated.
       const models = handleModels(ctx("GET", {}), deps);
       const listed = (models.body as { models: { id: string; conversationReady?: boolean }[] })
         .models;
-      expect(listed.length).toBeGreaterThan(0);
-      for (const model of listed) {
+      expect(listed.find((model) => model.id === "qwen-chat")?.conversationReady).toBe(true);
+      const notActivated = listed.filter((model) => model.id !== "qwen-chat");
+      expect(notActivated.length).toBeGreaterThan(0);
+      for (const model of notActivated) {
         expect("conversationReady" in model).toBe(false);
       }
 
-      // First grounded ask before activation: refused as not ready, without a provider probe.
-      const beforeActivation = log.chatModels.length;
-      const refused = await handleGroundedAsk(
-        ctx("POST", { chatId, content: "Was steht im Handbuch zu KFZ?" }),
-        deps,
-      );
-      expect(refused.status).toBe(400);
-      expect(JSON.stringify(refused.body)).toContain("CONVERSATION_MODEL_NOT_READY");
-      expect(log.chatModels).toHaveLength(beforeActivation);
-
-      await activateFieldModel(deps, "qwen-chat");
+      // The first grounded ask after the restart answers without a new activation.
       const asked = await handleGroundedAsk(
         ctx("POST", { chatId, content: "Was steht im Handbuch zu KFZ?" }),
         deps,

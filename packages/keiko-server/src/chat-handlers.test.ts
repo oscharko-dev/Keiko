@@ -691,9 +691,11 @@ describe("desktop chat production gateway reuse", () => {
         parseGatewayConfig({
           providers: [
             {
+              // A changed credential discards the fixture's activation of this model (owner
+              // decision 2026-11-28); an unchanged one would keep it ready across the save.
               modelId: "breaker-chat",
               baseUrl: "https://provider.example.invalid/v1",
-              apiKey: "fake-test-key",
+              apiKey: "fake-rotated-test-key",
               timeoutMs: 5_000,
               maxRetries: 0,
               retryBaseDelayMs: 1,
@@ -720,6 +722,7 @@ describe("desktop chat production gateway reuse", () => {
         runtimeConfig.generation(),
       );
       expect(currentConversationReady(fixture.deps, "ready-chat")).toBe(true);
+      expect(currentConversationReady(fixture.deps, "breaker-chat")).toBe(false);
 
       const created = await handleCreateDesktopChat(
         requestContext({ projectPath: fixture.projectPath, title: "defaulted model" }),
