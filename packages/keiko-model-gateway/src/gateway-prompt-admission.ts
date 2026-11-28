@@ -70,7 +70,7 @@ const USAGE_REJECTED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["implausibly-low"],
+      values: ["implausibly-low", "implausibly-high"],
     },
     reportedPromptTokens: { type: "integer", dataClass: "count", required: true },
     localPromptTokens: { type: "integer", dataClass: "count", required: true },
@@ -82,7 +82,10 @@ const USAGE_REJECTED = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-context-admission"],
-  proofIds: ["gateway.prompt.usage-rejected.implausibly-low"],
+  proofIds: [
+    "gateway.prompt.usage-rejected.implausibly-low",
+    "gateway.prompt.usage-rejected.implausibly-high",
+  ],
   releaseImpact: "patch",
 });
 
@@ -288,14 +291,14 @@ export class GatewayPromptAdmission {
     this.pending = undefined;
     if (mark === undefined) return;
     const outcome = this.options.calibration?.record(mark, providerPromptTokens);
-    if (outcome !== "implausible") return;
+    if (outcome !== "implausibly-low" && outcome !== "implausibly-high") return;
     // Counts and a digest only: the provider's figure is too small to calibrate from (#4491).
     this.log.write(
       activityLogEvent(
         USAGE_REJECTED,
         { correlationId: this.options.correlationId },
         {
-          reason: "implausibly-low",
+          reason: outcome,
           reportedPromptTokens: providerPromptTokens,
           localPromptTokens: mark.localTokens,
           modelIdDigest: sha256Hex(this.options.provider.modelId).slice(0, 16),

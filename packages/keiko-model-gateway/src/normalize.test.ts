@@ -82,6 +82,13 @@ describe("normalizeChatResponse prompt-cache usage", () => {
     ).toBeUndefined();
   });
 
+  it("cannot tell an excluded cache that is the smaller part from an included one (known limit)", () => {
+    // Anthropic-style input 5000 with cache_read 3000 reads as already included: no total.
+    expect(
+      total({ prompt_tokens: 5_000, completion_tokens: 5, cache_read_input_tokens: 3_000 }),
+    ).toBe(undefined);
+  });
+
   it("reports no total for a usage without cache fields", () => {
     expect(total({ prompt_tokens: 10, completion_tokens: 5 })).toBeUndefined();
   });

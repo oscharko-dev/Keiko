@@ -26234,7 +26234,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["implausibly-low"],
+        values: ["implausibly-low", "implausibly-high"],
       },
       reportedPromptTokens: {
         type: "integer",
@@ -26257,7 +26257,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "state",
     analyzerProjection: "timeline",
     failureClasses: ["gateway-context-admission"],
-    proofIds: ["gateway.prompt.usage-rejected.implausibly-low"],
+    proofIds: [
+      "gateway.prompt.usage-rejected.implausibly-low",
+      "gateway.prompt.usage-rejected.implausibly-high",
+    ],
     releaseImpact: "patch",
   },
   {

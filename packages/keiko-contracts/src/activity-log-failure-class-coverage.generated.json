@@ -30545,7 +30545,10 @@
             "frames": false,
             "causeChain": false
           },
-          "proofIds": ["gateway.prompt.usage-rejected.implausibly-low"],
+          "proofIds": [
+            "gateway.prompt.usage-rejected.implausibly-low",
+            "gateway.prompt.usage-rejected.implausibly-high"
+          ],
           "replayReferences": [],
           "missingObligations": []
         }

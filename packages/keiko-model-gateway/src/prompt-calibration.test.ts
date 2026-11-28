@@ -154,8 +154,8 @@ describe("usage-calibrated prompt admission", () => {
 
   it("still refuses a true overflow when the calibrated estimate exceeds the budget", async () => {
     const ledger = new PromptCalibrationLedger();
-    const first = conversation(30_000);
-    await turn(ledger, first, inputBudget - 1_000);
+    const first = conversation(inputBudget - 12_000);
+    await turn(ledger, first, Math.round(localTokens(first) * 1.05));
     const events: ModelGatewayLogEvent[] = [];
     await expect(turn(ledger, extended(first, 20_000), undefined, events)).rejects.toMatchObject({
       code: "GATEWAY_CONTEXT_OVERFLOW",
@@ -204,6 +204,25 @@ describe("usage-calibrated prompt admission", () => {
       expect(lastAdmission(events)).not.toHaveProperty("calibratedPromptTokens");
     },
   );
+
+  it("logs an inflated report as implausibly-high and admits the next prompt locally", async () => {
+    const ledger = new PromptCalibrationLedger();
+    const first = conversation(20_000);
+    const reported = localTokens(first) * 3;
+    const events: ModelGatewayLogEvent[] = [];
+    await turn(ledger, first, reported, events);
+    const rejected = events.find((event) => event.op === "gateway.prompt.usage-rejected");
+    if (rejected === undefined) throw new Error("Expected the rejected-usage line");
+    expect(
+      expectActivityLogProof(
+        "gateway.prompt.usage-rejected.implausibly-high",
+        formatActivityLogProofLine(rejected),
+      ),
+    ).toMatchObject({ reportedPromptTokens: reported });
+    const next: ModelGatewayLogEvent[] = [];
+    await turn(ledger, extended(first, 1_000), undefined, next);
+    expect(lastAdmission(next)).not.toHaveProperty("calibratedPromptTokens");
+  });
 
   it("keeps an earlier plausible record when a later report is implausible", async () => {
     const ledger = new PromptCalibrationLedger();
@@ -296,8 +315,8 @@ describe("plausibility floor that learns the model's own ratio", () => {
     // 0.28 of the local estimate clears the unlearned quarter floor, but is under half of 0.61.
     const partlyCached = Math.round((GEMMA_LOCAL + 4_000) * 0.28);
     expect(partlyCached).toBeGreaterThan((GEMMA_LOCAL + 4_000) * MIN_PLAUSIBLE_USAGE_RATIO);
-    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "b"), partlyCached)).toBe("implausible");
-    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "c"), 1)).toBe("implausible");
+    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "b"), partlyCached)).toBe("implausibly-low");
+    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "c"), 1)).toBe("implausibly-low");
     expect(new PromptCalibrationLedger().record(mark(GEMMA_LOCAL + 4_000, "b"), partlyCached)).toBe(
       "recorded",
     );
@@ -305,15 +324,36 @@ describe("plausibility floor that learns the model's own ratio", () => {
 
   it("falls back to the absolute floor for a model with no learned ratio", () => {
     const ledger = new PromptCalibrationLedger();
-    expect(ledger.record(mark(GEMMA_LOCAL, "a"), 200)).toBe("implausible");
+    expect(ledger.record(mark(GEMMA_LOCAL, "a"), 200)).toBe("implausibly-low");
     expect(ledger.record(mark(GEMMA_LOCAL, "a"), GEMMA_REPORTED)).toBe("recorded");
+  });
+
+  it("is not poisoned by one report near 1: honest 0.40 reports stay calibrated", () => {
+    const ledger = new PromptCalibrationLedger();
+    // Template or tool-schema overhead on a short prompt can make a single ratio near 1.
+    expect(ledger.record(mark(2_000, "a"), 1_990)).toBe("recorded");
+    for (const [index, local] of [30_000, 42_000, 55_000].entries())
+      expect(ledger.record(mark(local, `h${String(index)}`), Math.round(local * 0.4))).toBe(
+        "recorded",
+      );
+    // The floor stays bounded, so a cache-excluded report is still refused.
+    expect(ledger.record(mark(60_000, "x"), 300)).toBe("implausibly-low");
+  });
+
+  it("refuses an inflated report above twice the local estimate and never learns from it", () => {
+    const ledger = new PromptCalibrationLedger();
+    expect(ledger.record(mark(9_000, "a"), 30_000)).toBe("implausibly-high");
+    expect(ledger.record(mark(9_000, "b"), 18_000)).toBe("recorded");
+    expect(ledger.record(mark(9_000, "c"), 18_001)).toBe("implausibly-high");
+    // The refused figure left nothing behind to over-estimate a later prompt.
+    expect(ledger.record(mark(9_000, "d"), 5_400)).toBe("recorded");
   });
 
   it("lets a model whose honest ratio is low keep reporting it", () => {
     const ledger = new PromptCalibrationLedger();
     expect(ledger.record(mark(10_000, "a"), 3_000)).toBe("recorded");
     expect(ledger.record(mark(12_000, "b"), 3_600)).toBe("recorded");
-    expect(ledger.record(mark(12_000, "c"), 1_000)).toBe("implausible");
+    expect(ledger.record(mark(12_000, "c"), 1_000)).toBe("implausibly-low");
   });
 
   it("keeps calibrating a conversation from the Gemma report end to end", async () => {

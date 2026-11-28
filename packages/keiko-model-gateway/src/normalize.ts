@@ -61,7 +61,10 @@ function reportedReasoningTokens(usage: Record<string, unknown>): number | undef
 // Anthropic-style `cache_read_input_tokens` / `cache_creation_input_tokens` (excluded from the
 // input count of the native API). A figure is cache-exclusive when it exceeds `prompt_tokens`, so
 // the prompt's size is then the two added; a `prompt_tokens` that already covers the cached tokens
-// is left alone, so a provider that includes them is never counted twice.
+// is left alone, so a provider that includes them is never counted twice. Known limit: the two
+// layouts cannot be told apart when the cache is the smaller part (Anthropic-style input 5000 with
+// cache_read 3000 is read as already included), which under-counts; the ledger's plausibility
+// floor is the backstop.
 function reportedTotalPromptTokens(usage: Record<string, unknown>): number | undefined {
   const promptTokens = asCount(usage.prompt_tokens);
   const details = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {};

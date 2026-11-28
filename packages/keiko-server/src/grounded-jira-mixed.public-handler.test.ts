@@ -420,6 +420,7 @@ function runtime(
     rmSync(state, { recursive: true, force: true });
   });
   configure(deps);
+  fixtureDeps = deps;
   if (!demandDiscovery) preselectKnownFixtureTools(deps.jiraChatCatalog, selectedTool);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Mixed Chat", MODEL);
@@ -983,14 +984,24 @@ function estimatedPromptTokens(body: string): number {
     description: tool.description ?? "",
     parameters: tool.parameters,
   }));
-  return countGatewayPromptTokens({ messages: wire.messages ?? [], tools });
+  // Counted as the gateway counts its own admission: with the model's token accounting.
+  const profile =
+    fixtureDeps === undefined ? undefined : currentContextProfileForModel(fixtureDeps, MODEL);
+  return countGatewayPromptTokens(
+    { messages: wire.messages ?? [], tools },
+    profile?.tokenAccounting,
+    {
+      contextWindow: profile?.maxInputTokens,
+    },
+  );
 }
+/** The deps of the runtime under test, so the fixture provider counts with its model's profile. */
+let fixtureDeps: UiHandlerDeps | undefined;
 /**
- * For the cases that deliberately probe the server's window and grant arithmetic with a reported
- * prompt usage that is NOT the size of the prompt (a whole window, or a figure straddling it, for a
- * prompt of a few thousand tokens). The usage-calibrated admission would take such a figure for the
- * prefix's real size, so these cases leave the gateway to estimate locally; the calibrated admission
- * is pinned in the gateway's prompt-calibration suite and by the live-calibration case below.
+ * Only for the accounting pin that equates the server's charge with the gateway's admitted cost.
+ * Synthetic usage far from the prompt's size (one token, or a whole window for a prompt of a few
+ * thousand tokens) needs no stub: the ledger refuses a report outside its plausibility band and the
+ * gateway then estimates locally, which is what these cases measure.
  */
 function probeWindowArithmeticIndependentOfPriorUsage(): void {
   vi.spyOn(PromptCalibrationLedger.prototype, "calibrate").mockReturnValue(undefined);
@@ -1062,7 +1073,6 @@ function provider(
   options: ProviderOptions = {},
 ): string[] {
   const requests: string[] = [];
-  if (options.usage !== undefined) probeWindowArithmeticIndependentOfPriorUsage();
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((_url, init) => {
@@ -1257,15 +1267,20 @@ it.each(["input", "output"] as const)(
 
 it("admits the answer after a tool round from the provider's realistic usage with calibration live", async () => {
   const f = runtime();
-  const calibrate = vi.spyOn(PromptCalibrationLedger.prototype, "calibrate");
   const requests = provider(["tool", "answer"]);
   const result = await askFeatureAndProjects(f);
   expect(result.status).toBe(200);
   expect(requests).toHaveLength(2);
   const reported = estimatedPromptTokens(requests[0] ?? "{}");
-  const calibrated = calibrate.mock.results.map((entry) => entry.value as number | undefined);
-  // The tool round's reported usage became the answer prompt's floor; nothing was refused.
-  expect(calibrated.some((tokens) => tokens !== undefined && tokens >= reported)).toBe(true);
+  // The tool round's reported usage became the answer prompt's floor, and nothing was refused.
+  const calibrated = gatewayPromptAdmissions(f.deps).filter(
+    (entry) => entry.counterSource === "usage-calibrated",
+  );
+  expect(calibrated).toHaveLength(1);
+  expect(calibrated[0]?.calibratedPromptTokens).toBeGreaterThanOrEqual(reported);
+  expect(calibrated[0]).toMatchObject({ state: "admitted" });
+  const raw = readPersistedActivityLog(dirname(f.deps.uiDbPath ?? ""));
+  expect(persistedActivityLogLines(raw, "gateway.prompt.usage-rejected")).toHaveLength(0);
   expect(f.jiraRequests).toEqual(["GET"]);
 });
 
