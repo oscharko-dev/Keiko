@@ -9645,18 +9645,17 @@ describe("verification truth at task settlement", () => {
   // #4271 lab (T39): a refusal for a target nobody selected is not an impossible selected verifier.
   // Replaces the old pin that sent the model back with a blind continuation: no check ran, so there
   // is nothing to repair; the run settles with the gap "no check ran" (#4491).
-  it("names no-check-run, without a continuation, when the verifier refused a target nobody selected", async () => {
+  // Follows the 2026-11-28 owner decision: the run keeps its reported outcome, the gap stays logged.
+  it("settles succeeded, naming no-check-run in the log without a continuation, when the verifier refused a target nobody selected", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
     finish();
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        state: "failed",
-        failureCode: "verification-not-evidenced",
-        verificationGap: "no-check-run",
-      });
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBeUndefined();
+    expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBeUndefined();
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(skipLine(log.records)).toMatchObject({
       state: "skipped",
@@ -9665,8 +9664,10 @@ describe("verification truth at task settlement", () => {
     });
   });
 
+  // Follows the 2026-11-28 owner decision: the edit is recorded (a check is still owed), the run keeps
+  // its reported outcome because no check ran at all.
   it("records an edit that applied during a script-trust decision wait", async () => {
-    const { f, finish } = await runningTask();
+    const { f, log, finish } = await runningTask();
     await f.orchestrator.ingest(taskSubmitted());
     await f.orchestrator.ingest(operatorDecisionEvent());
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("paused");
@@ -9674,11 +9675,17 @@ describe("verification truth at task settlement", () => {
     await f.orchestrator.ingest(operatorDecisionEvent("limit-reached"));
     finish();
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        state: "failed",
-        failureCode: "verification-not-evidenced",
-      });
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    const line = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected the not-evidenced gap line",
+    );
+    expect(line.extra?.gap).toBe("no-check-run");
   });
 
   it("counts a genuine passing summary during a script-trust decision wait", async () => {
@@ -9732,6 +9739,8 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  // Follows the 2026-11-28 owner decision: no check after the last change is a no-check-run gap, which
+  // no longer fails the run.
   it("rejects a passing completion from a verifier admitted before the final edit", async () => {
     const { f, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
@@ -9740,11 +9749,9 @@ describe("verification truth at task settlement", () => {
     await verification(f, "passed", undefined, "a".repeat(64), admittedRevision);
     finish();
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        state: "failed",
-        failureCode: "verification-not-evidenced",
-      });
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBeUndefined();
   });
 
   it("never clears a failed target merely because its next attempt was skipped", async () => {
@@ -9767,11 +9774,15 @@ describe("verification truth at task settlement", () => {
       await verification(f, "failed", undefined, unidentified === "both" ? null : "a".repeat(64));
       await verification(f, "passed", undefined, null);
       finish();
+      // Follows the 2026-11-28 owner decision. An identified failed target stays check-failed and
+      // fails the run; a summary with no target digest never reaches the ledger, so "both" leaves
+      // no check evidenced at all (no-check-run) and the run keeps its reported outcome.
       await vi.waitFor(() => {
-        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-          state: "failed",
-          failureCode: "verification-not-evidenced",
-        });
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject(
+          unidentified === "both"
+            ? { state: "succeeded" }
+            : { state: "failed", failureCode: "verification-not-evidenced" },
+        );
       });
     },
   );
@@ -9797,9 +9808,11 @@ describe("verification truth at task settlement", () => {
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "passed", undefined, "b".repeat(64));
     finish();
+    // Follows the 2026-11-28 owner decision: target "a" ran no check after the edit (no-check-run).
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBeUndefined();
   });
 
   it("accepts fresh passes for all selected targets after the repair", async () => {
@@ -9865,17 +9878,14 @@ describe("verification truth at task settlement", () => {
   });
 
   // A partial summary with no executed step is no failed check: nothing ran, so nothing is repaired.
-  it("does not report success after a partial verification and sends no continuation", async () => {
+  it("does not claim a check after a partial verification and sends no continuation", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "partial");
     finish();
+    // Follows the 2026-11-28 owner decision: a partial summary ran no check, which no longer fails.
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        state: "failed",
-        failureCode: "verification-not-evidenced",
-        verificationGap: "no-check-run",
-      });
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(skipLine(log.records)).toMatchObject({ skipReason: "no-failed-check" });
@@ -9886,9 +9896,11 @@ describe("verification truth at task settlement", () => {
     await verification(f, "passed");
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     finish();
+    // Follows the 2026-11-28 owner decision: no check after the last edit is a no-check-run gap.
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(f.orchestrator.getSnapshot("run-1")?.verificationGap).toBeUndefined();
   });
 
   it("does not count a passing summary with no executed checks", async () => {
@@ -9896,8 +9908,9 @@ describe("verification truth at task settlement", () => {
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "passed", { passed: 0, failed: 0, skipped: 0 });
     finish();
+    // Follows the 2026-11-28 owner decision: a pass with no executed check is a no-check-run gap.
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
   });
 
@@ -9929,22 +9942,27 @@ describe("verification truth at task settlement", () => {
     expect(skipLine(log.records)).toMatchObject({ state: "skipped", skipReason: "docs-only" });
   });
 
-  it("still requires a check when a changed path is code or none is named", async () => {
+  it("still owes a check when a changed path is code or none is named", async () => {
     const code = await runningTask();
     code.f.orchestrator.observeEditOutcome("run-1", {
       kind: "applied",
       changedPaths: ["README.md", "src/main.ts"],
     });
     code.finish();
+    // Follows the 2026-11-28 owner decision: the check is still owed (no docs-only skip), but its
+    // absence no longer fails the run.
     await vi.waitFor(() => {
-      expect(code.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      expect(code.f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(code.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(code.log.records)).toMatchObject({ gap: "no-check-run" });
     const unnamed = await runningTask();
     unnamed.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     unnamed.finish();
     await vi.waitFor(() => {
-      expect(unnamed.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      expect(unnamed.f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(skipLine(unnamed.log.records)).toMatchObject({ gap: "no-check-run" });
   });
 
   it("keeps an earlier passing check when a later edit changed documentation alone", async () => {
@@ -9958,48 +9976,47 @@ describe("verification truth at task settlement", () => {
     });
   });
 
-  // #4491 part 5: code changed and no check ran after it. No continuation (nothing to repair); the
-  // run settles with the concrete gap, on its snapshot, its stream frame and its settled line.
-  it("settles a code change no check followed with the gap no-check-run and no continuation", async () => {
+  // #4491 part 5, amended by the 2026-11-28 owner decision: code changed and no check ran after it.
+  // No continuation (nothing to repair) and no failure: the run keeps the outcome its turn reported,
+  // with no failure code, no gap on its snapshot or stream frame, and the gap named body-free in the log.
+  it("settles a code change no check followed succeeded, naming no-check-run only in the log", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
     finish();
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        state: "failed",
-        failureCode: "verification-not-evidenced",
-        verificationGap: "no-check-run",
-      });
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    const snapshot = f.orchestrator.getSnapshot("run-1");
+    expect(snapshot?.failureCode).toBeUndefined();
+    expect(snapshot?.verificationGap).toBeUndefined();
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(skipLine(log.records)).toMatchObject({
       skipReason: "no-failed-check",
       gap: "no-check-run",
     });
+    const line = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected the body-free not-evidenced gap line",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ state: "not-evidenced", runId: "run-1", gap: "no-check-run" });
     const settled = requireLoggedEvent(
       log.records.find(
         (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
       ),
       "Expected the terminal settlement line",
     );
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.run.settled.emitted-line",
-        formatActivityLogProofLine(settled),
-      ),
-    ).toMatchObject({
-      failureCode: "verification-not-evidenced",
-      verificationGap: "no-check-run",
-      // A missing check is the run's verification verdict, never a Keiko fault (#4491 lab).
-      errorKind: "validation-failed",
-    });
-    expect(f.eventHub.publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "status",
-        state: "failed",
-        failureCode: "verification-not-evidenced",
-        verificationGap: "no-check-run",
-      }),
+    expect(formatActivityLogProofLine(settled)).not.toContain("verification-not-evidenced");
+    expect(f.eventHub.publish).not.toHaveBeenCalledWith(
+      expect.objectContaining({ failureCode: "verification-not-evidenced" }),
     );
   });
 
@@ -10119,11 +10136,9 @@ describe("verification truth at task settlement", () => {
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/b.ts"] });
     await summarized(f, 2, 2, { editRevision: stale });
     finish();
+    // Follows the 2026-11-28 owner decision: the stale summary leaves no-check-run, which no longer fails.
     await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        state: "failed",
-        verificationGap: "no-check-run",
-      });
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
     expect(skipLine(log.records)).toMatchObject({ skipReason: "no-failed-check" });
   });

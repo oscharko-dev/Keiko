@@ -306,6 +306,14 @@ export class CodingRuntimeRunEffortLedger {
   }
 
   /**
+   * A run that settled succeeded without any check after its last code change hands that debt on,
+   * so the task's next follow-up still owes the check although the run itself did not fail.
+   */
+  handVerificationDebtOn(runId: string): void {
+    retained(this.settledDebts, runId, () => true as const, MAX_SETTLED_DEBTS);
+  }
+
+  /**
    * An applied edit of the run. An edit that changed documentation alone is no change a check could
    * contradict: it demands no verification and leaves the run's earlier results standing; any edit
    * that changed code, or named no path, demands one after it (#4491).

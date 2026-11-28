@@ -1079,32 +1079,16 @@ function pipelineSessionCookie(base: string): Promise<string> {
   return functionalSessionCookie(base, assertResponseMetadata);
 }
 
-// How a run settles when its own end lands before the operator's stop. A run that changed code and
-// ran no check owes that check: it settles failed with `verification-not-evidenced` (#4491), never
-// succeeded, so a journey that edits code names that outcome exactly.
-interface SelfSettlement {
-  readonly state: "succeeded" | "failed";
-  readonly failureCode?: "verification-not-evidenced";
-}
-
-const SETTLED_CLEAN: SelfSettlement = { state: "succeeded" };
-const SETTLED_UNVERIFIED_EDIT: SelfSettlement = {
-  state: "failed",
-  failureCode: "verification-not-evidenced",
-};
-
-async function stopRun(
-  base: string,
-  runId: string,
-  selfSettled: SelfSettlement = SETTLED_CLEAN,
-): Promise<void> {
+async function stopRun(base: string, runId: string): Promise<void> {
   const stopped = await post(base, `/api/coding-workbench/runtime/runs/${runId}/stop`, {
     requestId: runId,
   });
   expect(stopped.status).toBe(200);
   // Under the causal-terminal contract the child's own completion may settle the run before the
   // operator's stop lands. Cancelled and the journey's own settlement are legitimate here; anything
-  // else (another failure, still running, missing snapshot) stays a hard failure.
+  // else (another failure, still running, missing snapshot) stays a hard failure. A run that changed
+  // code and ran no check settles succeeded like any other: since the 2026-11-28 owner decision a
+  // missing check is recorded on the Activity Log and no longer fails the run (#4491).
   const body = (await stopped.json()) as { readonly runId?: string; readonly state?: string };
   if (body.state === "cancelled") {
     expect(body).toMatchObject({ runId, state: "cancelled" });
@@ -1123,7 +1107,7 @@ async function stopRun(
     runId: snapshot.runId,
     state: snapshot.state,
     failureCode: snapshot.failureCode,
-  }).toEqual({ runId, state: selfSettled.state, failureCode: selfSettled.failureCode });
+  }).toEqual({ runId, state: "succeeded", failureCode: undefined });
 }
 
 let questionPollSequence = 0;
@@ -2003,7 +1987,8 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         const probe = await startEscapeProbe("change", log);
         // The run settles on its own when its turn ends. Its shell changed a file that no edit
         // settlement reported and ran no check, so the run's step change calls for one (#3901)
-        // and the run ends failed (verification-not-evidenced).
+        // and the run keeps its reported outcome: the missing check is logged, no longer a failure
+        // (the 2026-11-28 owner decision).
         await vi.waitFor(
           () => {
             expect(settledStates(log, probe.runId), settledLines(log, probe.runId)).toHaveLength(1);
@@ -2014,7 +1999,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           settledStates(log, probe.runId),
           `${JSON.stringify(probeFacts(probe.transcripts))} ${probe.midTurnRevert}` +
             settledLines(log, probe.runId),
-        ).toEqual(["failed"]);
+        ).toEqual(["succeeded"]);
         // A settled run that changed files keeps its runtime for the undo window (#3904 AC3, 30
         // minutes), and what its shell started runs on with it.
         expect(
@@ -2175,8 +2160,8 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       );
       // Both journeys edit code and run no check: the index journey through its proposals, the
       // probe journey by appending to src/example.ts before it reads the diff. A run that ends
-      // before the stop therefore owes the verification.
-      await stopRun(pipeline.baseUrl, runId, SETTLED_UNVERIFIED_EDIT);
+      // before the stop settles with its reported outcome all the same.
+      await stopRun(pipeline.baseUrl, runId);
       return { transcript: transcripts.join("\n"), workspace: fixture.workspace };
     }
 
@@ -2342,8 +2327,8 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           },
           { timeout: 180_000, interval: 200 },
         );
-        // The journey edits code and runs no check, so a run that ends before the stop owes it.
-        await stopRun(pipeline.baseUrl, runId, SETTLED_UNVERIFIED_EDIT);
+        // The journey edits code and runs no check; a run that ends before the stop keeps its outcome.
+        await stopRun(pipeline.baseUrl, runId);
         const transcript = transcripts.join("\n");
         // The shell's `git checkout -b` was refused with the pointer to the governed tool.
         expect(transcript).toContain("Create and switch to a task branch with keiko_git_branch");

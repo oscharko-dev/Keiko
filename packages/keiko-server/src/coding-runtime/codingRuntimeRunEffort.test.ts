@@ -475,4 +475,20 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.carriesVerificationDebt("paid")).toBe(false);
     expect(ledger.carriesVerificationDebt("never-seen")).toBe(false);
   });
+
+  // Follows the 2026-11-28 owner decision: a run that ended succeeded without any check after its
+  // last code change is no failure, but its follow-up still owes the check.
+  it("hands the debt of a run that ran no check on to its follow-up although it did not fail", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("edited");
+    ledger.edit("edited", ["src/a.ts"]);
+    expect(ledger.needsVerification("edited")).toBe(true);
+    ledger.handVerificationDebtOn("edited");
+    ledger.forget("edited");
+    expect(ledger.carriesVerificationDebt("edited")).toBe(true);
+    ledger.begin("docs");
+    ledger.edit("docs", ["README.md"]);
+    ledger.forget("docs");
+    expect(ledger.carriesVerificationDebt("docs")).toBe(false);
+  });
 });

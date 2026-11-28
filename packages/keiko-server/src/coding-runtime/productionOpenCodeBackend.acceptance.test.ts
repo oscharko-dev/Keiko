@@ -408,25 +408,26 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
   // tester runs them; the outcome must still follow what the run itself verified.
   {
     id: "skip-check",
-    title: "never reports success when the run skips its check after the edit",
-    acceptanceCase: unverified("supervised-coding", "fixed", "skip-check"),
+    title: "settles the reported outcome, naming the gap in the log, when the run skips its check",
+    acceptanceCase: {
+      ...unverified("supervised-coding", "fixed", "skip-check"),
+      expected: "succeeded",
+    },
     check: (observed): void => {
-      expectNotVerified(observed, "supervised-coding", {
-        testsPassOutsideKeiko: true,
-        continuation: "no-failed-check",
-      });
+      expectNoCheckAfterEdit(observed, "supervised-coding");
       expect(observed.verificationSummaries).toEqual(["test:failed"]);
     },
   },
   {
     id: "stale-check",
-    title: "never counts a check that passed before the final edit",
-    acceptanceCase: unverified("autonomous-delivery", "fixed", "stale-check"),
+    title:
+      "never counts a check that passed before the final edit, and settles the reported outcome",
+    acceptanceCase: {
+      ...unverified("autonomous-delivery", "fixed", "stale-check"),
+      expected: "succeeded",
+    },
     check: (observed): void => {
-      expectNotVerified(observed, "autonomous-delivery", {
-        testsPassOutsideKeiko: true,
-        continuation: "no-failed-check",
-      });
+      expectNoCheckAfterEdit(observed, "autonomous-delivery");
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:passed"]);
     },
   },
@@ -748,6 +749,20 @@ function expectNotVerified(
       : [`skipped:${continuation}`, "not-evidenced"],
   );
   expectEveryCase(observed, mode, expected.projectCheckCount);
+}
+
+// Follows the 2026-11-28 owner decision: a run whose only gap is that no check ran after its last
+// change keeps the outcome its turn reported. It fails no more and carries no failure code; the
+// Activity Log names the gap (a skipped continuation, then the not-evidenced line).
+function expectNoCheckAfterEdit(observed: AcceptanceObservation, mode: AcceptanceMode): void {
+  const context = JSON.stringify(observed);
+  expect(observed.state, context).toBe("succeeded");
+  expect(observed.settledState, context).toBe("succeeded");
+  expect(observed.failureCode, context).toBeUndefined();
+  expect(observed.editLanded, context).toBe(true);
+  expect(observed.testerCheckExitCode, context).toBe(0);
+  expect(observed.continuations, context).toEqual(["skipped:no-failed-check", "not-evidenced"]);
+  expectEveryCase(observed, mode);
 }
 
 function continuationWord(state: unknown, skipReason: unknown): string {

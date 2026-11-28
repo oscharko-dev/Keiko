@@ -3775,15 +3775,31 @@ export class CodingRuntimeOrchestrator {
     // Read before the stop: the facts describe the model call that ended this turn (F9). An
     // escalation of the run's refused edits wins over them: it names the run's cause (F5).
     const cause = escalation ?? this.terminalFailure(runId, outcome);
-    const verificationFailure: VerificationFailureSettlement | undefined = verificationMissing
-      ? {
-          state: "failed",
-          failureCode: "verification-not-evidenced",
-          gap: this.verificationGap(runId),
-          ...this.verificationGapDetail(runId),
-        }
+    const verificationFailure = verificationMissing
+      ? this.verificationFailureSettlement(runId)
       : undefined;
     await this.stopAndSettleTask(runId, outcome, cause, verificationFailure);
+  }
+
+  /**
+   * The settlement of a run that changed code and has no passing check after its last change. Only
+   * a check that failed, could not start or ran out of budget fails the run; a run that simply ran
+   * no check keeps the outcome its turn reported (owner decision 2026-11-28), the gap recorded
+   * body-free on the Activity Log and the debt handed to the task's next follow-up.
+   */
+  private verificationFailureSettlement(runId: string): VerificationFailureSettlement | undefined {
+    const gap = this.verificationGap(runId);
+    if (gap === "no-check-run") {
+      this.recordVerificationNotEvidenced(runId, gap);
+      this.effort.handVerificationDebtOn(runId);
+      return undefined;
+    }
+    return {
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+      gap,
+      ...this.verificationGapDetail(runId),
+    };
   }
 
   private async stopAndSettleTask(

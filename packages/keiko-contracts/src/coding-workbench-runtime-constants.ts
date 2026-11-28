@@ -219,7 +219,8 @@ export type CodingWorkbenchTurnFailureCode =
 /**
  * Why a run that changed code settled `verification-not-evidenced` (#4491): the concrete gap the
  * Workbench names instead of a generic "not verified". `no-check-run`: no check ran after the last
- * change. `check-failed`: a check ran after the last change and failed. `check-not-started`: a check
+ * change; since the 2026-11-28 owner decision this gap no longer fails a run, it is recorded on the
+ * Activity Log and the value stays admissible only for a row an older Keiko stored. `check-failed`: a check ran after the last change and failed. `check-not-started`: a check
  * could not start (it was refused or blocked). `budget-exhausted`: the run's tool-call or patch
  * budget was used up before a check ran. A closed word, never inferred from text.
  */
