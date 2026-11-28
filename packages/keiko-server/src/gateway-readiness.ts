@@ -676,6 +676,27 @@ function logAutomaticReadinessStarted(
   );
 }
 
+// What the one-line readiness outcome operations below share: who owns them and how they project.
+const READINESS_OUTCOME_OPERATION_IDENTITY = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "gateway",
+  owner: "keiko-server",
+} as const;
+const READINESS_OUTCOME_OPERATION_SHAPE = {
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  releaseImpact: "patch",
+} as const;
+
+// The completeness and loss accounting that each one-line outcome operation below states.
+const OUTCOME_LINE_ACCOUNTING = {
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const;
+
 // #4351: what a person's explicit pick of a model did, under the pick's own correlation id.
 const SELECTION_CHECK_OUTCOMES = [
   "started",
@@ -689,11 +710,8 @@ const SELECTION_CHECK_OUTCOMES = [
 type SelectionCheckOutcome = (typeof SELECTION_CHECK_OUTCOMES)[number];
 
 const GATEWAY_READINESS_SELECTION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...READINESS_OUTCOME_OPERATION_IDENTITY,
   op: "gateway.readiness.selection",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "gateway-readiness.logSelectionOutcome",
   fields: {
     outcome: {
@@ -702,15 +720,39 @@ const GATEWAY_READINESS_SELECTION_OPERATION = defineActivityLogOperation({
       required: true,
       values: SELECTION_CHECK_OUTCOMES,
     },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...OUTCOME_LINE_ACCOUNTING,
   },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["gateway-readiness"],
   proofIds: ["gateway.readiness.selection.line"],
-  releaseImpact: "patch",
+  ...READINESS_OUTCOME_OPERATION_SHAPE,
+});
+
+// Manual model activation (ADR-0171 D2, amended 2026-11-16): what a person's deactivation of a
+// chat model did, under the request's own correlation id.
+const DEACTIVATION_OUTCOMES = [
+  "deactivated",
+  "not-activated",
+  "check-running",
+  "unknown-model",
+  "bad-request",
+  "record-failed",
+] as const;
+type DeactivationOutcome = (typeof DEACTIVATION_OUTCOMES)[number];
+
+const GATEWAY_READINESS_DEACTIVATION_OPERATION = defineActivityLogOperation({
+  ...READINESS_OUTCOME_OPERATION_IDENTITY,
+  op: "gateway.readiness.deactivation",
+  emitter: "gateway-readiness.logDeactivationOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: DEACTIVATION_OUTCOMES,
+    },
+    ...OUTCOME_LINE_ACCOUNTING,
+  },
+  proofIds: ["gateway.readiness.deactivation.line"],
+  ...READINESS_OUTCOME_OPERATION_SHAPE,
 });
 
 function logSelectionOutcome(
@@ -726,43 +768,6 @@ function logSelectionOutcome(
     ),
   );
 }
-
-// Manual model activation (ADR-0171 D2, amended 2026-11-16): what a person's deactivation of a
-// chat model did, under the request's own correlation id.
-const DEACTIVATION_OUTCOMES = [
-  "deactivated",
-  "not-activated",
-  "check-running",
-  "unknown-model",
-  "bad-request",
-  "record-failed",
-] as const;
-type DeactivationOutcome = (typeof DEACTIVATION_OUTCOMES)[number];
-
-const GATEWAY_READINESS_DEACTIVATION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "gateway.readiness.deactivation",
-  category: "gateway",
-  owner: "keiko-server",
-  emitter: "gateway-readiness.logDeactivationOutcome",
-  fields: {
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: DEACTIVATION_OUTCOMES,
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["gateway-readiness"],
-  proofIds: ["gateway.readiness.deactivation.line"],
-  releaseImpact: "patch",
-});
 
 function logDeactivationOutcome(
   deps: UiHandlerDeps,
