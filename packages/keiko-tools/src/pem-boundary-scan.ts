@@ -7,10 +7,10 @@
 
 const BOUNDARY = /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/gu;
 const END_BOUNDARY = /-----END [A-Z ]*PRIVATE KEY-----/u;
-// What a boundary marker can still become: the text from its leading dashes while it remains a
-// possible prefix of `-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----` (the label is unbounded in the grammar).
-const MARKER_PREFIX = /^-----(?:B|BE|BEG|BEGI|E|EN|(?:BEGIN|END)(?: [A-Z ]*-{0,4})?)?$/u;
 const DASHES = "-----";
+const MARKER_WORDS = ["BEGIN", "END"] as const;
+// The rest of a marker after its word while it can still grow into ` [A-Z ]*PRIVATE KEY-----`.
+const MARKER_LABEL_PREFIX = /^(?: [A-Z ]*-{0,4})?$/u;
 // The carry bounds the memory of the scan: a pending marker prefix longer than this is a hostile
 // label, and the scan fails closed by treating a block as open.
 const PENDING_CAP_CHARS = 4_096;
@@ -42,7 +42,7 @@ export function feedPemScan(scan: PemScan, bytes: Buffer): void {
   }
   const pendingAt = text.lastIndexOf(DASHES);
   const pending = pendingAt < 0 ? "" : text.slice(pendingAt);
-  if (!MARKER_PREFIX.test(pending)) {
+  if (!isMarkerPrefix(pending)) {
     scan.carry = text.slice(-PARTIAL_DASH_CHARS);
   } else if (pending.length > PENDING_CAP_CHARS) {
     scan.open = true;
@@ -72,4 +72,14 @@ export function withholdOpenKeyTail(tail: Buffer): Buffer {
   if (end === null) return Buffer.alloc(0);
   const newline = tail.indexOf(NEWLINE, end.index + end[0].length);
   return newline < 0 ? Buffer.alloc(0) : tail.subarray(newline + 1);
+}
+
+// What a boundary marker can still become: the text from its leading dashes while it remains a
+// possible prefix of `-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----` (the label is unbounded in the grammar).
+function isMarkerPrefix(text: string): boolean {
+  if (!text.startsWith(DASHES)) return false;
+  const rest = text.slice(DASHES.length);
+  const word = MARKER_WORDS.find((candidate) => rest.startsWith(candidate));
+  if (word === undefined) return MARKER_WORDS.some((candidate) => candidate.startsWith(rest));
+  return MARKER_LABEL_PREFIX.test(rest.slice(word.length));
 }
