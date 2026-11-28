@@ -54,6 +54,7 @@ import {
   nodeStepNodeCopyPorts,
   privateStepNode,
   type PrivateStepNode,
+  type RefusedStepNode,
   type StepNodeCopyPorts,
 } from "./windowsStepNode.js";
 import {
@@ -648,12 +649,12 @@ async function privateStepNodeFor(
   const node = await privateStepNode(installed, args.stepNodeCopy ?? nodeStepNodeCopyPorts);
   if (node.stepNode === undefined) {
     reportStepNodeCopy(args, node);
-    throw new StepNodePinMismatchError(node.outcome === "copied" ? "copy-failed" : node.outcome);
+    throw new StepNodePinMismatchError(node.outcome);
   }
   return { supervisor: { ...supervisor, stepNode: node.stepNode }, node };
 }
 
-function reportStepNodeCopy(args: ExecuteVerificationArgs, node: PrivateStepNode): void {
+function reportStepNodeCopy(args: ExecuteVerificationArgs, node: RefusedStepNode): void {
   emitServerDiagnostic(
     args.diagnostics,
     serverDiagnosticFromError({

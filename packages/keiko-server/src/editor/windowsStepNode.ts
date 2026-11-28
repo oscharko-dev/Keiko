@@ -265,13 +265,23 @@ export const nodeStepNodeCopyPorts: StepNodeCopyPorts = {
 };
 
 /** The step Node.js a run executes: its own private copy, or none when the copy is not the pin. */
-export interface PrivateStepNode {
-  readonly stepNode: WindowsStepNode | undefined;
-  readonly outcome: "copied" | "no-pin" | "size" | "hash" | "copy-failed";
-  /** The error behind `copy-failed`, for the caller's diagnostic; never logged here. */
-  readonly failure?: unknown;
-  readonly dispose: () => Promise<void>;
-}
+export type StepNodeRefusal = "no-pin" | "size" | "hash" | "copy-failed";
+
+export type RefusedStepNode = Extract<PrivateStepNode, { readonly outcome: StepNodeRefusal }>;
+
+export type PrivateStepNode =
+  | {
+      readonly stepNode: WindowsStepNode;
+      readonly outcome: "copied";
+      readonly dispose: () => Promise<void>;
+    }
+  | {
+      readonly stepNode: undefined;
+      readonly outcome: StepNodeRefusal;
+      /** The error behind `copy-failed`, for the caller's diagnostic; never logged here. */
+      readonly failure?: unknown;
+      readonly dispose: () => Promise<void>;
+    };
 
 /**
  * The install's step Node.js was attested when the run was admitted, which may be long before the
@@ -285,7 +295,7 @@ export async function privateStepNode(
   ports: StepNodeCopyPorts,
 ): Promise<PrivateStepNode> {
   const pin = ports.pin();
-  const none = (outcome: PrivateStepNode["outcome"]): PrivateStepNode => ({
+  const none = (outcome: StepNodeRefusal): RefusedStepNode => ({
     stepNode: undefined,
     outcome,
     dispose: () => Promise.resolve(),
