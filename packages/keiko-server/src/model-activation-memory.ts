@@ -50,6 +50,17 @@ function stillWanted(
   return additions === "allowed" || before.has(key);
 }
 
+/**
+ * Withheld, a model the record does not hold adds nothing. One an earlier change withheld stays
+ * withheld even when its stored entry is gone (a withdrawn record), so no settle writes it later.
+ */
+function withheldWithoutEntry(
+  held: ReadonlySet<string>,
+  key: string,
+): { saved: false; withheld?: true } {
+  return held.has(key) ? { saved: false, withheld: true } : { saved: false };
+}
+
 /** Files one model's plan into the record being built; true when it saved a new entry. */
 function collectPlanned(
   key: string,
@@ -574,7 +585,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
     const known = this.durable.get(key);
     if (known !== undefined && this.unchanged(key, model.provider))
       return { entry: known, saved: false };
-    if (known === undefined && additions === "withheld") return { saved: false };
+    if (known === undefined && additions === "withheld") return withheldWithoutEntry(held, key);
     const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
     const binding = {
       configurationDigest: entry.configurationDigest,

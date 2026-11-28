@@ -473,6 +473,31 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(restoredIds(memory(), rotated)).toEqual([]);
     });
 
+    it("keeps a withheld replacement out of two settles after its record was withdrawn", () => {
+      const second = provider({ modelId: "chat-b" });
+      activate(memory(), provider(), second);
+      const running = memory();
+      running.restore([provider(), second], "corr-restore");
+      const rotated = provider({ apiKey: "sk-test-rotated-in-withdrawn-change" });
+      // The rewrite and the rewrite after the withdrawal both fail: the record is gone.
+      writer.failures = 2;
+      running.sync(
+        [{ provider: rotated, activatedAt: ACTIVATED_AT }],
+        "deactivated",
+        "corr-failed-change",
+        undefined,
+        "withheld",
+      );
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(false);
+      running.settle("deactivated", "corr-settle-1");
+      running.settle("deactivated", "corr-settle-2");
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(false);
+      expect(restoredIds(memory(), rotated)).toEqual([]);
+      // A regular sync recomputes what is withheld, so an accepted binding is written again.
+      activate(running, rotated);
+      expect(restoredIds(memory(), rotated)).toEqual(["chat-a"]);
+    });
+
     it("keeps a changed binding outstanding after its write failed", () => {
       const running = memory();
       activate(running, provider());
