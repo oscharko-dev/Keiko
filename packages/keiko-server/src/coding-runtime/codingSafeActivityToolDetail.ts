@@ -101,19 +101,97 @@ function programKindDetail(
 
 // The Code Mode namespaces a program reaches a tool through: `tools.automation.*` changes a
 // scheduled task, `tools.shell(` / `tools.bash(` runs a command, and any other server namespace is a
-// connected tool. The program's own text is matched, never kept: only the closed kind leaves here.
-// `tools.opencode.*` is the runtime's own management surface and names no kind.
-const PROGRAM_SCHEDULE_CALL = /\btools\.automation\.(?:create|pause|resume|delete|update|run)\b/u;
-const PROGRAM_COMMAND_CALL = /\btools\.(?:shell|bash)\s*\(/u;
+// connected tool. Only a call in the program's own code names a kind: a string, a template's text, a
+// comment or an uncalled reference (`typeof tools.automation.create`) proves no invocation and keeps
+// the neutral program label. The program's text is matched, never kept: only the closed kind leaves
+// here. `tools.opencode.*` is the runtime's own management surface and names no kind.
+const PROGRAM_SCHEDULE_CALL =
+  /(?<![\w$.])tools\.automation\.(?:create|pause|resume|delete|update|run)\s*\(/u;
+const PROGRAM_COMMAND_CALL = /(?<![\w$.])tools\.(?:shell|bash)\s*\(/u;
 const PROGRAM_TOOL_CALL =
-  /\btools\.(?!opencode\b|automation\b|shell\b|bash\b)[A-Za-z_]\w*\.[A-Za-z_]\w*\s*\(/u;
+  /(?<![\w$.])tools\.(?!opencode\b|automation\b|shell\b|bash\b)[A-Za-z_]\w*\.[A-Za-z_]\w*\s*\(/u;
+
+// Template interpolations nest; a program that nests deeper than any real one stops being read.
+const PROGRAM_MAX_TEMPLATE_DEPTH = 16;
+
+interface ProgramScan {
+  readonly out: string;
+  readonly end: number;
+}
+
+/**
+ * The executable text of a program: string, template and comment text becomes a space, the code
+ * inside a template's `${}` is kept. One forward scan; a nested scan stops at its closing brace.
+ */
+function programCode(code: string, start: number, nested: boolean, depth: number): ProgramScan {
+  let out = "";
+  let i = start;
+  let braces = 0;
+  while (i < code.length) {
+    const span = programSpan(code, i, depth);
+    if (span !== undefined) {
+      out += span.out;
+      i = span.end;
+      continue;
+    }
+    const ch = code.charAt(i);
+    if (nested && ch === "}" && braces === 0) return { out, end: i + 1 };
+    if (nested && ch === "{") braces += 1;
+    if (nested && ch === "}") braces -= 1;
+    out += ch;
+    i += 1;
+  }
+  return { out, end: i };
+}
+
+// A literal or comment starting at `i`, as the text it leaves in the code; undefined for code.
+function programSpan(code: string, i: number, depth: number): ProgramScan | undefined {
+  const ch = code.charAt(i);
+  const next = code.charAt(i + 1);
+  if (ch === '"' || ch === "'") return { out: " ", end: quotedEnd(code, i, ch) };
+  if (ch === "`") return templateSpan(code, i, depth);
+  if (ch === "/" && next === "/") {
+    const eol = code.indexOf("\n", i);
+    return { out: " ", end: eol === -1 ? code.length : eol };
+  }
+  if (ch === "/" && next === "*") {
+    const close = code.indexOf("*/", i + 2);
+    return { out: " ", end: close === -1 ? code.length : close + 2 };
+  }
+  return undefined;
+}
+
+function quotedEnd(code: string, open: number, quote: string): number {
+  let i = open + 1;
+  while (i < code.length && code.charAt(i) !== quote) i += code.charAt(i) === "\\" ? 2 : 1;
+  return Math.min(i + 1, code.length);
+}
+
+function templateSpan(code: string, open: number, depth: number): ProgramScan {
+  if (depth >= PROGRAM_MAX_TEMPLATE_DEPTH) return { out: " ", end: code.length };
+  let out = " ";
+  let i = open + 1;
+  while (i < code.length && code.charAt(i) !== "`") {
+    if (code.charAt(i) === "\\") {
+      i += 2;
+    } else if (code.startsWith("${", i)) {
+      const inner = programCode(code, i + 2, true, depth + 1);
+      out += ` ${inner.out} `;
+      i = inner.end;
+    } else {
+      i += 1;
+    }
+  }
+  return { out, end: Math.min(i + 1, code.length) };
+}
 
 /** What a Code Mode program does, from the tools its code calls; undefined when it calls none. */
 export function openCodeProgramKind(
   state: Readonly<Record<string, unknown>>,
 ): CodingSafeActivityProgramKind | undefined {
-  const code = record(state.input)?.code;
-  if (typeof code !== "string") return undefined;
+  const source = record(state.input)?.code;
+  if (typeof source !== "string") return undefined;
+  const code = programCode(source, 0, false, 0).out;
   if (PROGRAM_SCHEDULE_CALL.test(code)) return "schedule";
   if (PROGRAM_COMMAND_CALL.test(code)) return "command";
   return PROGRAM_TOOL_CALL.test(code) ? "tool" : undefined;

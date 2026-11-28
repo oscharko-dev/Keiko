@@ -499,6 +499,34 @@ describe("what a Code Mode program does (U-56)", () => {
     expect(program(code).programKind).toBeUndefined();
   });
 
+  it.each([
+    'return "tools.shell(";',
+    "return 'tools.automation.create(';",
+    "return `run tools.shell( now`;",
+    "return typeof tools.automation.create;",
+    "const f = tools.automation.delete; return typeof f;",
+    "// tools.shell({ command: 'ls' })\nreturn 1;",
+    "/* tools.fixture.echo({}) */ return 2;",
+    "return `${1 + 1} tools.bash(`;",
+    "return obj.tools.shell({});",
+  ])("names no kind where the program only mentions a tool: %s", (code) => {
+    expect(program(code).programKind).toBeUndefined();
+  });
+
+  it.each([
+    ["command", 'const note = "x"; return await tools.shell({ command: `${"a"}` });'],
+    ["schedule", "return `${await tools.automation.create({})}`;"],
+    ["tool", 'return `a${`b${await tools.fixture.echo({ text: "c" })}`}`;'],
+    ["command", 'return "it\\"s"; await tools.bash({});'],
+  ] as const)("still reads %s from a call beside literals", (kind, code) => {
+    expect(program(code).programKind).toBe(kind);
+  });
+
+  it("stops reading a program nested deeper than any real one", () => {
+    const code = "`${".repeat(40) + "tools.shell({})" + "}`".repeat(40);
+    expect(program(code).programKind).toBeUndefined();
+  });
+
   it("carries only the closed kind, never the program's text", () => {
     const detail = program('return await tools.automation.create({ prompt: "SECRET_BODY" });');
     expect(JSON.stringify(detail)).not.toContain("SECRET_BODY");
