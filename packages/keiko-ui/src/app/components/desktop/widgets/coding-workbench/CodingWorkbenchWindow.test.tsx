@@ -6538,7 +6538,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       expect(await axe(document.body)).toHaveNoViolations();
     });
 
-    // U-29: at a 680 px window the session columns painted over the button. jsdom has no layout, so
+    // U-29: at a 1024x768 window the session columns painted over the button. jsdom has no layout, so
     // pin the structure; the frame-styles test pins the flow CSS of the shared parent.
     it("renders the alert and the activation as in-flow siblings ahead of the session columns", () => {
       renderNotReady(NOT_ACTIVATED);

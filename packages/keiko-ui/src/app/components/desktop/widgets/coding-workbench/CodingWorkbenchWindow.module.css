@@ -386,7 +386,7 @@
 }
 
 /* U-29: one flex column, so every notice (alert, in-place activation, tool check, status) keeps
-   its own height in document flow and the session columns, the last child, take what is left. */
+   its own height in document flow and the session columns take what is left. */
 .body {
   display: flex;
   min-width: 0;
@@ -400,7 +400,7 @@
   flex: 0 0 auto;
 }
 
-.body > :last-child {
+.body > .session {
   flex: 1 1 0;
   min-height: 0;
 }
