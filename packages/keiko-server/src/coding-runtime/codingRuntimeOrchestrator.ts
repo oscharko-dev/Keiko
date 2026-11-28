@@ -5201,7 +5201,6 @@ export class CodingRuntimeOrchestrator {
       authorityDigest: DIGEST(launch.treeBindingId),
       bindingDigest: DIGEST(active.instance.workspaceId),
       provenanceDigest: DIGEST(`${launch.adapterKind}:${launch.executablePath}`),
-      toolCallCount: 0,
       patchByteCount: 0,
       modelRequestCount: 0,
       ...(predecessorRunId ? { predecessorRunId } : {}),

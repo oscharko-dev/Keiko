@@ -247,7 +247,6 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     authorityDigest: digest,
     bindingDigest: digest,
     provenanceDigest: digest,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
     ...(options.issueFree === true ? {} : { issueBinding: accepted.binding }),

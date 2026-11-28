@@ -162,7 +162,6 @@ function settledRow(runId: string, updatedAt: string, revision: number): CodingR
     authorityDigest: "u".repeat(64),
     bindingDigest: "d".repeat(64),
     provenanceDigest: "p".repeat(64),
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
     result: {

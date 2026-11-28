@@ -220,7 +220,6 @@ describe("a model on a Local checkout of main gets a task branch of its own (#39
       authorityDigest: workspaceDigest,
       bindingDigest: workspaceDigest,
       provenanceDigest: workspaceDigest,
-      toolCallCount: 0,
       patchByteCount: 0,
       modelRequestCount: 0,
     });

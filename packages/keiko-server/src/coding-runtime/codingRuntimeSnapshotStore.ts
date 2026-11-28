@@ -125,7 +125,6 @@ export interface CodingRuntimeSnapshot {
   readonly authorityDigest: string;
   readonly bindingDigest: string;
   readonly provenanceDigest: string;
-  readonly toolCallCount: number;
   readonly patchByteCount: number;
   readonly modelRequestCount: number;
   readonly recoveryHandle?: string | undefined;
@@ -150,7 +149,6 @@ export interface CodingRuntimeSnapshotTransition {
   // Written on every transition, so a settlement that is not a verification gap never keeps one.
   readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
   readonly terminalAt?: string | undefined;
-  readonly toolCallCount?: number | undefined;
   readonly patchByteCount?: number | undefined;
   readonly modelRequestCount?: number | undefined;
   readonly recoveryHandle?: string | undefined;
@@ -238,7 +236,6 @@ interface Row {
   readonly authority_digest: string;
   readonly binding_digest: string;
   readonly provenance_digest: string;
-  readonly tool_call_count: number;
   readonly patch_byte_count: number;
   readonly model_request_count: number;
   readonly recovery_handle: string | null;
@@ -263,7 +260,7 @@ interface Row {
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, issue_purpose, verification_gap";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, issue_purpose, verification_gap";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
@@ -277,10 +274,12 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     `SELECT ${readColumns} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const insert = db.prepare(
-    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (${COLUMNS.split(", ")
+      .map(() => "?")
+      .join(", ")})`,
   );
   const update = db.prepare(
-    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, verification_gap=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
+    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, verification_gap=?, terminal_at=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
   );
   // Acknowledgement is itself an observable lifecycle event on the row (the operator's attestation
   // that ADR-0137 D5 reconciliation may treat the predecessor as reaped), so it advances `revision`
@@ -363,7 +362,6 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         terminalAt: SETTLED.has(transition.state)
           ? (transition.terminalAt ?? transition.updatedAt)
           : undefined,
-        toolCallCount: transition.toolCallCount ?? current.toolCallCount,
         patchByteCount: transition.patchByteCount ?? current.patchByteCount,
         modelRequestCount: transition.modelRequestCount ?? current.modelRequestCount,
         recoveryHandle: transition.recoveryHandle ?? current.recoveryHandle,
@@ -378,7 +376,6 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         next.pauseReason ?? null,
         next.verificationGap ?? null,
         next.terminalAt ?? null,
-        next.toolCallCount,
         next.patchByteCount,
         next.modelRequestCount,
         next.recoveryHandle ?? null,
@@ -499,7 +496,6 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     authorityDigest: row.authority_digest,
     bindingDigest: row.binding_digest,
     provenanceDigest: row.provenance_digest,
-    toolCallCount: row.tool_call_count,
     patchByteCount: row.patch_byte_count,
     modelRequestCount: row.model_request_count,
     ...(row.failure_code ? { failureCode: row.failure_code } : {}),
@@ -663,7 +659,6 @@ function values(v: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
     v.authorityDigest,
     v.bindingDigest,
     v.provenanceDigest,
-    v.toolCallCount,
     v.patchByteCount,
     v.modelRequestCount,
     v.recoveryHandle ?? null,
@@ -865,7 +860,6 @@ function assertSnapshotDigests(v: CodingRuntimeSnapshot): void {
 
 function assertSnapshotCounts(v: CodingRuntimeSnapshot): void {
   for (const [name, count, max] of [
-    ["toolCallCount", v.toolCallCount, 1_000_000],
     ["patchByteCount", v.patchByteCount, 1_073_741_824],
     ["modelRequestCount", v.modelRequestCount, 1_000_000],
   ] as const)

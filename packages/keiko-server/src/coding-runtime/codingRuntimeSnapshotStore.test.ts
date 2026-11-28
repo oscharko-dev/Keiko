@@ -33,7 +33,6 @@ function snapshot(runId = "run-1"): CodingRuntimeSnapshot {
     authorityDigest: digest,
     bindingDigest: digest,
     provenanceDigest: digest,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
   };
@@ -97,7 +96,7 @@ function seedV29Row(db: DatabaseSync): void {
     s.authorityDigest,
     s.bindingDigest,
     s.provenanceDigest,
-    s.toolCallCount,
+    0, // tool_call_count: a retired column the store no longer reads or writes (default 0).
     s.patchByteCount,
     s.modelRequestCount,
     ISSUE_BINDING.repositoryId,
@@ -408,7 +407,6 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
     expect(() =>
       s.create({ ...snapshot(), state: "exploded" as CodingRuntimeSnapshot["state"] }),
     ).toThrow("invalid runtime snapshot state");
-    expect(() => s.create({ ...snapshot(), toolCallCount: -1 })).toThrow("invalid toolCallCount");
     expect(() => s.create({ ...snapshot(), patchByteCount: Number.MAX_SAFE_INTEGER + 2 })).toThrow(
       "invalid patchByteCount",
     );

@@ -54,7 +54,6 @@ function fixture(): Fixture {
     authorityDigest: authority,
     bindingDigest: authority,
     provenanceDigest: authority,
-    toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
   });
