@@ -12,6 +12,7 @@ interface ViewProps {
   readonly model: Model;
   readonly t: I18nTranslate;
 }
+type FormProblemProps = ViewProps & { readonly problemId: string };
 
 function FieldHelp({ text, id }: { readonly text: string; readonly id?: string }): ReactNode {
   return (
@@ -22,10 +23,15 @@ function FieldHelp({ text, id }: { readonly text: string; readonly id?: string }
   );
 }
 
+function fieldDescription(helpId: string, problemId?: string): string {
+  return problemId === undefined ? helpId : `${helpId} ${problemId}`;
+}
+
 function TextField({
   model,
   label,
   field,
+  problemId,
   type = "text",
   required = false,
 }: {
@@ -41,13 +47,15 @@ function TextField({
     | "scope"
     | "headerName"
     | "headerPrefix";
+  readonly problemId?: string;
   readonly type?: string;
   readonly required?: boolean;
 }): ReactNode {
   const t = useTranslate();
   const id = useId();
   const help = t(`settings.mcp.help.${field}`);
-  const problem = model.state.formProblem === field;
+  const { formProblem } = model.state;
+  const invalid = formProblem === field || (field === "name" && formProblem === "duplicate");
   return (
     <div className={styles.cmpInputStack}>
       <label htmlFor={id} title={help}>
@@ -60,8 +68,8 @@ function TextField({
         required={required}
         readOnly={field === "name" && model.state.editing !== undefined}
         autoComplete={field === "token" ? "new-password" : "off"}
-        aria-describedby={`${id}-help`}
-        aria-invalid={problem || (field === "name" && model.state.formProblem === "duplicate")}
+        aria-describedby={fieldDescription(`${id}-help`, invalid ? problemId : undefined)}
+        aria-invalid={invalid}
         value={model.state.form[field]}
         onChange={(event) => change(model, field, event.target.value)}
       />
@@ -91,11 +99,18 @@ function HeaderOptions({ model, t }: ViewProps): ReactNode {
     </>
   );
 }
-function RemoteFields({ model, t }: ViewProps): ReactNode {
+function RemoteFields({ model, t, problemId }: FormProblemProps): ReactNode {
   const { form } = model.state;
   return (
     <>
-      <TextField model={model} field="url" label={t("settings.mcp.url")} type="url" required />
+      <TextField
+        model={model}
+        field="url"
+        label={t("settings.mcp.url")}
+        problemId={problemId}
+        type="url"
+        required
+      />
       <label className={styles.cmpCheck} title={t("settings.mcp.help.oauth")}>
         <input
           type="checkbox"
@@ -217,11 +232,39 @@ function importFile(model: Model, input: HTMLInputElement): void {
   });
 }
 
-function LocalFields({ model, t }: ViewProps): ReactNode {
+function EnvironmentFileField({ model, t, problemId }: FormProblemProps): ReactNode {
+  const id = useId();
+  const { formProblem } = model.state;
+  const invalidFile = formProblem === "envSize" || formProblem === "envRead";
+  const help = t("settings.mcp.envHelp");
+  return (
+    <>
+      <label title={help}>
+        {t("settings.mcp.env")}
+        <input
+          ref={model.fileInput}
+          type="file"
+          aria-describedby={fieldDescription(id, invalidFile ? problemId : undefined)}
+          aria-invalid={invalidFile}
+          onChange={(event) => importFile(model, event.target)}
+        />
+      </label>
+      <FieldHelp id={id} text={help} />
+    </>
+  );
+}
+
+function LocalFields({ model, t, problemId }: FormProblemProps): ReactNode {
   const id = useId();
   return (
     <>
-      <TextField model={model} field="command" label={t("settings.mcp.command")} required />
+      <TextField
+        model={model}
+        field="command"
+        label={t("settings.mcp.command")}
+        problemId={problemId}
+        required
+      />
       <label title={t("settings.mcp.help.args")}>
         {t("settings.mcp.args")}
         <textarea
@@ -232,16 +275,7 @@ function LocalFields({ model, t }: ViewProps): ReactNode {
         />
       </label>
       <FieldHelp id={`${id}-args`} text={t("settings.mcp.help.args")} />
-      <label title={t("settings.mcp.envHelp")}>
-        {t("settings.mcp.env")}
-        <input
-          ref={model.fileInput}
-          type="file"
-          aria-describedby={`${id}-env`}
-          onChange={(event) => importFile(model, event.target)}
-        />
-      </label>
-      <FieldHelp id={`${id}-env`} text={t("settings.mcp.envHelp")} />
+      <EnvironmentFileField model={model} t={t} problemId={problemId} />
       <details className={styles.cmpDisclosure}>
         <summary>{t("settings.mcp.advanced")}</summary>
         <label title={t("settings.mcp.help.environmentValues")}>
@@ -318,8 +352,25 @@ function ConnectionType({ model, t }: ViewProps): ReactNode {
   );
 }
 
+function FormNotices({ model, t, problemId }: FormProblemProps): ReactNode {
+  const { snapshot, formProblem } = model.state;
+  return (
+    <>
+      {snapshot === undefined && (
+        <p className={styles.cmpHelp}>{t("settings.mcp.saveUnavailable")}</p>
+      )}
+      {formProblem !== undefined && (
+        <p id={problemId} className={styles.cmpFormProblem} role="alert">
+          {t(`settings.mcp.problem.${formProblem}`)}
+        </p>
+      )}
+    </>
+  );
+}
+
 export function McpForm({ model, t }: ViewProps): ReactNode {
-  const { form, editing, busy, snapshot, formProblem } = model.state;
+  const problemId = useId();
+  const { form, editing, busy, snapshot } = model.state;
   const saveOnly = editing?.enabled === false || (form.kind === "remote" && form.oauth);
   return (
     <form
@@ -332,22 +383,21 @@ export function McpForm({ model, t }: ViewProps): ReactNode {
     >
       <fieldset disabled={busy} className={styles.cmpForm}>
         <legend>{t(editing === undefined ? "settings.mcp.manual" : "settings.mcp.edit")}</legend>
-        <TextField model={model} field="name" label={t("settings.mcp.name")} required />
+        <TextField
+          model={model}
+          field="name"
+          label={t("settings.mcp.name")}
+          problemId={problemId}
+          required
+        />
         <ConnectionType model={model} t={t} />
         {form.kind === "remote" ? (
-          <RemoteFields model={model} t={t} />
+          <RemoteFields model={model} t={t} problemId={problemId} />
         ) : (
-          <LocalFields model={model} t={t} />
+          <LocalFields model={model} t={t} problemId={problemId} />
         )}
         <ToolPolicies model={model} t={t} />
-        {snapshot === undefined && (
-          <p className={styles.cmpHelp}>{t("settings.mcp.saveUnavailable")}</p>
-        )}
-        {formProblem !== undefined && (
-          <p className={styles.cmpFormProblem} role="alert">
-            {t(`settings.mcp.problem.${formProblem}`)}
-          </p>
-        )}
+        <FormNotices model={model} t={t} problemId={problemId} />
         <div className={styles.cmpActions}>
           <button
             className={styles.cmpPrimary}

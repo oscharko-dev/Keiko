@@ -203,6 +203,13 @@ const COMMON = ["type", "enabled", "disabled", "description"];
 const LOCAL = [...COMMON, "command", "args", "environment", "env"];
 const REMOTE = [...COMMON, "url", "headers", "oauth", "protocol", "network"];
 
+function inferredTransport(entry: Fields): "local" | "remote" | undefined {
+  const local = typeof entry.command === "string" || Array.isArray(entry.command);
+  const remote = typeof entry.url === "string";
+  if (local === remote) return undefined;
+  return local ? "local" : "remote";
+}
+
 function transportKind(entry: Fields): "local" | "remote" | undefined {
   switch (entry.type) {
     case "local":
@@ -214,8 +221,7 @@ function transportKind(entry: Fields): "local" | "remote" | undefined {
     case "sse":
       return "remote";
     case undefined:
-      if (Object.hasOwn(entry, "command") === Object.hasOwn(entry, "url")) return undefined;
-      return Object.hasOwn(entry, "command") ? "local" : "remote";
+      return inferredTransport(entry);
     default:
       return undefined;
   }

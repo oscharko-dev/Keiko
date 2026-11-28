@@ -66,6 +66,54 @@ beforeEach(() => {
 });
 
 describe("MCP Settings", () => {
+  it.each([
+    ["Server name", "Invalid name", /start the name/i, empty],
+    ["Server name", "notes", /already uses this name/i, saved],
+    ["Server address (HTTPS)", "http://example.test/mcp", /enter a valid https/i, empty],
+  ] as const)(
+    "describes the error on %s after submitting %s",
+    async (label, value, error, data) => {
+      api.mockResolvedValueOnce(data);
+      panel();
+      await remoteForm();
+      const input = screen.getByLabelText(label);
+      const help = input.getAttribute("aria-describedby");
+      expect(help).toBeTruthy();
+      fireEvent.change(input, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(error);
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(input).toHaveAccessibleDescription(error);
+      expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(help);
+      fireEvent.change(input, {
+        target: { value: label === "Server name" ? "docs" : "https://example.test/mcp" },
+      });
+      expect(input).toHaveAttribute("aria-describedby", help);
+      expect(input).toHaveAttribute("aria-invalid", "false");
+    },
+  );
+
+  it("describes local program and settings file errors on their respective inputs", async () => {
+    api.mockResolvedValueOnce(empty);
+    panel();
+    await remoteForm();
+    fireEvent.change(screen.getByLabelText("Connection type"), { target: { value: "local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+    const program = screen.getByLabelText("Start program");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/enter the full path/i);
+    expect(program).toHaveAttribute("aria-invalid", "true");
+    expect(program).toHaveAccessibleDescription(/for example \/opt\/tools\/node/i);
+
+    const settingsFile = screen.getByLabelText("Settings file (.env)");
+    const file = new File(["x".repeat(64 * 1024 + 1)], "fixture.env");
+    fireEvent.change(settingsFile, { target: { files: [file] } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/smaller than 64 KB/i);
+    expect(settingsFile).toHaveAttribute("aria-invalid", "true");
+    expect(settingsFile).toHaveAccessibleDescription(/smaller than 64 KB/i);
+    expect(program).toHaveAttribute("aria-invalid", "false");
+  });
+
   it("edits OAuth definitions without dropping their issuer, scopes or tool admission", async () => {
     const previous = saved.servers[0];
     if (previous === undefined) throw new Error("Missing fixture server");

@@ -1,4 +1,8 @@
-import { emitServerDiagnostic, contentFreeErrorClass } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+} from "../diagnostics-log.js";
 import type { ExternalMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   McpSettingsInputError,
@@ -110,7 +114,8 @@ function applySettingsUpdate(
       source: "mcp.settings.update",
       errorClass: contentFreeErrorClass(error),
       diagnosticOutcome: "routine",
-      message: "mcp-settings-update-invalid",
+      code: "mcp-settings-update-invalid",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
     });
     return { status: 400, body: errorBody("BAD_REQUEST", "MCP settings are invalid.") };
   }

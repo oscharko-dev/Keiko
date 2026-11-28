@@ -1315,4 +1315,5 @@ browser persistence; stale revisions fail closed (ADR-0114 D1).
 and the number of admitted servers in `importCount`. A successful save emits a second line with
 `outcome: "applied"` under the same correlation after the registry commits. Import text, names,
 paths, URLs and credential values are excluded. A known configuration refusal on the ordinary
-Settings write is recorded through the routine diagnostic channel.
+Settings write is recorded through the routine diagnostic channel with code
+`mcp-settings-update-invalid`.

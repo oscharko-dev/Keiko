@@ -31,6 +31,30 @@ describe("central MCP JSON import", () => {
     ]);
   });
 
+  it.each([
+    ["mcp", { mcp: { url: { url: remote.url } } }, "url", "remote"],
+    ["mcp", { mcp: { command: { command: ["/opt/example/node"] } } }, "command", "local"],
+    ["mcpServers", { mcpServers: { url: { url: remote.url } } }, "url", "remote"],
+    [
+      "mcpServers",
+      { mcpServers: { command: { command: "/opt/example/node" } } },
+      "command",
+      "local",
+    ],
+    ["mcp.servers", { mcp: { servers: { url: { url: remote.url } } } }, "url", "remote"],
+    [
+      "mcp.servers",
+      { mcp: { servers: { command: { command: ["/opt/example/node"] } } } },
+      "command",
+      "local",
+    ],
+  ])("reads the %s wrapper %j as a server map", (_wrapper, document, name, kind) => {
+    expect(prepareMcpSettingsImport(JSON.stringify(document), snapshot)).toMatchObject({
+      kind: "ready",
+      update: { servers: [{ name, transport: { kind } }] },
+    });
+  });
+
   it("routes imported header and environment values to write-only Settings secrets", () => {
     const result = prepareMcpSettingsImport(
       JSON.stringify({

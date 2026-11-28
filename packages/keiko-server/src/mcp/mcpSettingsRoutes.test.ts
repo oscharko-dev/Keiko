@@ -13,7 +13,7 @@ import {
 } from "../coding-app-session/_support.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 import { API_ROUTES, type RouteContext } from "../routes.js";
-import { createMcpSettingsStore } from "./mcpSettingsStore.js";
+import { createMcpSettingsStore, McpSettingsInputError } from "./mcpSettingsStore.js";
 import { createConfiguredMcpConnections } from "./mcpConfiguredConnections.js";
 import { createMcpAuthorization } from "./mcpAuthorization.js";
 import * as oauthPersistence from "./mcpOAuthCredentialStore.js";
@@ -209,6 +209,31 @@ describe("authenticated shared MCP settings routes", () => {
       ).status,
     ).toBe(400);
     expect(update).not.toHaveBeenCalled();
+  });
+  it("records a store validation refusal as a body-free diagnostic code", async () => {
+    const { deps, cookie } = fixture();
+    const store = deps.mcpSettings;
+    if (store === undefined) throw new Error("missing fixture store");
+    const expectedRevision = store.read("mcp-settings-test").revision;
+    const errorDetail = "fixture input detail";
+    vi.spyOn(store, "update").mockImplementation(() => {
+      throw new McpSettingsInputError(errorDetail);
+    });
+    const record = vi.fn();
+    const response = await handlePutMcpSettings(
+      context(cookie, { expectedRevision, servers: [], secrets: {} }),
+      { ...deps, diagnostics: { record } },
+    );
+    expect(response.status).toBe(400);
+    expect(record).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        correlationId: "mcp-settings-test",
+        operation: "mcp.settings",
+        code: "mcp-settings-update-invalid",
+        diagnosticOutcome: "routine",
+      }),
+    );
+    expect(JSON.stringify([response, record.mock.calls])).not.toContain(errorDetail);
   });
   it("refuses a session revoked while its request body is being read", async () => {
     const { deps, cookie } = fixture();
