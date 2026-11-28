@@ -949,6 +949,21 @@ export type FinishReason =
  */
 export type GatewayOutputRepairOutcome = "recovered" | "exhausted-again" | "empty-again" | "failed";
 
+/**
+ * What the provider's own usage record says about an answer that ended without text or a tool call
+ * (O-11). `provider-reported-output`: it reported completion tokens above zero, so it generated
+ * output that never reached Keiko (a tool call its parser dropped, for example);
+ * `no-provider-output`: it reported zero completion tokens; `usage-unavailable`: it reported no
+ * usage at all, so the two cannot be told apart. A closed word, never content.
+ */
+export const GATEWAY_EMPTY_ANSWER_EVIDENCE = [
+  "provider-reported-output",
+  "no-provider-output",
+  "usage-unavailable",
+] as const;
+
+export type GatewayEmptyAnswerEvidence = (typeof GATEWAY_EMPTY_ANSWER_EVIDENCE)[number];
+
 export interface NormalizedResponse {
   readonly modelId: string;
   readonly content: string;

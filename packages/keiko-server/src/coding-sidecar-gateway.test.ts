@@ -3449,6 +3449,86 @@ describe("coding-sidecar gateway", () => {
     ).toMatchObject({ runId: "run-stream-empty", failureCode: "empty-answer", published: true });
   });
 
+  // O-11: an empty turn must say what the provider's own usage reported, so "it generated output
+  // that never arrived" is told apart from "it generated nothing" from the log alone. The outcome
+  // line also names a completion count that no provider or estimate produced.
+  async function streamedEmptyAnswerLines(
+    runId: string,
+    failure: ProviderEmptyAnswerError,
+  ): Promise<{
+    readonly turnFailed: Record<string, unknown> | undefined;
+    readonly outcome: Record<string, unknown> | undefined;
+  }> {
+    const sink = captureServerLog("info");
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw failure;
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "empty answer" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+      correlationId: "sidecar-corr-0003",
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      codingRuntimeEventHub: new CodingRuntimeEventHub(),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    return {
+      turnFailed: sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")
+        ?.extra,
+      outcome: sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    };
+  }
+
+  it("names provider-reported output on an empty turn the provider counted tokens for (O-11)", async () => {
+    const failure = new ProviderEmptyAnswerError("coding");
+    failure.providerUsage = { completionTokens: 1800, reasoningTokens: 1700 };
+    failure.emptyAnswerEvidence = "provider-reported-output";
+
+    const { turnFailed, outcome } = await streamedEmptyAnswerLines("run-empty-counted", failure);
+
+    expect(turnFailed).toMatchObject({
+      failureCode: "empty-answer",
+      emptyAnswerEvidence: "provider-reported-output",
+      providerCompletionTokens: 1800,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "failed",
+      completionTokens: 0,
+      completionTokensMeasured: false,
+      providerCompletionTokens: 1800,
+    });
+  });
+
+  it("marks the completion count of an unmeasured empty turn instead of reporting a bare 0 (O-11)", async () => {
+    const failure = new ProviderEmptyAnswerError("coding");
+    failure.emptyAnswerEvidence = "usage-unavailable";
+
+    const { turnFailed, outcome } = await streamedEmptyAnswerLines("run-empty-unmeasured", failure);
+
+    expect(turnFailed).toMatchObject({ emptyAnswerEvidence: "usage-unavailable" });
+    expect(turnFailed).not.toHaveProperty("providerCompletionTokens");
+    expect(outcome).toMatchObject({ outcome: "failed", completionTokensMeasured: false });
+    expect(outcome).not.toHaveProperty("providerCompletionTokens");
+  });
+
   // Regression: a mid-stream failure without a request correlation once produced bare "unknown",
   // which the diagnostic sanitizer rewrote to "invalid-correlation-id". The authenticated run id
   // is always available and now anchors the diagnostic directly in support analyze's run timeline.

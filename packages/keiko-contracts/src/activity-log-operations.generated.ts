@@ -3491,6 +3491,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      providerCompletionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      providerReasoningTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      emptyAnswerEvidence: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
+      },
       toolCallFragmentsPositional: {
         type: "integer",
         dataClass: "count",
@@ -19377,6 +19393,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      completionTokensMeasured: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      providerCompletionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       reasoningFrames: {
         type: "integer",
         dataClass: "count",
@@ -20077,6 +20103,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["recovered", "exhausted-again", "empty-again", "failed"],
+      },
+      emptyAnswerEvidence: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
+      },
+      providerCompletionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       frames: {
         type: "string-array",
@@ -28011,6 +28048,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "boolean",
         dataClass: "closed-enum",
         required: false,
+      },
+      providerCompletionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      providerReasoningTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      emptyAnswerEvidence: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
       },
     },
     causal: "correlation",

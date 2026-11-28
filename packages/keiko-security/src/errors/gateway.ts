@@ -2,7 +2,10 @@
 // `error.code`; they never parse `error.message`. Every message is redacted at construction
 // so errors are always safe to log or surface across trust boundaries (ADR-0003).
 
-import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import type {
+  GatewayEmptyAnswerEvidence,
+  GatewayOutputRepairOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { RedactingError } from "./base.js";
 
 export const ERROR_CODES = {
@@ -48,6 +51,14 @@ export interface PartialStreamUsage {
   readonly streamedChars: number;
 }
 
+// The counts the PROVIDER's own usage record reported for the call that failed (O-11): present only
+// for a count it actually sent, never a default, so a reader can tell "the provider generated output
+// that never arrived" from "the provider generated nothing". Counts only, never content.
+export interface ProviderReportedUsage {
+  readonly completionTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
 export abstract class GatewayError extends RedactingError {
   abstract override readonly code: ErrorCode;
   abstract readonly retryable: boolean;
@@ -60,6 +71,10 @@ export abstract class GatewayError extends RedactingError {
   // as requestId above): optional so no constructor changes and no existing
   // GatewayError construction/test is affected. Counts only, never content.
   partialUsage?: PartialStreamUsage;
+  // O-11: the usage record the provider itself sent for the failed call, when it sent one (the final
+  // `include_usage` chunk of a stream). Same attach-at-throw-site pattern as partialUsage, but absent
+  // rather than zero when the provider reported nothing. Counts only, never content.
+  providerUsage?: ProviderReportedUsage;
   // #3873 (F17, F23): set by the gateway when this error ended the one steered repair of an answer
   // that had exhausted its output budget or ended empty after reasoning — `exhausted-again` when the
   // repaired attempt spent the whole budget, `empty-again` when it ended without text or a tool call,
@@ -221,6 +236,9 @@ export class ProviderEmptyAnswerError extends ProviderError {
   // Whether the answer carried reasoning before it ended without text or a tool call — the one
   // empty answer the gateway steers a repair for. Set by the adapter that read the answer.
   readonly afterReasoning: boolean;
+  // O-11: what the provider's usage record says about the answer that ended empty, set by the adapter
+  // that read it. Absent only for an error built outside an adapter. A closed word, never content.
+  emptyAnswerEvidence?: GatewayEmptyAnswerEvidence;
 
   constructor(modelId: string, secrets: readonly string[] = [], afterReasoning = false) {
     super(`provider returned an empty assistant response for '${modelId}'`, 200, secrets);

@@ -31,7 +31,10 @@ import {
   deriveContextProfile,
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import type {
+  GatewayEmptyAnswerEvidence,
+  GatewayOutputRepairOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   calibrationPromptTokens,
   GatewayPromptAdmission,
@@ -631,6 +634,24 @@ const GATEWAY_STREAM_ABANDONED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// O-11: what the provider reported for a failed attempt (counts it actually sent) and, for an answer
+// that ended empty, the closed classification the adapter derived from it.
+function providerEvidenceFields(error: unknown): {
+  readonly providerCompletionTokens?: number;
+  readonly providerReasoningTokens?: number;
+  readonly emptyAnswerEvidence?: GatewayEmptyAnswerEvidence;
+} {
+  if (!(error instanceof GatewayError)) return {};
+  const { completionTokens, reasoningTokens } = error.providerUsage ?? {};
+  return {
+    ...(completionTokens === undefined ? {} : { providerCompletionTokens: completionTokens }),
+    ...(reasoningTokens === undefined ? {} : { providerReasoningTokens: reasoningTokens }),
+    ...(error instanceof ProviderEmptyAnswerError && error.emptyAnswerEvidence !== undefined
+      ? { emptyAnswerEvidence: error.emptyAnswerEvidence }
+      : {}),
+  };
+}
+
 const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -658,6 +679,18 @@ const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: false,
+    },
+    // O-11: the usage the provider itself reported for the failed attempt, absent (never 0) when it
+    // sent none, and, on an answer that ended without text or a tool call, what that usage says:
+    // `provider-reported-output`, `no-provider-output` or `usage-unavailable`. Counts and a closed
+    // word only.
+    providerCompletionTokens: { type: "integer", dataClass: "count", required: false },
+    providerReasoningTokens: { type: "integer", dataClass: "count", required: false },
+    emptyAnswerEvidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
     },
   },
   causal: "correlation",
@@ -2297,6 +2330,7 @@ export class Gateway {
           // the call's retry loop).
           afterFirstChunk: chunkCount > 0,
           outputExhausted: error instanceof ProviderOutputExhaustedError,
+          ...providerEvidenceFields(error),
         },
       ),
     );

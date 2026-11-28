@@ -1245,6 +1245,23 @@ settled Build run with no tool call) and writes nothing new.
 
 ## Reasoning, tool arguments and answer repair
 
+An empty model turn (no text and no tool call) says what the provider itself reported (O-11), so
+"the provider generated output that never arrived" (a long tool call its parser buffered and dropped)
+is told apart from "the model generated nothing" from the log alone. `chat.response.streamed` and
+`gateway.stream.failed` record `providerCompletionTokens` and `providerReasoningTokens`
+(`completion_tokens_details.reasoning_tokens`) from the provider's usage record (the final
+`stream_options.include_usage` chunk, or a whole body's `usage`): present only when the provider sent
+the count, never defaulted to 0. On an answer that ended empty both lines add `emptyAnswerEvidence`
+(`provider-reported-output`: completion tokens above zero; `no-provider-output`: zero;
+`usage-unavailable`: no usage sent), and `coding-sidecar.gateway.turn-failed` carries the same word
+and `providerCompletionTokens` for the attempt that surfaced (after a repair, the repair's own
+attempt; each attempt's own usage stays on its `chat.response.streamed` line). A long silent gap is
+read from `maxGapMs` and `silentForMs` of that line. `coding-sidecar.gateway.outcome`'s
+`completionTokens` is the gateway's own count (provider-reported or a byte estimate): a turn that
+measured nothing writes 0, which `completionTokensMeasured: false` marks as a default rather than a
+count, and a failed outcome carries `providerCompletionTokens` when the provider reported one. The
+user-facing message is unchanged.
+
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
 provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
 `reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,

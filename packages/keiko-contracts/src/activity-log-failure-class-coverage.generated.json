@@ -20537,6 +20537,12 @@
               "required": true
             },
             {
+              "name": "completionTokensMeasured",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "deadlineMs",
               "type": "integer",
               "dataClass": "duration",
@@ -20565,6 +20571,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "providerCompletionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "readinessRenewal",
@@ -21052,6 +21064,12 @@
               "required": false
             },
             {
+              "name": "emptyAnswerEvidence",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "failureCode",
               "type": "string",
               "dataClass": "closed-enum",
@@ -21061,6 +21079,12 @@
               "name": "frames",
               "type": "string-array",
               "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "providerCompletionTokens",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -33108,6 +33132,12 @@
               "required": true
             },
             {
+              "name": "emptyAnswerEvidence",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "modelId",
               "type": "string",
               "dataClass": "opaque-id",
@@ -33117,6 +33147,18 @@
               "name": "outputExhausted",
               "type": "boolean",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "providerCompletionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "providerReasoningTokens",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -33268,6 +33310,12 @@
               "required": true
             },
             {
+              "name": "emptyAnswerEvidence",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "firstDataMs",
               "type": "number",
               "dataClass": "duration",
@@ -33295,6 +33343,18 @@
               "name": "outputExhausted",
               "type": "boolean",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "providerCompletionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "providerReasoningTokens",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

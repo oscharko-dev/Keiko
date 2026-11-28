@@ -91,6 +91,7 @@ import {
 import {
   MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
+  type GatewayEmptyAnswerEvidence,
   type GatewayOutputRepairOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
@@ -747,6 +748,18 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
     // gateway that never recovers no longer holds the run in "waiting for the model" without end.
     unavailableWindowCount: { type: "integer", dataClass: "count", required: false },
     ...OUTPUT_REPAIR_FIELDS,
+    // O-11: on a turn that failed because the answer ended without text or a tool call, what the
+    // provider's own usage says about it: `provider-reported-output` (it reported completion tokens
+    // above zero, so it generated output that never arrived), `no-provider-output` (zero) or
+    // `usage-unavailable` (it sent no usage). `providerCompletionTokens` is that count, absent when
+    // the provider sent none. Closed word and a count only.
+    emptyAnswerEvidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
+    },
+    providerCompletionTokens: { type: "integer", dataClass: "count", required: false },
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
     // where its frames live.
@@ -917,6 +930,13 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     },
     completionTokens: { type: "integer", dataClass: "count", required: true },
     outputBytes: { type: "integer", dataClass: "count", required: true },
+    // O-11: `false` when `completionTokens` is the default of a turn that measured nothing (no
+    // answer byte reached the gateway), not a count the provider or the byte estimate produced; the
+    // provider's own count, when it sent one, is `providerCompletionTokens`. `required: false`: lines written before this field lack it.
+    completionTokensMeasured: { type: "boolean", dataClass: "closed-enum", required: false },
+    // O-11: the completion tokens the provider itself reported for the attempt that failed, absent
+    // (never 0) when it sent no usage; only on a `failed` outcome. A count only.
+    providerCompletionTokens: { type: "integer", dataClass: "count", required: false },
     // #3878: the frames (or the one buffered answer) that carried model reasoning to the coding
     // runtime; 0 when the answer had none or the reasoning display is off. A count only.
     reasoningFrames: { type: "integer", dataClass: "count", required: false },
@@ -2115,6 +2135,8 @@ function gatewayOutcomeCancellationCause(
 interface GatewayOutcomeMetrics {
   readonly completionTokens: number;
   readonly outputBytes: number;
+  /** O-11: the completion tokens the provider reported for the attempt that failed, if it did. */
+  readonly providerCompletionTokens?: number;
   /** Frames (or the one buffered answer) that carried model reasoning to the runtime (#3878). */
   readonly reasoningFrames: number;
   /** The UTF-8 bytes of reasoning those frames carried (#3873 review). */
@@ -2209,6 +2231,10 @@ function recordGatewayOutcome(
         outcome,
         completionTokens,
         outputBytes,
+        completionTokensMeasured: completionTokens > 0 || outputBytes > 0,
+        ...(metrics.providerCompletionTokens === undefined
+          ? {}
+          : { providerCompletionTokens: metrics.providerCompletionTokens }),
         reasoningFrames: metrics.reasoningFrames,
         forwardedReasoningBytes: metrics.forwardedReasoningBytes,
         ...(metrics.limit === undefined ? {} : { limit: metrics.limit }),
@@ -2847,6 +2873,22 @@ function surfaceGatewayRetry(
   return published;
 }
 
+// O-11: what the provider reported for the failed attempt, and for an empty answer the closed word
+// the gateway derived from it.
+function providerEvidence(error: unknown): {
+  readonly emptyAnswerEvidence?: GatewayEmptyAnswerEvidence;
+  readonly providerCompletionTokens?: number;
+} {
+  if (!(error instanceof GatewayError)) return {};
+  const tokens = error.providerUsage?.completionTokens;
+  return {
+    ...(error instanceof ProviderEmptyAnswerError && error.emptyAnswerEvidence !== undefined
+      ? { emptyAnswerEvidence: error.emptyAnswerEvidence }
+      : {}),
+    ...(tokens === undefined ? {} : { providerCompletionTokens: tokens }),
+  };
+}
+
 function logGatewayTurnFailure(
   ctx: RouteContext,
   runId: string,
@@ -2887,6 +2929,7 @@ function logGatewayTurnFailure(
         ...(unavailableWindowCount === undefined ? {} : { unavailableWindowCount }),
         // The turn failed with a settled gateway error, which says whether a repair ran.
         ...repairEvidence(settledRepair(outputRepairOf(error))),
+        ...providerEvidence(error),
         ...(error === undefined || frames === undefined ? {} : { frames }),
         ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
         completeness: "complete",
@@ -4447,6 +4490,8 @@ interface GatewayStreamSession {
     completionTokens: number;
     promptTokens: number;
     outputBytes: number;
+    // O-11: set when the stream failed and the provider had reported its completion tokens.
+    providerCompletionTokens?: number;
     previousDeltaEndedWithHighSurrogate: boolean;
     // #3878: the model reasoning forwarded so far, bounded apart from the answer's output budget.
     reasoningFrames: number;
@@ -4560,6 +4605,9 @@ function recordSessionOutcome(
     {
       completionTokens: metrics.completionTokens,
       outputBytes: metrics.outputBytes,
+      ...(metrics.providerCompletionTokens === undefined
+        ? {}
+        : { providerCompletionTokens: metrics.providerCompletionTokens }),
       reasoningFrames: metrics.reasoningFrames,
       forwardedReasoningBytes: metrics.forwardedReasoningBytes,
       ...textualRecoveryMetrics(session.recovery.state),
@@ -5013,6 +5061,11 @@ function settleGatewayStreamError(
   if (session.cancellation.signal.aborted) {
     settleAbortedStream(session, settledRepair(repair));
     return;
+  }
+  const providerCompletionTokens =
+    error instanceof GatewayError ? error.providerUsage?.completionTokens : undefined;
+  if (providerCompletionTokens !== undefined) {
+    session.metrics.providerCompletionTokens = providerCompletionTokens;
   }
   recordSessionOutcome(session, "failed", settledRepair(repair));
   if (runtimeRetry === "refused") {

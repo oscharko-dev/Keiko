@@ -2176,6 +2176,7 @@ export type {
   UsageMetadata,
   NormalizedResponse,
   GatewayOutputRepairOutcome,
+  GatewayEmptyAnswerEvidence,
   FinishReason,
   StreamDelta,
   StreamEvent,
@@ -2190,6 +2191,7 @@ export type {
 export type { ProviderEndpointStyle, RealtimeAuthMode } from "./gateway.js";
 export type {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  GATEWAY_EMPTY_ANSWER_EVIDENCE,
   MODEL_REASONING_EFFORTS,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,

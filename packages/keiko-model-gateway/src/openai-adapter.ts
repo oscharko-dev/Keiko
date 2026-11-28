@@ -33,6 +33,7 @@ import {
   TimeoutError,
   TransportError,
   type GatewayEgressErrorCode,
+  type ProviderReportedUsage,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
@@ -370,6 +371,21 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
     // log. `required: false`: records written before this field existed lack both.
     reasoningEvents: { type: "integer", dataClass: "count", required: false },
     reasoningBytes: { type: "integer", dataClass: "count", required: false },
+    // O-11: the usage the PROVIDER reported for this read (the final `include_usage` chunk, or a
+    // whole body's `usage`): its completion tokens and the reasoning share of them. Absent, never 0,
+    // when the provider sent none, so "it generated output that never arrived" is told apart from
+    // "it generated nothing". Counts only.
+    providerCompletionTokens: { type: "integer", dataClass: "count", required: false },
+    providerReasoningTokens: { type: "integer", dataClass: "count", required: false },
+    // O-11: on a read that failed because the answer ended without text or a tool call, what the
+    // provider's own usage says about it: `provider-reported-output` (completion tokens above zero),
+    // `no-provider-output` (zero) or `usage-unavailable` (it sent no usage).
+    emptyAnswerEvidence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["provider-reported-output", "no-provider-output", "usage-unavailable"],
+    },
     // Streamed tool-call fragments placed by array position because they carried no numeric
     // `index`, and fragments dropped as unplaceable. Counts only; absent on records written before.
     toolCallFragmentsPositional: { type: "integer", dataClass: "count", required: false },
@@ -863,6 +879,44 @@ function usageFromChunk(chunk: unknown): { prompt: number; completion: number } 
     prompt: nonNegativeCount(chunk.usage.prompt_tokens),
     completion: nonNegativeCount(chunk.usage.completion_tokens),
   };
+}
+
+function reportedCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+// O-11: the counts the provider itself reported in a usage record, only when it reported them. A
+// missing or malformed count stays absent: it is never read as zero.
+function providerReportedUsageOf(usage: unknown): ProviderReportedUsage | undefined {
+  if (!isRecord(usage)) return undefined;
+  const completionTokens = reportedCount(usage.completion_tokens);
+  const details = isRecord(usage.completion_tokens_details)
+    ? usage.completion_tokens_details
+    : undefined;
+  const reasoningTokens = reportedCount(details?.reasoning_tokens);
+  if (completionTokens === undefined && reasoningTokens === undefined) return undefined;
+  return {
+    ...(completionTokens === undefined ? {} : { completionTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  };
+}
+
+function emptyAnswerEvidenceOf(
+  usage: ProviderReportedUsage | undefined,
+): NonNullable<ProviderEmptyAnswerError["emptyAnswerEvidence"]> {
+  if (usage?.completionTokens === undefined) return "usage-unavailable";
+  return usage.completionTokens > 0 ? "provider-reported-output" : "no-provider-output";
+}
+
+// O-11: puts what the provider reported on the error this read ended with, so the call's failure
+// line can say it too, and classifies an empty answer by it. Never overwrites a usage an inner layer
+// already attached.
+function annotateProviderUsage(error: unknown, usage: ProviderReportedUsage | undefined): void {
+  if (!(error instanceof GatewayError)) return;
+  if (usage !== undefined) error.providerUsage ??= usage;
+  if (error instanceof ProviderEmptyAnswerError) {
+    error.emptyAnswerEvidence ??= emptyAnswerEvidenceOf(error.providerUsage);
+  }
 }
 
 interface ToolCallDeltaEntry {
@@ -1756,6 +1810,8 @@ interface StreamReport {
   // #3878: the provider events that carried reasoning and its UTF-8 size; counts, never the text.
   reasoningEvents: number;
   reasoningBytes: number;
+  // O-11: the usage the provider reported for this read, when it reported any.
+  providerUsage: ProviderReportedUsage | undefined;
   // Tool-call fragments placed by array position (no numeric `index`) or dropped as unplaceable.
   toolCallFragmentsPositional: number;
   toolCallFragmentsDropped: number;
@@ -1781,6 +1837,7 @@ function newStreamReport(): StreamReport {
     lastDataMs: 0,
     reasoningEvents: 0,
     reasoningBytes: 0,
+    providerUsage: undefined,
     toolCallFragmentsPositional: 0,
     toolCallFragmentsDropped: 0,
     redaction: {
@@ -1847,6 +1904,8 @@ function streamReadFields(
   readonly readBudgetMs?: number;
   readonly reasoningEvents: number;
   readonly reasoningBytes: number;
+  readonly providerCompletionTokens?: number;
+  readonly providerReasoningTokens?: number;
   readonly toolCallFragmentsPositional: number;
   readonly toolCallFragmentsDropped: number;
   readonly codeRedactionRevision: number;
@@ -1861,6 +1920,12 @@ function streamReadFields(
     ...(read.bounds === undefined ? {} : { readBudgetMs: read.bounds.budgetMs }),
     reasoningEvents: report.reasoningEvents,
     reasoningBytes: report.reasoningBytes,
+    ...(report.providerUsage?.completionTokens === undefined
+      ? {}
+      : { providerCompletionTokens: report.providerUsage.completionTokens }),
+    ...(report.providerUsage?.reasoningTokens === undefined
+      ? {}
+      : { providerReasoningTokens: report.providerUsage.reasoningTokens }),
     toolCallFragmentsPositional: report.toolCallFragmentsPositional,
     toolCallFragmentsDropped: report.toolCallFragmentsDropped,
     codeRedactionRevision: CODE_REDACTION_REVISION,
@@ -2085,6 +2150,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
         yield* textChunksOf(chunk, lanes, acc, report);
         applyChunkMetadata(chunk, acc, report);
+        if (acc.usage !== undefined) report.providerUsage = providerReportedUsageOf(acc.usage);
       }
       // An explicit provider refusal must retain its refusal class even if the stream then closes.
       if (!completion.sawDone && !acc.sawFinishReason && acc.refusal.length === 0) {
@@ -2114,6 +2180,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     try {
       yield* this.streamDeltas(response, read, acc, report);
     } catch (error) {
+      annotateProviderUsage(error, report.providerUsage);
       this.logStreamRead(read, report, streamReadOutcome(error), error);
       throw error;
     }
@@ -2134,6 +2201,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       throw error;
     }
     recordWholeBodyReasoning(report, payload);
+    report.providerUsage = providerReportedUsageOf(isRecord(payload) ? payload.usage : undefined);
     const answer = this.settledAnswer(read, report, "whole-body", payload);
     if (answer.reasoning !== undefined) yield { type: "reasoning", token: answer.reasoning };
     if (answer.content.length > 0) yield { type: "delta", token: answer.content };
@@ -2160,6 +2228,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         read.start,
       );
     } catch (error) {
+      annotateProviderUsage(error, report.providerUsage);
       this.logStreamRead(read, report, streamReadOutcome(error), error);
       throw error;
     }
@@ -2248,6 +2317,9 @@ export class OpenAiAdapter implements ProviderAdapter {
           ...streamReadFields(read, report, outcome),
           ...(settled ? {} : { silentForMs: durationMs - report.lastDataMs }),
           outputExhausted: error instanceof ProviderOutputExhaustedError,
+          ...(error instanceof ProviderEmptyAnswerError && error.emptyAnswerEvidence !== undefined
+            ? { emptyAnswerEvidence: error.emptyAnswerEvidence }
+            : {}),
         },
       ),
     );
