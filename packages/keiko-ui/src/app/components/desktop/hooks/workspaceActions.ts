@@ -715,11 +715,14 @@ function makeToolMutation(args: MutateArgs, mode: ToolMode): WorkspaceApi["toggl
   return (type) => {
     const t = WIN_TYPES[type];
     const currentWins = args.winsRef?.current;
-    // Without the latest list or a measured workspace the outcome is unknown or nothing happens.
-    const unmeasured = currentWins === undefined || worldVP() === null;
-    const outcome = unmeasured ? "blocked" : classifyToolToggle(currentWins, type);
+    // A workspace that is not measured applies nothing, so the click is blocked. Without the latest
+    // list the outcome is read from what the update actually did, so the answer and the applied
+    // state always agree.
+    const unmeasured = worldVP() === null;
+    let outcome: ToolToggleOutcome =
+      unmeasured || currentWins === undefined ? "blocked" : classifyToolToggle(currentWins, type);
     if (mode !== "close" && wouldExceedWindowLimit(currentWins, type)) {
-      args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      if (!unmeasured) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
       return "blocked";
     }
     let windowLimitReached = false;
@@ -728,7 +731,10 @@ function makeToolMutation(args: MutateArgs, mode: ToolMode): WorkspaceApi["toggl
       if (vp === null) return ws;
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
-      if (existing !== undefined) return applyToolMode(list, existing, zc, mode);
+      if (existing !== undefined) {
+        if (currentWins === undefined) outcome = classifyToolToggle(list, type);
+        return applyToolMode(list, existing, zc, mode);
+      }
       if (mode === "close") return list;
       if (list.length >= MAX_WORKSPACE_WINDOWS) {
         windowLimitReached = true;
@@ -747,6 +753,7 @@ function makeToolMutation(args: MutateArgs, mode: ToolMode): WorkspaceApi["toggl
         zoom: 1,
       };
       args.onWindowAllocated?.(window);
+      if (currentWins === undefined) outcome = "open";
       return [...list, window];
     });
     if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);

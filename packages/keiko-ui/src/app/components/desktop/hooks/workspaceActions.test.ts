@@ -2697,6 +2697,30 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     expect(noRef.toggleTool("settings")).toBe("blocked");
   });
 
+  it("answers what it applied when the latest list is unknown, and stays silent when nothing is measured", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins = (update: SetStateAction<AppWindow[] | null>): void => {
+      wins = typeof update === "function" ? update(wins) : update;
+    };
+    const noRef = makeMutations({ setWins, zc: { current: 0 }, worldVP: () => layoutViewport });
+    expect(noRef.toggleTool("settings")).toBe("open");
+    expect(wins?.map((w) => w.type)).toEqual(["settings"]);
+
+    const full: AppWindow[] = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const onWindowLimitReached = vi.fn();
+    const unmeasured = makeMutations({
+      setWins,
+      zc: { current: 0 },
+      worldVP: () => null,
+      winsRef: { current: full },
+      onWindowLimitReached,
+    });
+    expect(unmeasured.toggleTool("localKnowledge")).toBe("blocked");
+    expect(onWindowLimitReached).not.toHaveBeenCalled();
+  });
+
   it("open on an already frontmost window keeps the list identity so React skips a render", () => {
     const only = [{ ...win("governedGit", {}, "governedGit"), z: 3 }];
     let next: AppWindow[] | null = null;
