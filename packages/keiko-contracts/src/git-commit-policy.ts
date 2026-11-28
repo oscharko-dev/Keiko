@@ -251,10 +251,17 @@ function checkSignoff(
 function utf8Length(text: string): number {
   let bytes = 0;
   for (const char of text) {
-    const point = char.codePointAt(0) ?? 0;
-    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+    bytes += utf8Width(char.codePointAt(0) ?? 0);
   }
   return bytes;
+}
+
+// The bytes UTF-8 spends on one code point (a lone surrogate counts 3, as `Buffer.byteLength` does).
+function utf8Width(point: number): number {
+  if (point < 0x80) return 1;
+  if (point < 0x800) return 2;
+  if (point < 0x10000) return 3;
+  return 4;
 }
 
 function checkMessageSize(message: string): GitCommitMessageViolationCode | undefined {

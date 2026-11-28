@@ -452,11 +452,6 @@ function endWaiting(): void {
   waitEpisodeActive = false;
 }
 
-function showWaitingForConnection(waiting: boolean): void {
-  if (waiting) showWaiting();
-  else endWaiting();
-}
-
 function reconnectDelay(): number {
   return Math.min(
     EVENT_SOURCE_RECONNECT_MAX_DELAY_MS,
@@ -505,7 +500,10 @@ function createSharedSource(): void {
   // stream would lose the run's terminal event, which the server cannot replay.
   sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, {
     nonReplayable: true,
-    onWaiting: showWaitingForConnection,
+    onWaiting: (waiting) => {
+      if (waiting) showWaiting();
+      else endWaiting();
+    },
   });
   void waitForSharedSource();
 }

@@ -301,10 +301,10 @@ async function connectActivity(
   // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
   // subscription here turns a later server restart into an error on an already finished task.
   if (controller.signal.aborted || endedBeforeRead) return;
-  // While this document is hidden the stream gives its connection to a visible tab's essential
-  // stream; it is then reopened from a fresh snapshot once a slot is granted again.
+  // The stream gives its connection up when a stream that outranks it waits for one (see
+  // browser-stream-capacity); it is then reopened from a fresh snapshot once a slot is granted again.
   let resumed = false;
-  while (await streamUntilYielded(controller, enqueue, resumed, onWaiting)) resumed = true;
+  while (await streamUntilYielded(controller, enqueue, resumed, onWaiting)) resumed = true; // NOSONAR typescript:S9382 -- each reopen waits for the previous stream to give its slot up
 }
 
 // Resolves true when the stream gave its slot up and has to be opened again.

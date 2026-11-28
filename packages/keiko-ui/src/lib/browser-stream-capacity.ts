@@ -835,7 +835,8 @@ function announceWaiter(
   };
   sync();
   // The holders of this document look at once instead of at their next five-second check.
-  for (const check of [...localHolders]) check();
+  // A snapshot: a check that yields removes its holder from the set while this loop runs.
+  for (const check of [...localHolders]) check(); // NOSONAR typescript:S7747 -- iterate a snapshot, the set changes
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", sync);
   waiting.addEventListener(
     "abort",
@@ -865,8 +866,8 @@ async function requestLease(locks: LockManager, lease: PersistentLease): Promise
   if (lease.options.essential === true || lease.options.slots === undefined) {
     announceWaiter(locks, [...queued], lease, waiting.signal);
   }
-  await Promise.allSettled([
-    ...[...queued].map((name) =>
+  await Promise.allSettled(
+    [...queued].map((name) =>
       locks.request(name, { signal: waiting.signal }, async () => {
         if (lease.ended || lease.granted) return;
         lease.granted = true;
@@ -874,7 +875,7 @@ async function requestLease(locks: LockManager, lease: PersistentLease): Promise
         await holdLease(locks, name, lease);
       }),
     ),
-  ]);
+  );
 }
 
 /** Hold any free origin slot; healthy non-replayable connections never yield for capacity. */
