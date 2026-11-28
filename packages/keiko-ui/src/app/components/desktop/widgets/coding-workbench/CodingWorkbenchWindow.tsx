@@ -1175,9 +1175,20 @@ function useRunRepositoryPin(
     }
     if (!starting.current) return;
     starting.current = false;
-    const acknowledged = mutation.status === "idle" && mutation.cancelled !== true;
+    // A refusal the next read superseded in the same render settles idle too, with its failure kept.
+    const acknowledged =
+      mutation.status === "idle" &&
+      mutation.cancelled !== true &&
+      mutation.supersededFailure === undefined;
     if (acknowledged && run.active) claimedRunId.current = run.runId;
-  }, [pending, mutation.status, mutation.cancelled, run.active, run.runId]);
+  }, [
+    pending,
+    mutation.status,
+    mutation.cancelled,
+    mutation.supersededFailure,
+    run.active,
+    run.runId,
+  ]);
   // The claim ends with the run it was made for.
   useEffect(() => {
     if (!run.active || run.runId !== claimedRunId.current) claimedRunId.current = undefined;

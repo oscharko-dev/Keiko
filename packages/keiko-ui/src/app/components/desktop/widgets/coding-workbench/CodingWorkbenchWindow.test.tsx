@@ -5900,6 +5900,16 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       },
     ],
     ["cancelled", { status: "idle", kind: null, requestId: null, error: null, cancelled: true }],
+    [
+      "refused and superseded by the next read in the same render",
+      {
+        status: "idle",
+        kind: null,
+        requestId: null,
+        error: null,
+        supersededFailure: { kind: "start", code: "active-run" },
+      },
+    ],
   ] as const)(
     "does not pin another window's run that became visible while this window's start was pending and then %s",
     (_name, ended) => {
