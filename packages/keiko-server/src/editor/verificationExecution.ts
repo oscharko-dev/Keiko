@@ -50,6 +50,12 @@ import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/m
 
 import { resolveVerificationRuntimeTarget } from "./verificationRuntimeTarget.js";
 import {
+  nodeStepNodeCopyPorts,
+  privateStepNode,
+  type PrivateStepNode,
+  type StepNodeCopyPorts,
+} from "./windowsStepNode.js";
+import {
   attestWindowsStepSupervisor,
   resolveWindowsStepSupervisorSync,
   type WindowsStepAttestationTimings,
@@ -413,6 +419,8 @@ export interface ExecuteVerificationArgs {
   // isolated never runs a step that a backend started meanwhile would admit. Absent, the run
   // probes the host itself.
   readonly isolation?: TimedNetworkIsolationProbe | undefined;
+  // Hermetic test seam: the file and pin ports of the private step Node.js copy.
+  readonly stepNodeCopy?: StepNodeCopyPorts | undefined;
 }
 
 // The egress policy every verification run executes under: a step that needs an enforced
@@ -558,10 +566,29 @@ async function executeExclusiveVerification(
       args.diagnostics,
       args.correlationId,
     ));
-  const { probe, durationMs: probeDurationMs, windowsStep } = timed;
   const activityLog = args.activityLog ?? processServerLogSink();
   const resolvedStep = await stepForRun(args, timed, activityLog);
-  const windowsStepSupervisor = resolvedStep?.supervisor;
+  // After the queue: the step Node.js the steps launch is this run's own copy, proven against the pin.
+  const stepNode = await privateStepNodeFor(args, resolvedStep?.supervisor);
+  try {
+    return await executeWithStepNode({ args, timed, resolvedStep, stepNode, activityLog });
+  } finally {
+    await stepNode.node?.dispose();
+  }
+}
+
+interface StepNodeRun {
+  readonly args: ExecuteVerificationArgs;
+  readonly timed: TimedNetworkIsolationProbe;
+  readonly resolvedStep: ResolvedWindowsStep | undefined;
+  readonly stepNode: PrivateSupervisor;
+  readonly activityLog: ServerLogSink;
+}
+
+async function executeWithStepNode(run: StepNodeRun): Promise<ExecuteVerificationResult> {
+  const { args, timed, resolvedStep, activityLog } = run;
+  const { probe, durationMs: probeDurationMs, windowsStep } = timed;
+  const windowsStepSupervisor = run.stepNode.supervisor;
   const stepCopy =
     windowsStepSupervisor === undefined
       ? undefined
@@ -578,6 +605,42 @@ async function executeExclusiveVerification(
     ...windowsExecutionFields((windowsStep ?? resolvedStep)?.attestation, cleanup),
     networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
   };
+}
+
+interface PrivateSupervisor {
+  readonly supervisor: WindowsStepSupervisor | undefined;
+  readonly node: PrivateStepNode | undefined;
+}
+
+// The supervisor the run's steps use: the resolved one with its step Node.js replaced by a private
+// copy proven against the pin after the queue. A copy that is not the pinned build leaves the
+// steps without a step Node.js, as an install that missed the pin always did, and says so.
+async function privateStepNodeFor(
+  args: ExecuteVerificationArgs,
+  supervisor: WindowsStepSupervisor | undefined,
+): Promise<PrivateSupervisor> {
+  const installed = supervisor?.stepNode;
+  if (supervisor === undefined || installed === undefined) return { supervisor, node: undefined };
+  const node = await privateStepNode(installed, args.stepNodeCopy ?? nodeStepNodeCopyPorts);
+  if (node.outcome !== "copied") reportStepNodeCopy(args, node);
+  const { stepNode: _installed, ...rest } = supervisor;
+  return {
+    supervisor: node.stepNode === undefined ? rest : { ...rest, stepNode: node.stepNode },
+    node,
+  };
+}
+
+function reportStepNodeCopy(args: ExecuteVerificationArgs, node: PrivateStepNode): void {
+  emitServerDiagnostic(
+    args.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation: "verification.step-node-copy",
+      source: `verification.step-node-copy.${node.outcome}`,
+      error: node.failure ?? new Error(`step node copy ${node.outcome}`),
+      redact: () => "The private Windows step Node.js copy was not the pinned build.",
+    }),
+  );
 }
 
 // The run, then the removal of its private step copy, awaited inside the exclusive scope: the next

@@ -2086,7 +2086,9 @@ describe("production managed worktree tools", () => {
         now: "vitest run",
         runnerRefuses: "plan-changed",
       });
-      const expected = verificationPlanDigest(stepsOf("vitest run").steps);
+      const expected = verificationPlanDigest(
+        (stepsOf("vitest run") as Extract<VerificationCommandPreview, { kind: "steps" }>).steps,
+      );
       expect(runToReport).toHaveBeenCalledTimes(1);
       expect(runToReport.mock.calls[0]?.[0]).toMatchObject({ expectedPlanDigest: expected });
       expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });

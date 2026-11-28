@@ -21,7 +21,14 @@ import {
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
-import { resolveStepNode, windowsStepNodePin, type StepNodeFs } from "./windowsStepNode.js";
+import {
+  privateStepNode,
+  resolveStepNode,
+  windowsStepNodePin,
+  type StepNodeCopyPorts,
+  type StepNodeFs,
+} from "./windowsStepNode.js";
+import type { WindowsStepNode } from "@oscharko-dev/keiko-contracts";
 
 const roots: string[] = [];
 
@@ -376,5 +383,87 @@ describe("the runtime's step Node.js (#4492)", () => {
   it("is pinned by this server for Windows with the real artifact digest", () => {
     expect(windowsStepNodePin()).toBe(NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode);
     expect(windowsStepNodePin()?.sha256).toMatch(/^[0-9a-f]{64}$/u);
+  });
+});
+
+describe("privateStepNode: the run executes its own copy, proven against the pin after the queue", () => {
+  const GOOD = Buffer.from("pinned step node bytes");
+  const PIN = {
+    sha256: createHash("sha256").update(GOOD).digest("hex"),
+    sizeBytes: GOOD.length,
+    sourceSha256: "0".repeat(64),
+    patchSha256s: [],
+  };
+  const installed: WindowsStepNode = {
+    directory: "/install/step-node",
+    executable: "/install/step-node/node.exe",
+    record: () => undefined,
+  };
+
+  function ports(
+    files: Map<string, Buffer>,
+    over: Partial<StepNodeCopyPorts> = {},
+  ): StepNodeCopyPorts & { readonly removed: string[] } {
+    const removed: string[] = [];
+    const bytes = (path: string): Buffer => {
+      const found = files.get(path);
+      if (found === undefined) throw new Error("missing");
+      return found;
+    };
+    return {
+      pin: () => PIN,
+      makeDirectory: () => Promise.resolve("/private/run-1"),
+      copyFile: (from, to): Promise<void> => {
+        files.set(to, bytes(from));
+        return Promise.resolve();
+      },
+      sizeOf: (path) => Promise.resolve(bytes(path).length),
+      sha256: (path) => Promise.resolve(createHash("sha256").update(bytes(path)).digest("hex")),
+      removeDirectory: (path): Promise<void> => {
+        removed.push(path);
+        return Promise.resolve();
+      },
+      removed,
+      ...over,
+    };
+  }
+
+  it("runs the pinned bytes from a private folder and removes it afterwards", async () => {
+    const files = new Map([[installed.executable, GOOD]]);
+    const port = ports(files);
+    const node = await privateStepNode(installed, port);
+    expect(node.outcome).toBe("copied");
+    expect(node.stepNode?.executable).toBe(join("/private/run-1", "node.exe"));
+    expect(node.stepNode?.directory).toBe("/private/run-1");
+    await node.dispose();
+    expect(port.removed).toEqual(["/private/run-1"]);
+  });
+
+  it.each([
+    ["same size, other bytes", Buffer.from("pinned step node bytez"), "hash"],
+    ["other size", Buffer.from("short"), "size"],
+  ] as const)(
+    "refuses an install replaced while the run waited (%s) and uses no step Node.js",
+    async (_label, replaced, outcome) => {
+      // The install matched the pin when the run was admitted; the package was replaced in the queue.
+      const files = new Map([[installed.executable, replaced]]);
+      const port = ports(files);
+      const node = await privateStepNode(installed, port);
+      expect(node).toMatchObject({ outcome, stepNode: undefined });
+      expect(port.removed).toEqual(["/private/run-1"]);
+    },
+  );
+
+  it("fails closed when no pin is carried or the copy cannot be made", async () => {
+    const files = new Map([[installed.executable, GOOD]]);
+    expect(await privateStepNode(installed, ports(files, { pin: () => undefined }))).toMatchObject({
+      outcome: "no-pin",
+      stepNode: undefined,
+    });
+    const failing = ports(files, { copyFile: () => Promise.reject(new Error("denied")) });
+    const node = await privateStepNode(installed, failing);
+    expect(node).toMatchObject({ outcome: "copy-failed", stepNode: undefined });
+    expect(node.failure).toBeInstanceOf(Error);
+    expect(failing.removed).toEqual(["/private/run-1"]);
   });
 });

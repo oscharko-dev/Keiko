@@ -7,6 +7,8 @@
 // a path.
 
 import { lstatSync, readdirSync, type Stats } from "node:fs";
+import { copyFile, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   activityLogEvent,
@@ -240,4 +242,82 @@ export function windowsStepNodeFor(
       );
     },
   };
+}
+
+/** The file and pin questions a private step Node.js copy asks; tests inject all of them. */
+export interface StepNodeCopyPorts {
+  readonly pin: () => NpmLaneStepNodeApproval | undefined;
+  /** A new empty folder only this run can name, outside every workspace. */
+  readonly makeDirectory: () => Promise<string>;
+  readonly copyFile: (from: string, to: string) => Promise<void>;
+  readonly sizeOf: (path: string) => Promise<number>;
+  readonly sha256: (path: string) => Promise<string>;
+  readonly removeDirectory: (path: string) => Promise<void>;
+}
+
+export const nodeStepNodeCopyPorts: StepNodeCopyPorts = {
+  pin: windowsStepNodePin,
+  makeDirectory: () => mkdtemp(join(tmpdir(), "keiko-step-node-")),
+  copyFile: (from, to) => copyFile(from, to),
+  sizeOf: async (path) => (await stat(path)).size,
+  sha256: sha256FileAsync,
+  removeDirectory: (path) => rm(path, { recursive: true, force: true }),
+};
+
+/** The step Node.js a run executes: its own private copy, or none when the copy is not the pin. */
+export interface PrivateStepNode {
+  readonly stepNode: WindowsStepNode | undefined;
+  readonly outcome: "copied" | "no-pin" | "size" | "hash" | "copy-failed";
+  /** The error behind `copy-failed`, for the caller's diagnostic; never logged here. */
+  readonly failure?: unknown;
+  readonly dispose: () => Promise<void>;
+}
+
+/**
+ * The install's step Node.js was attested when the run was admitted, which may be long before the
+ * run holds its workspace (the exclusive queue). The run therefore executes a PRIVATE copy made
+ * after the queue and compared with the pin AFTER it was copied: a package replaced while the run
+ * waited, or rewritten while it ran, is never what the confined step launches. A copy that is not
+ * the pinned build yields no step Node.js, exactly as an install that did not match the pin does.
+ */
+export async function privateStepNode(
+  installed: WindowsStepNode,
+  ports: StepNodeCopyPorts,
+): Promise<PrivateStepNode> {
+  const pin = ports.pin();
+  const none = (outcome: PrivateStepNode["outcome"]): PrivateStepNode => ({
+    stepNode: undefined,
+    outcome,
+    dispose: () => Promise.resolve(),
+  });
+  if (pin === undefined) return none("no-pin");
+  let directory: string | undefined;
+  try {
+    directory = await ports.makeDirectory();
+    const executable = join(directory, STEP_NODE_FILE_NAME);
+    await ports.copyFile(installed.executable, executable);
+    const failed = await copyMismatch(ports, executable, pin);
+    if (failed === undefined) {
+      const made = directory;
+      return {
+        stepNode: { directory, executable, record: installed.record },
+        outcome: "copied",
+        dispose: () => ports.removeDirectory(made),
+      };
+    }
+    await ports.removeDirectory(directory);
+    return none(failed);
+  } catch (error) {
+    if (directory !== undefined) await ports.removeDirectory(directory).catch(() => undefined);
+    return { ...none("copy-failed"), failure: error };
+  }
+}
+
+async function copyMismatch(
+  ports: StepNodeCopyPorts,
+  executable: string,
+  pin: NpmLaneStepNodeApproval,
+): Promise<"size" | "hash" | undefined> {
+  if ((await ports.sizeOf(executable)) !== pin.sizeBytes) return "size";
+  return (await ports.sha256(executable)) === pin.sha256 ? undefined : "hash";
 }

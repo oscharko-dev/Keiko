@@ -646,3 +646,53 @@ describe("planIsolationProbe (#4496)", () => {
     expect(windowsStepRunDeps(probe, undefined, NONE)).toEqual({ enforcedNetworkAvailable: true });
   });
 });
+
+describe("executeVerificationEnforced — the Windows step Node.js of a run (#4491)", () => {
+  it("copies the install's step Node.js only once the run holds its workspace, and removes the copy", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-step-node-run-")));
+    try {
+      const order: string[] = [];
+      const supervisor: WindowsStepSupervisor = {
+        acquire: () => ({ path: "supervisor.exe", drives: [], release: () => 0, refused: () => 0 }),
+        readRoots: [],
+        profile: String.raw`C:\Users\dev`,
+        admitReadRoot: (directory) => directory,
+        stepNode: {
+          directory: "/install/step-node",
+          executable: "/install/step-node/node.exe",
+          record: () => undefined,
+        },
+      };
+      const run = (): Promise<unknown> =>
+        executeVerificationEnforced({
+          plan: { workspaceRoot: root, steps: [] },
+          workspace: detectWorkspaceAt(root),
+          signal: new AbortController().signal,
+          isolation: {
+            probe: { available: true, backend: "windows-appcontainer" },
+            durationMs: 0,
+            windowsStep: { supervisor },
+          },
+          stepNodeCopy: {
+            pin: () => ({ sha256: "ab", sizeBytes: 1, sourceSha256: "", patchSha256s: [] }),
+            makeDirectory: () => {
+              order.push("copy");
+              return Promise.resolve(join(root, "unused"));
+            },
+            copyFile: () => Promise.resolve(),
+            sizeOf: () => Promise.resolve(1),
+            sha256: () => Promise.resolve("ab"),
+            removeDirectory: () => {
+              order.push("remove");
+              return Promise.resolve();
+            },
+          },
+        });
+      await run();
+      // The copy is made inside the run's exclusive scope and removed when the run ends.
+      expect(order).toEqual(["copy", "remove"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
