@@ -3600,12 +3600,31 @@ describe("CodingRuntimeOrchestrator", () => {
     // The spelling differs in separators and the trailing separator alone. Letter case is never
     // folded by platform: a case-only spelling is the same folder only when the filesystem says so,
     // which `repositoryRootIdentity.test.ts` proves on a real directory.
-    const respelled = `${ACTIVE_REPOSITORY_ROOT.replaceAll("/", "\\")}\\`;
+    const respelled =
+      process.platform === "win32"
+        ? `${ACTIVE_REPOSITORY_ROOT.replaceAll("/", "\\")}\\`
+        : `${ACTIVE_REPOSITORY_ROOT}/`;
 
     expect(
       (await f.orchestrator.start({ ...start, expectedWorkspace: { root: respelled } })).ok,
     ).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a root whose literal backslash only looks like a separator on a POSIX host",
+    async () => {
+      const f = fixture();
+      // A backslash is a file-name character here: this is another (here missing) folder, never
+      // the active repository spelled with a trailing separator.
+      const root = `${ACTIVE_REPOSITORY_ROOT}\\`;
+
+      expect(await f.orchestrator.start({ ...start, expectedWorkspace: { root } })).toEqual({
+        ok: false,
+        failureCode: "workspace-selection-mismatch",
+      });
+      expect(f.manager.start).not.toHaveBeenCalled();
+    },
+  );
 
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "refuses a root the filesystem cannot be asked about and logs it with the correlation id",

@@ -1430,6 +1430,15 @@ function recordStartScopeGap(
   });
 }
 
+function startScopeFailureCode(
+  gap: StartScopeGap,
+): "expected-workspace-missing" | "workspace-selection-mismatch" | "authority-resolution-failed" {
+  if (gap === "expected-workspace-missing") return "expected-workspace-missing";
+  if (gap === "workspace-selection-mismatch" || gap === "no-active-workspace")
+    return "workspace-selection-mismatch";
+  return "authority-resolution-failed";
+}
+
 // A root the filesystem cannot be asked about (a permission or path error) is not proven the same
 // folder: the start is refused as a selection mismatch and the cause is logged body-free with the
 // request's correlation id, never surfaced as an opaque server error.
@@ -4748,15 +4757,7 @@ export class CodingRuntimeOrchestrator {
     // server with no active workspace (its pointer was invalidated, e.g. the repository was deleted
     // and cloned again at the same path) is the same recoverable fact as another active repository:
     // the window re-reads and re-binds what it shows. The log keeps the precise gap.
-    return {
-      ok: false,
-      failureCode:
-        scope.gap === "expected-workspace-missing"
-          ? "expected-workspace-missing"
-          : scope.gap === "workspace-selection-mismatch" || scope.gap === "no-active-workspace"
-            ? "workspace-selection-mismatch"
-            : "authority-resolution-failed",
-    };
+    return { ok: false, failureCode: startScopeFailureCode(scope.gap) };
   }
 
   /**

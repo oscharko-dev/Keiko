@@ -65,4 +65,16 @@ describe("repository root identity", () => {
     expect(repositoryRootsAreSameFolder(repository, alias)).toBe(true);
     expect(repositoryRootsAreSameFolder(repository, other)).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a folder named with a literal backslash apart from the nested folder it resembles",
+    () => {
+      const root = scratch();
+      mkdirSync(join(root, "a", "b"), { recursive: true });
+      mkdirSync(join(root, "a\\b"));
+
+      expect(repositoryRootsAreSameFolder(join(root, "a\\b"), join(root, "a", "b"))).toBe(false);
+      expect(repositoryRootsAreSameFolder(join(root, "a\\b"), `${join(root, "a\\b")}/`)).toBe(true);
+    },
+  );
 });
