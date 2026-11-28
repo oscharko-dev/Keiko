@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 import { Readable, Writable } from "node:stream";
 import {
   redact,
+  redactCredentialShapes,
   environmentVariableValue,
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
@@ -1510,6 +1511,21 @@ export function defaultOutputScrubSecrets(
   ];
 }
 
+// `machine-metadata`: the credential floor only (literal credential values, URL credentials, private
+// keys, issuer-shaped tokens). The full redactor additionally infers source code or YAML from the
+// text and masks the rest of the output when that projection refuses, which closed machine
+// metadata (index stat, object ids, paths) must never be exposed to (U-25).
+function credentialFloor(text: string, secrets: readonly string[]): string {
+  return redactCredentialShapes(text, secrets, false);
+}
+
+function outputScrubSecrets(deps: RunCommandDeps): readonly string[] {
+  const mode = deps.policy.outputScrub;
+  return mode === "credentials-only" || mode === "machine-metadata"
+    ? collectCredentialLikeEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? [])
+    : defaultOutputScrubSecrets(deps.processEnv, deps.policy);
+}
+
 function buildResult(options: BuildResultOptions): CommandResult {
   const { input, buffers, state, exitCode, termSignal, deps, startedAt, attestation } = options;
   // A credential the policy deliberately handed to the child is still scrubbed on the way out: a
@@ -1518,10 +1534,7 @@ function buildResult(options: BuildResultOptions): CommandResult {
   // `credentials-only` narrows the set to credential values (by governed name, credential-shaped
   // name and the policy's own list) for the one read whose stdout is the value the caller needs;
   // every other policy keeps the fail-closed default of scrubbing every non-allowlisted value.
-  const secrets =
-    deps.policy.outputScrub === "credentials-only"
-      ? collectCredentialLikeEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? [])
-      : defaultOutputScrubSecrets(deps.processEnv, deps.policy);
+  const secrets = outputScrubSecrets(deps);
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
     // Real over-cap byte count from the raw arrival counter (ADR-0054 D5). Clamped at 0 so a
@@ -1548,8 +1561,9 @@ function buildResult(options: BuildResultOptions): CommandResult {
   const originalErr = (
     buffers.window ? windowText(buffers.window.err) : Buffer.concat(buffers.err)
   ).toString("utf8");
-  const stdout = redact(originalOut, secrets);
-  const stderr = redact(originalErr, secrets);
+  const scrub = deps.policy.outputScrub === "machine-metadata" ? credentialFloor : redact;
+  const stdout = scrub(originalOut, secrets);
+  const stderr = scrub(originalErr, secrets);
   return {
     command: input.command,
     args: input.args,

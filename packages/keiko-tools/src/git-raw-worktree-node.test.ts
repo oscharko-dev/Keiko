@@ -31,6 +31,7 @@ import {
   readGitWorktreeSnapshot,
   readStagedPaths,
 } from "./git-worktree-snapshot-node.js";
+import { redact, redactCredentialShapes } from "@oscharko-dev/keiko-security";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
 
@@ -176,6 +177,55 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
     expect(await readGitStagedDiff(content)).toContain("[REDACTED]");
     expect(await readGitBlobText(content, blob)).not.toContain("private-environment-value");
     expect(await readGitStagedDiff(content)).not.toContain("private-environment-value");
+  });
+
+  // U-25: a healthy Full-access commit was refused ("no passing verification covers the staged
+  // change") because the metadata read ran through the full redactor, whose source-language
+  // projection infers code or YAML from the text and, when that refuses (a syntax refusal, or a
+  // call-stack overflow on a ~300-file listing), masks the rest of the output. Closed machine
+  // metadata must never meet that projection. The production redactor itself names the trigger: a
+  // tracked file whose NAME reads as source (`class A {`) is masked by `redact` yet clean under the
+  // credential floor the machine lane now uses.
+  it("keeps the commit proof readable when a tracked file name reads as source code", async () => {
+    const sourceLikeName = "class A {";
+    writeFileSync(join(root, sourceLikeName), "body\n");
+    writeFileSync(join(root, "other.txt"), "other\n");
+    git(["add", "--", sourceLikeName, "other.txt"]);
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    const statOutput = await readGitIndexStat(clean);
+    expect(statOutput).toContain(sourceLikeName);
+    expect(redact(statOutput, [])).not.toBe(statOutput);
+    expect(redactCredentialShapes(statOutput, [], false)).toBe(statOutput);
+    expect((await readGitIndexEntries(clean)).map((entry) => entry.path)).toContain(sourceLikeName);
+    expect(await readGitIndexTreeDigest(clean)).toMatch(/^[0-9a-f]+$/u);
+    const changes = (await readGitRawChanges(clean)).changes.map((file) => file.path);
+    expect(changes).toEqual(expect.arrayContaining([sourceLikeName, "other.txt"]));
+  });
+
+  it("still refuses stat, entry and tree metadata whose PATH carries a credential value", async () => {
+    git(["add", "."]);
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    const headSha = await readGitRevision(clean, "HEAD");
+    const credential = {
+      ...clean,
+      processEnv: { ...clean.processEnv, MY_DEPLOY_TOKEN: "code.txt" },
+    };
+    await expect(readGitIndexStat(credential)).rejects.toBeInstanceOf(GitWorktreeReadError);
+    await expect(readGitIndexEntries(credential)).rejects.toBeInstanceOf(GitWorktreeReadError);
+    await expect(readGitTreeEntries(credential, headSha)).rejects.toBeInstanceOf(
+      GitWorktreeReadError,
+    );
+  });
+
+  it("still masks a credential-shaped token in a path and in file CONTENT", async () => {
+    const token = `sk-${"a1".repeat(12)}`;
+    writeFileSync(join(root, `${token}.txt`), `${token}\n`);
+    git(["add", "."]);
+    const clean = { workspace, processEnv: { PATH: process.env.PATH } };
+    await expect(readGitIndexStat(clean)).rejects.toBeInstanceOf(GitWorktreeReadError);
+    const blob = git(["rev-parse", `:${token}.txt`]);
+    expect(await readGitBlobText(clean, blob)).not.toContain(token);
+    expect(await readGitStagedDiff(clean)).not.toContain(token);
   });
 
   it("retains tracking headers when CI context values overlap the Git protocol", async () => {

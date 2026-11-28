@@ -440,7 +440,14 @@ Tool `output` strings are redacted at two points:
    declared credential values and built-in secret patterns remain scrubbed, and child environment
    isolation is unchanged. Machine metadata containing a redaction marker is rejected before
    parsing or hashing; corrupted identities must never become verification facts or permit a push.
-   The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the same scrub for
+   Those machine-parsed readers run with `outputScrub: "machine-metadata"` (U-25, 2026-11-28): the
+   same credential scrub, but without the full redactor's source-language projection. That
+   projection infers code or YAML from the text itself and fails closed by masking the rest of the
+   output; on a ~300-file index listing it hit a stack overflow in the YAML pass, and a tracked
+   file named like source (`class A {`) triggers it deterministically, so the metadata read was
+   rejected and a healthy commit could never be proved. Content-bearing reads keep the full
+   redactor.
+   The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the `credentials-only` scrub for
    one reason: it runs only a fixed, repository-independent Node metadata script whose output is
    bounded to 1 KiB and parsed against a closed key set, and a host that exports `NODE_VERSION` (the
    official Node container image does) would otherwise have its Node version redacted and the target

@@ -2325,6 +2325,37 @@ describe("runCommand — outputScrub: credentials-only", () => {
     expect(result.stdout).toContain("[REDACTED]");
   });
 
+  // U-25: closed machine metadata must not meet the source-language projection. A listing whose
+  // path reads as source is masked by the full redactor; "machine-metadata" keeps it byte for byte
+  // while still scrubbing a credential value and a credential-shaped token.
+  it("machine-metadata skips the source projection but keeps the credential scrub", async () => {
+    const listing = "class A {\n  mtime: 1795824484:748913727\n  size: 109\tflags: 0\nsrc/b.js\n";
+    const run = async (
+      text: string,
+      mode: "credentials-only" | "machine-metadata",
+    ): Promise<string> =>
+      (
+        await runCommand(
+          {
+            command: "node",
+            args: ["-e", echo(text)],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          {
+            ...echoDeps({ PATH: process.env.PATH ?? "", API_TOKEN: "deploy-tok3n-9" }, true),
+            policy: { ...echoDeps({}, true).policy, outputScrub: mode },
+          },
+        )
+      ).stdout;
+    expect(await run(listing, "credentials-only")).not.toBe(listing);
+    expect(await run(listing, "machine-metadata")).toBe(listing);
+    expect(await run("a deploy-tok3n-9 b", "machine-metadata")).not.toContain("deploy-tok3n-9");
+    const shaped = `sk-${"a1".repeat(12)}`;
+    expect(await run(shaped, "machine-metadata")).not.toContain(shaped);
+  });
+
   // The contrast that makes the mode necessary: the default policy scrubs the context value too.
   it("is the only mode that lets the context value through", async () => {
     const result = await runCommand(
