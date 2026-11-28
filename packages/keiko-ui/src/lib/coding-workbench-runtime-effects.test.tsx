@@ -388,6 +388,49 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
   });
   // Customer 1.3.4: the source describes the model chosen in the picker, so choosing another model
   // reads its profile again (the server then checks exactly that model).
+  // U-45: Start is not the first place the person may learn the model is inactive. A start the server
+  // refused as "model unavailable" re-reads the source, which also asks for the catalog, so the
+  // in-place activation notice appears right after the refusal.
+  it("re-reads the source once per start refused as model-unavailable", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    const intent = { current: { pickedModelId: null } };
+    const refused = (message: string, reason?: "model-verification-pending"): never =>
+      ({
+        ...initial,
+        mutation: {
+          status: "error",
+          kind: "start",
+          requestId: "r",
+          error: {
+            code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+            message,
+            retryable: true,
+            ...(reason === undefined ? {} : { modelRefusalReason: reason }),
+          },
+        },
+      }) as never;
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource,
+          refreshRuntime: vi.fn(async () => undefined),
+          refreshRun: vi.fn(async () => undefined),
+          intent,
+        });
+      },
+      { initialProps: { state: initial } },
+    );
+    refreshSource.mockClear();
+    rerender({ state: refused("not admitted") });
+    expect(refreshSource).toHaveBeenCalledOnce();
+    expect(refreshSource).toHaveBeenCalledWith(false, undefined, "use");
+    // A model that is still being checked is not an inactive one: nothing to re-read.
+    rerender({ state: refused("checking", "model-verification-pending") });
+    expect(refreshSource).toHaveBeenCalledOnce();
+  });
+
   it("re-reads the source when the picker selects another model", () => {
     const refreshSource = vi.fn(async () => undefined);
     const initial = createInitialCodingWorkbenchRuntimeState();
@@ -544,6 +587,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
 describe("post-run description refresh (#3390)", () => {
   const settled = (overrides: Record<string, unknown> = {}): CodingWorkbenchRuntimeState =>
     ({
+      mutation: createInitialCodingWorkbenchRuntimeState().mutation,
       runtime: { status: "ready", value: null, error: null },
       run: {
         status: "ready",

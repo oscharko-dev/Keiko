@@ -47,6 +47,8 @@ export const GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT =
   "keiko:gateway-model-catalog-refresh-requested";
 
 let pending = false;
+let catalogRefreshConsumers = 0;
+let unservedCatalogRefresh: { readonly check: boolean } | undefined;
 
 /**
  * Request that the Settings panel open the gateway-setup dialog (Figma access-token section).
@@ -101,6 +103,14 @@ export function requestGatewayModelCatalogRefresh(
   options: { readonly check?: boolean } = {},
 ): void {
   if (typeof window === "undefined") return;
+  // A window that mounts in the same commit as the shell runs its effects before the shell's
+  // catalog consumer has subscribed, so the event would reach nobody and the catalog would stay the
+  // bootstrap's activated-only list (U-45). The request is kept until a consumer attaches.
+  if (catalogRefreshConsumers === 0) {
+    unservedCatalogRefresh = {
+      check: unservedCatalogRefresh?.check === true || options.check === true,
+    };
+  }
   window.dispatchEvent(
     new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
       detail: { check: options.check === true },
@@ -122,4 +132,21 @@ export function gatewayModelCatalogCorrelationId(event: Event): string | undefin
   const descriptor = Object.getOwnPropertyDescriptor(detail, "correlationId");
   const value: unknown = descriptor?.value;
   return isActivityLogCorrelationId(value) ? value : undefined;
+}
+
+/**
+ * A catalog refresh consumer is now listening. Returns the request that arrived before any consumer
+ * existed (and clears it), so the consumer serves it once instead of the request being lost.
+ */
+export function attachGatewayModelCatalogRefreshConsumer():
+  { readonly check: boolean } | undefined {
+  catalogRefreshConsumers += 1;
+  const unserved = unservedCatalogRefresh;
+  unservedCatalogRefresh = undefined;
+  return unserved;
+}
+
+/** The consumer stopped listening; later requests are kept for the next one. */
+export function detachGatewayModelCatalogRefreshConsumer(): void {
+  catalogRefreshConsumers = Math.max(0, catalogRefreshConsumers - 1);
 }

@@ -85,6 +85,32 @@ function usePickedModelRefreshEffect({
   }, [state.runtimePreference, state.selectedModelId, refreshSource, intent]);
 }
 
+/**
+ * U-45: a Start the server refused because the model is not admitted is the one moment the window
+ * may still not know that the model is inactive (a catalog or source read that never landed). The
+ * refusal therefore re-reads the source once, which also asks for the unfiltered model catalog, so
+ * the "Activate {model}" notice appears right after it. A model that is only still being checked
+ * is not an inactive one and re-reads nothing. One read per refusal, never a loop.
+ */
+function useModelRefusalReread(
+  mutation: CodingWorkbenchRuntimeState["mutation"],
+  refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+    checkModel?: CodingWorkbenchModelCheck,
+  ) => Promise<void>,
+): void {
+  const refused =
+    mutation.status === "error" &&
+    mutation.error?.code === "CODING_RUNTIME_MODEL_UNAVAILABLE" &&
+    mutation.error.modelRefusalReason !== "model-verification-pending"
+      ? mutation.requestId
+      : null;
+  useEffect(() => {
+    if (refused !== null) void refreshSource(false, undefined, "use");
+  }, [refused, refreshSource]);
+}
+
 export function useCodingWorkbenchRuntimeRefreshEffects({
   state,
   refreshRuntime,
@@ -106,6 +132,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
   usePickedModelRefreshEffect({ state, refreshSource, intent });
+  useModelRefusalReread(state.mutation, refreshSource);
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,
