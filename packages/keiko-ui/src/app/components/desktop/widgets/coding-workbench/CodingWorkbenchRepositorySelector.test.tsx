@@ -595,7 +595,7 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/could not be reconnected/u);
     expect(onSelect).not.toHaveBeenCalled();
-    expect(selectableRepositories.mock.calls.length).toBe(reads);
+    expect(selectableRepositories.mock.calls).toHaveLength(reads);
     const call = reportClientDiagnostic.mock.calls.find(([message]) =>
       String(message).includes("reconnect failed"),
     );
@@ -662,7 +662,7 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     settle({ project: project("/work/cloned") });
     await Promise.resolve();
     expect(onSelect).not.toHaveBeenCalled();
-    expect(selectableRepositories.mock.calls.length).toBe(reads);
+    expect(selectableRepositories.mock.calls).toHaveLength(reads);
     expect(errors).not.toHaveBeenCalled();
     errors.mockRestore();
   });

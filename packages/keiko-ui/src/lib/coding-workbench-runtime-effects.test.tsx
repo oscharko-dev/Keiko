@@ -314,7 +314,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
       const before = refreshRuntime.mock.calls.length;
       unmount();
       act(() => vi.advanceTimersByTime(10 * 60_000));
-      expect(refreshRuntime.mock.calls.length).toBe(before);
+      expect(refreshRuntime.mock.calls).toHaveLength(before);
     } finally {
       resetClientDiagnosticWriter();
       vi.useRealTimers();
