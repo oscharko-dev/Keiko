@@ -1325,82 +1325,87 @@ describe("useEditorVerificationRun", () => {
   });
 });
 
-// #4491: a hidden document's verification stream gives its connection to an essential stream of a
-// visible document. The server keeps no replay, so the reopen resyncs through the hook's existing
-// uncertainty path: health fails closed until a fresh terminal event settles it.
-describe("useEditorVerificationRun yielding to a visible document", () => {
-  afterEach(() => {
-    Reflect.deleteProperty(document, "visibilityState");
-    Reflect.deleteProperty(navigator, "locks");
-    resetBrowserStreamCapacityForTests();
-    resetClientDiagnosticWriter();
-  });
-
-  it("closes while hidden for a visible waiter, reopens, and settles from the next terminal event", async () => {
+// #4491: the verification stream exists only while a run is active and the server keeps no replay,
+// so it never yields its connection: a closed stream would lose the run's terminal event.
+describe("useEditorVerificationRun under origin stream capacity", () => {
+  beforeEach(() => {
     vi.useFakeTimers();
     Object.defineProperty(navigator, "locks", {
       configurable: true,
       value: createOriginLocksFixture(),
     });
     resetBrowserStreamCapacityForTests();
-    const writer = vi.fn();
-    setClientDiagnosticWriter(writer);
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("keeps its stream and its report while its document is hidden and a visible one waits", async () => {
     const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
     const held: DirectStreamAdmission[] = [];
     try {
       const { result } = render();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
+      await advance(0);
       act(() => result.current.runWorkspaceVerification("typecheck"));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
+      await advance(0);
       const first = FakeEventSource.instances[0];
       expect(first).toBeDefined();
-      const waiterAdmitted = vi.fn();
       for (let index = 0; index < 3; index += 1) {
         held.push(admitDirectBrowserStream(() => undefined));
       }
-      held.push(admitDirectBrowserStream(waiterAdmitted));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
+      held.push(admitDirectBrowserStream(() => undefined));
+      await advance(0);
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
         get: () => "hidden",
       });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
-      });
-      expect(first?.closed).toBe(true);
-      expect(waiterAdmitted).toHaveBeenCalledOnce();
-      expect(getEditorProblemsSourceHealth("/ws")).toBe("reconnecting");
-      held.forEach((admission) => admission.release());
-      held.length = 0;
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
-      });
-      expect(FakeEventSource.instances).toHaveLength(2);
-      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
-      act(() =>
-        FakeEventSource.instances[1]?.emit("run-completed", {
-          runId: "run-1",
-          ...completed("passed"),
-        }),
-      );
+      await advance(60_000);
+      expect(first?.closed).toBe(false);
+      expect(FakeEventSource.instances).toHaveLength(1);
       expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
-      const messages = writer.mock.calls.map(([message]) => String(message));
-      expect(
-        messages.filter((message) => message.includes("yielded origin capacity")),
-      ).toHaveLength(1);
-      expect(
-        messages.filter((message) => message.includes("verification stream reopened")),
-      ).toHaveLength(1);
+      act(() => {
+        first?.emit("run-started", {
+          runId: "run-1",
+          projectId: "/ws",
+          kinds: ["typecheck"],
+          startedAtMs: 1,
+        });
+        first?.emit("run-completed", { runId: "run-1", ...completed("passed") });
+      });
+      await advance(0);
+      expect(result.current.statusBarRun?.label).toContain("passed");
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
     } finally {
       held.forEach((admission) => admission.release());
       unsubscribe();
-      vi.useRealTimers();
     }
+  });
+
+  it("shows a waiting status instead of failing to start while no slot is free", async () => {
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await advance(0);
+    const { result } = render();
+    await advance(0);
+    act(() => result.current.runWorkspaceVerification("typecheck"));
+    await advance(60_000);
+    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(result.current.statusBarRun?.label).toBe("Verification: waiting for a free connection");
+    held[0]?.release();
+    await advance(2_000);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/editor/verification/runs")).toBe(
+      true,
+    );
+    held.forEach((admission) => admission.release());
   });
 });

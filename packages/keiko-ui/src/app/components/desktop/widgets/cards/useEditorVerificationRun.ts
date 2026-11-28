@@ -403,13 +403,30 @@ function waitForSharedSource(): Promise<boolean> {
   sharedSourceReadyPromise = new Promise<boolean>((resolve) => {
     resolveSharedSourceReady = resolve;
   });
+  return sharedSourceReadyPromise;
+}
+
+// The handshake deadline starts when a slot admitted the connection, never while the stream still
+// queues for one: a waiting stream is shown as waiting, not torn down as failed to start.
+function armSharedSourceReadyTimer(): void {
+  if (sharedSourceReadyTimer !== null) clearTimeout(sharedSourceReadyTimer);
   sharedSourceReadyTimer = setTimeout(() => {
     if (sharedSourceOpen) return;
     // Neither an initial handshake nor a replacement connection may remain "reconnecting"
     // forever. Preserve cached Problems rows, surface failed health, and stop this bounded cycle.
     terminallyReconcileSourceFailure();
   }, EVENT_SOURCE_READY_TIMEOUT_MS);
-  return sharedSourceReadyPromise;
+}
+
+function showWaitingForConnection(waiting: boolean): void {
+  for (const root of sourceDependentRoots()) {
+    const entry = projectStates.get(root);
+    if (entry === undefined || entry.activeRunId !== null) continue;
+    emit(root, entry, {
+      running: true,
+      label: waiting ? "Verification: waiting for a free connection" : "Verification: starting…",
+    });
+  }
 }
 
 function reconnectDelay(): number {
@@ -442,23 +459,6 @@ function releaseSharedSourceBudget(): void {
   admission?.release();
 }
 
-// A yield closes the connection for an essential stream of a visible tab while this document is
-// hidden. The server keeps no replay for this stream and there is no run-state read, so the yield
-// takes the same path as a lost connection: every dependent root becomes uncertain until a fresh
-// terminal event arrives, and the bounded terminal reconciliation fails it closed otherwise.
-let sharedSourceYielded = false;
-
-function yieldSharedSource(): void {
-  const source = sharedSource;
-  if (source === null) return;
-  if (sharedSourceOpen) rememberUncertainRoots();
-  sharedSource = null;
-  sharedSourceOpen = false;
-  source.close();
-  sharedSourceYielded = true;
-  setDependentSourceHealth("reconnecting");
-}
-
 function handleSharedSourceLoss(source: EventSource): void {
   if (sharedSource !== source) return;
   if (sharedSourceOpen) rememberUncertainRoots();
@@ -473,9 +473,10 @@ function handleSharedSourceLoss(source: EventSource): void {
 function createSharedSource(): void {
   if (sharedSource !== null || sharedSourceAdmission?.active === true || !hasActiveRun()) return;
   // The stream opens only once an origin-wide connection slot admits it (see the capacity module).
+  // An essential stream that never yields: it exists only while a run is active, and a closed
+  // stream would lose the run's terminal event, which the server cannot replay.
   sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, {
-    yieldWhenHidden: true,
-    onYield: yieldSharedSource,
+    onWaiting: showWaitingForConnection,
   });
   void waitForSharedSource();
 }
@@ -502,12 +503,6 @@ function connectSharedSource(): void {
   }
   sharedSource = source;
   sharedSourceOpen = false;
-  if (sharedSourceYielded) {
-    sharedSourceYielded = false;
-    reportClientDiagnostic(
-      "[keiko] editor verification stream reopened after yielding its connection (resync=terminal-reconciliation)", // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
-    );
-  }
   source.addEventListener("open", () => {
     if (sharedSource !== source) return;
     sharedSourceOpen = true;
@@ -522,6 +517,7 @@ function connectSharedSource(): void {
   // Reconnects are opened by a timer rather than a caller awaiting openSharedSource(), so the
   // recovery cycle keeps a bounded handshake timeout even when a run is already active.
   void waitForSharedSource();
+  armSharedSourceReadyTimer();
 }
 
 function openSharedSource(): Promise<boolean> {
@@ -535,7 +531,6 @@ function closeSharedSource(): void {
   sharedSourceOpen = false;
   clearSharedSourceReconnectTimer();
   sharedSourceReconnectAttempts = 0;
-  sharedSourceYielded = false;
   source?.close();
   releaseSharedSourceBudget();
   settleSharedSourceReady(false);
@@ -696,7 +691,6 @@ export function resetEditorVerificationRunStateForTests(): void {
   projectStates.clear();
   projectIdByRunId.clear();
   rootsAwaitingFreshTerminal.clear();
-  sharedSourceYielded = false;
   totalListenerCount = 0;
 }
 
