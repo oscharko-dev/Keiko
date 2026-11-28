@@ -177,6 +177,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "An absent, unreadable or invalid own manifest declares no Node.js range; the verdict becomes the closed unknown value that process.started records as nodeSupport. Start is never refused on it.",
     "packages/keiko-server/src/launch-directory.ts:resolveSystemName":
       "The resolution failure becomes a closed outcome: an absent path (ENOENT/ENOTDIR) keeps its lexical spelling, which insideProgramFolder still compares, and every other failure is `failed`, which the denying checks read as cannot-be-shown-outside and refuse. Callers record that refusal on the registered body-free workspace-root denial line. The predicate only adds refusals to the read surface and grants nothing.",
+    "packages/keiko-server/src/launch-directory.ts:resolveSystemNameAsync":
+      "The non-blocking twin of resolveSystemName with the same closed outcome: ENOENT/ENOTDIR keep the lexical spelling insideProgramFolder still compares, every other failure is `failed`, which the denying checks read as cannot-be-shown-outside and refuse. Callers record that refusal on the registered body-free workspace-root denial line; the predicate grants nothing.",
+    "packages/keiko-server/src/editor/windowsStepNode.ts:privateStepNode":
+      "The caught copy failure is carried unchanged in the refused PrivateStepNode's failure after the partial copy is removed; privateStepNodeFor persists it through emitServerDiagnostic (operation verification.step-node-copy, with frames and the request's correlation id) and refuses the run with StepNodePinMismatchError. No unpinned Node.js ever runs.",
+    "packages/keiko-tools/src/git-mutation-node.ts:execUnbornBranch":
+      "A failed HEAD or snapshot read or an unavailable ref lock throws before anything is written; failureFromThrow maps it to the closed failed/aborted/timeout execution result exactly as execPlan does, and the governed mutation owner records that closed result with its correlation id. The re-point never runs on an unproven branch.",
     "packages/keiko-activity-log/src/activity-log-readiness.ts:activityLogCatalogCoherent":
       "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
     "packages/keiko-activity-log/src/server-logger.ts:isMandatoryActivityLogEvent":
