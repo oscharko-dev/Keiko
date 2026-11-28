@@ -265,12 +265,59 @@ describe("LiveTextHold", () => {
     expect(named.isHolding).toBe(true);
   });
 
-  it("streams an answer that starts with prose, however much markup follows", () => {
+  it("streams a plain prose answer once its first line has ended", () => {
     const hold = new LiveTextHold(true, TOOLS);
-    expect(hold.push("Running ")).toBe("Running ");
-    expect(hold.push('the tests: <shell command="x" />')).toBe('the tests: <shell command="x" />');
-    expect(hold.push("\n```json\n{}\n```")).toBe("\n```json\n{}\n```");
+    expect(hold.push("Running ")).toBe("");
+    expect(hold.push("the tests now.\n")).toBe("");
+    expect(hold.push("Done")).toBe("Running the tests now.\nDone");
     expect(hold.isHolding).toBe(false);
+    expect(hold.push("<shell />\n```json\n{}\n```")).toBe("<shell />\n```json\n{}\n```");
+  });
+
+  it("streams a long first line without waiting for its newline", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    const line = "word ".repeat(40);
+    expect(line.length).toBeGreaterThan(160);
+    expect(hold.push(line.slice(0, 100))).toBe("");
+    expect(hold.push(line.slice(100))).toBe(line);
+    expect(hold.push(" more")).toBe(" more");
+    expect(hold.isHolding).toBe(false);
+  });
+
+  it("holds a short preface together with the tool call that follows it", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("Ok.")).toBe("");
+    expect(hold.push('\n<shell command="ls" />')).toBe("");
+    expect(hold.isHolding).toBe(true);
+    expect(hold.push("\n")).toBe("");
+    expect(hold.release()).toBe('Ok.\n<shell command="ls" />\n');
+  });
+
+  it("holds a preface followed by a fence or an object, and waits for a tag name to finish", () => {
+    const fence = new LiveTextHold(true, TOOLS);
+    expect(fence.push("Sure:\n```json\n{}\n```")).toBe("");
+    expect(fence.isHolding).toBe(true);
+    const split = new LiveTextHold(true, TOOLS);
+    expect(split.push("Ok.\n<s")).toBe("");
+    expect(split.isHolding).toBe(false);
+    expect(split.push("hell />")).toBe("");
+    expect(split.isHolding).toBe(true);
+  });
+
+  it("releases a preface whose next line is not markup, as prose, at once", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("Ok.\nHere is the plan:")).toBe("Ok.\nHere is the plan:");
+    expect(hold.isHolding).toBe(false);
+    const later = new LiveTextHold(true, TOOLS);
+    expect(later.push("Ok.\n   \n\n")).toBe("");
+    expect(later.push("then <div>")).toBe("Ok.\n   \n\nthen <div>");
+  });
+
+  it("releases a window that waits too long for the next line", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    const blanks = "\n".repeat(300);
+    expect(hold.push("Ok." + blanks)).toBe("Ok." + blanks);
+    expect(hold.push("x")).toBe("x");
   });
 
   it.each([
@@ -279,27 +326,27 @@ describe("LiveTextHold", () => {
     ["a comparison", "a < b"],
     ["an inline code span", "`npm test` runs it"],
     ["a closing tag that no tool is named after", "</div>"],
-  ])("does not hold an answer that begins with %s", (_label, answer) => {
+  ])("does not hold an answer that begins with %s past its first line", (_label, answer) => {
     const hold = new LiveTextHold(true, TOOLS);
-    expect(hold.push(answer)).toBe(answer);
+    expect(hold.push(`${answer}\nnext`)).toBe(`${answer}\nnext`);
     expect(hold.isHolding).toBe(false);
   });
 
   it("carries a tag name or a fence that is still arriving until the next characters decide", () => {
     const comparison = new LiveTextHold(true, TOOLS);
     expect(comparison.push("<")).toBe("");
-    expect(comparison.push(" b")).toBe("< b");
+    expect(comparison.push(" b\nok")).toBe("< b\nok");
     expect(comparison.isHolding).toBe(false);
     const html = new LiveTextHold(true, TOOLS);
     expect(html.push("<s")).toBe("");
-    expect(html.push("tyle>")).toBe("<style>");
+    expect(html.push("tyle>\nok")).toBe("<style>\nok");
     const fence = new LiveTextHold(true, TOOLS);
     expect(fence.push("``")).toBe("");
     expect(fence.push("`json")).toBe("");
     expect(fence.isHolding).toBe(true);
     const code = new LiveTextHold(true, TOOLS);
     expect(code.push("`")).toBe("");
-    expect(code.push("x` is")).toBe("`x` is");
+    expect(code.push("x` is\nok")).toBe("`x` is\nok");
     const closing = new LiveTextHold(true, TOOLS);
     expect(closing.push("<")).toBe("");
     expect(closing.release()).toBe("<");
@@ -316,15 +363,14 @@ describe("LiveTextHold", () => {
     expect(fence.isHolding).toBe(true);
   });
 
-  it("streams a brace, a fence or an inline backtick that follows prose", () => {
+  it("streams a brace, a fence or an inline backtick that follows a long first line", () => {
+    const line = "a long first line of prose ".repeat(8);
     const braces = new LiveTextHold(true, TOOLS);
-    expect(braces.push("a {b} c")).toBe("a {b} c");
+    expect(braces.push(line)).toBe(line);
     expect(braces.push("\n{")).toBe("\n{");
     expect(braces.isHolding).toBe(false);
-    const inline = new LiveTextHold(true, TOOLS);
-    expect(inline.push("Run `npm test` now")).toBe("Run `npm test` now");
-    const afterProse = new LiveTextHold(true, TOOLS);
-    expect(afterProse.push('Sure: {"a":1} and ```x```')).toBe('Sure: {"a":1} and ```x```');
+    const fence = new LiveTextHold(true, TOOLS);
+    expect(fence.push(`${line}\n\`\`\`x\n\`\`\``)).toBe(`${line}\n\`\`\`x\n\`\`\``);
   });
 
   it("passes everything through when disabled and after the hold is released by size", () => {
@@ -344,7 +390,7 @@ describe("LiveTextHold", () => {
     expect(hold.isHolding).toBe(false);
     expect(hold.release()).toBe("");
     hold.restart(true);
-    expect(hold.push("plain")).toBe("plain");
+    expect(hold.push("plain\nmore")).toBe("plain\nmore");
     hold.restart(true);
     expect(hold.push("<shell />")).toBe("");
   });

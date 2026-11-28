@@ -13012,8 +13012,10 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     expect(liveText(liveRun.body)).toBe(content);
   });
 
-  it("passes a live turn through when prose already reached the runtime, so nothing is duplicated", async () => {
-    const markup = `Ok.\n<shell command="${"npm test ".repeat(30)}" />`;
+  it("passes a live turn through when a long first line already reached the runtime, so nothing is duplicated", async () => {
+    const preface = "I will run the tests now, then report what they say. ".repeat(4);
+    expect(preface.length).toBeGreaterThan(160);
+    const markup = `${preface}\n<shell command="${"npm test ".repeat(300)}" />`;
     const { body, seq, sink } = await live([textual(markup), nativeCall()]);
 
     expect(seq.requests).toHaveLength(1);
@@ -13023,6 +13025,20 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
       outcome: "accepted",
       textualToolCallRecovery: "retry-skipped",
       textualToolCallRetries: 0,
+    });
+  });
+
+  it("recovers a live tool call that follows a short preface, discarding both unseen", async () => {
+    const markup = `Ok.\n<shell command="${"npm test ".repeat(30)}" />`;
+    const { body, seq, sink } = await live([textual(markup), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(liveText(body)).not.toContain("Ok.");
+    expect(body).toContain('"tool_calls"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retried-native",
+      textualToolCallRetries: 1,
     });
   });
 

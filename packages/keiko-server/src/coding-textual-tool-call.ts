@@ -459,21 +459,32 @@ export function withDiscardedAttempts(
   };
 }
 
+// The first line of an answer is held up to this long, unforwarded, to see whether a tool call follows it.
+const PREFACE_LINE_MAX_CHARS = 160;
+// What the window may buffer while it waits for the next line to begin (blank lines, indentation, an
+// unfinished tag name) before it is released as prose.
+const PREFACE_WINDOW_MAX_CHARS = PREFACE_LINE_MAX_CHARS + 64;
+
 /**
  * Holds back a live answer that may turn out to be a tool call written as text. A detected call must
  * be essentially the whole answer (`MIN_MARKUP_SHARE`), and a turn whose prose already reached the
- * runtime is never retried (`retry-skipped`), so only an answer that BEGINS with markup is held: its
- * first non-whitespace text is a code fence, a `{` or `[`, or a `<` naming an advertised tool, a
- * wrapper tag or `function=`. The rest of that attempt is held until it finishes, so a retry can
- * discard it before the runtime ever receives it; anything else, and everything after forwarded
- * prose, streams through at once. A hold that grows past its bound is released unexamined. A hold
- * that is switched off passes everything through.
+ * runtime is never retried (`retry-skipped`), so an answer is held while nothing but whitespace has
+ * been forwarded. It is held from its first non-whitespace text when that is a code fence, a `{` or
+ * `[`, or a `<` naming an advertised tool, a wrapper tag or `function=`. Local models also write a
+ * short preface first ("Ok." and then the call), so any other first line of at most
+ * `PREFACE_LINE_MAX_CHARS` characters is held unforwarded too: when markup begins at the next line
+ * start the whole attempt is held and a retry can discard it; otherwise the window is released at
+ * once as prose, and from then on everything streams. The rest of a held attempt is held until it
+ * finishes. A hold that grows past its bound is released unexamined. A hold that is switched off
+ * passes everything through.
  */
 export class LiveTextHold {
   private held = "";
   // The start of an answer whose first characters do not yet decide: a `<` whose tag name is still
   // arriving, or one or two backticks of a possible code fence.
   private carry = "";
+  // The first line of an answer and what follows it, unforwarded, while the window decides.
+  private preface = "";
   private holding = false;
   private released = false;
   // Whether text other than whitespace was forwarded: from then on nothing is held.
@@ -491,6 +502,7 @@ export class LiveTextHold {
   push(token: string): string {
     if (!this.enabled || this.released || this.prose) return token;
     if (this.holding) return this.hold(token);
+    if (this.preface !== "") return this.decidePreface(this.preface + token);
     const text = this.carry + token;
     this.carry = "";
     const start = text.search(/\S/u);
@@ -504,6 +516,40 @@ export class LiveTextHold {
       this.carry = text.slice(start);
       return text.slice(0, start);
     }
+    return this.decidePreface(text);
+  }
+
+  // The first line is held; what comes at the next line start decides between a retried call and prose.
+  private decidePreface(text: string): string {
+    const from = text.search(/\S/u);
+    const newline = text.indexOf("\n", from);
+    if (newline === -1 || newline - from > PREFACE_LINE_MAX_CHARS) {
+      return text.length - from > PREFACE_LINE_MAX_CHARS
+        ? this.settleAsProse(text)
+        : this.wait(text);
+    }
+    const next = text.slice(newline + 1).search(/\S/u);
+    if (next === -1) return this.waitWithinWindow(text);
+    const verdict = classifyAnswerStart(text.slice(newline + 1 + next), this.names);
+    if (verdict === "markup") {
+      this.preface = "";
+      this.holding = true;
+      return this.hold(text);
+    }
+    return verdict === "pending" ? this.waitWithinWindow(text) : this.settleAsProse(text);
+  }
+
+  private wait(text: string): string {
+    this.preface = text;
+    return "";
+  }
+
+  private waitWithinWindow(text: string): string {
+    return text.length > PREFACE_WINDOW_MAX_CHARS ? this.settleAsProse(text) : this.wait(text);
+  }
+
+  private settleAsProse(text: string): string {
+    this.preface = "";
     this.prose = true;
     return text;
   }
@@ -520,9 +566,10 @@ export class LiveTextHold {
 
   /** Stops holding and returns what was held; every later delta passes through. */
   release(): string {
-    const text = this.carry + this.held;
+    const text = this.preface + this.carry + this.held;
     this.held = "";
     this.carry = "";
+    this.preface = "";
     this.holding = false;
     this.released = true;
     return text;
@@ -532,6 +579,7 @@ export class LiveTextHold {
   restart(enabled: boolean): void {
     this.held = "";
     this.carry = "";
+    this.preface = "";
     this.holding = false;
     this.released = false;
     this.prose = false;
