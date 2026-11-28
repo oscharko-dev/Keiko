@@ -253,6 +253,17 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
+  validateReviewSubject(value, errors);
+  if (typeof value.pathsTruncated !== "boolean") {
+    errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
+  }
+  if (value.requested !== undefined) validateRequestedScope(value.requested, errors);
+  validateReviewCounts(value, errors);
+  if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
+}
+
+/** What the review is about: a native action, a verification preview, a branch, paths or a draft. */
+function validateReviewSubject(value: Record<string, unknown>, errors: string[]): void {
   if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
   else if (value.verificationPreview !== undefined)
     validateVerificationPreviewReview(value, errors);
@@ -260,17 +271,15 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   else if (value.draftDelivery === undefined)
     validateReviewPaths(value.paths, errors, value.verifiedCommit !== undefined);
   else validateDraftReview(value, errors);
-  if (typeof value.pathsTruncated !== "boolean") {
-    errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
-  }
-  if (value.requested !== undefined) validateRequestedScope(value.requested, errors);
+}
+
+function validateReviewCounts(value: Record<string, unknown>, errors: string[]): void {
   validateReviewCount(value.fileCount, "fileCount", errors);
   validateReviewCount(value.addedLines, "addedLines", errors);
   validateReviewCount(value.deletedLines, "deletedLines", errors);
   if (value.countsUnavailable !== undefined && typeof value.countsUnavailable !== "boolean")
     errors.push("pendingApprovalReview.countsUnavailable must be a boolean");
   validateReviewFileCountConsistency(value, errors);
-  if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
 }
 
 function validateNativeActionReview(pending: Record<string, unknown>, errors: string[]): void {
