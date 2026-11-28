@@ -1529,6 +1529,21 @@ const HUMAN_DECISION_GUIDANCE = {
     "Nobody decided this approval in time, so the step was not performed. Continue with the rest of the task without it, or ask the user before trying it again.",
 } as const;
 
+/**
+ * What a task-branch ask answers when Keiko would refuse the name at execution anyway: the same
+ * blocked `invalid-name` result and guidance the branch tool itself gives, so no human is asked and
+ * the model can tell a bad name from a human denial (U-27).
+ */
+export function invalidBranchNameToolResult(): CodingToolResult {
+  const git = { kind: "branch", status: "blocked", reason: "invalid-name" } as const;
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    git,
+    ...branchGuidance(git),
+  };
+}
+
 /** The feedback a declined or expired step gives the model in place of the call (ADR-0124 D6). */
 export function humanDecisionFeedback(outcome: "denied" | "expired"): string {
   return HUMAN_DECISION_GUIDANCE[outcome];

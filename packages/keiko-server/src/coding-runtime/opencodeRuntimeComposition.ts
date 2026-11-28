@@ -117,7 +117,9 @@ import {
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
+  invalidBranchNameToolResult,
 } from "./codingToolFacade.js";
+import { isSafeTaskBranchName } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   isSecureWorkspaceNativeRelativePath,
@@ -5195,6 +5197,26 @@ function parseV2PermissionRequest(
   return value?.action === "permission-request" ? value : undefined;
 }
 
+function branchAskNamesUnsafeBranch(value: Readonly<Record<string, unknown>>): boolean {
+  const metadata = v2Record(v2Record(value.properties)?.metadata);
+  return (
+    metadata?.actionKind === "git-branch" &&
+    typeof metadata.branchName === "string" &&
+    !isSafeTaskBranchName(metadata.branchName)
+  );
+}
+
+// A branch name Keiko would refuse at execution is answered as that refusal, never asked of a
+// person and never mistaken for a human denial (U-27).
+function unsafeBranchRefusal(
+  run: PreparedRun | undefined,
+  value: Readonly<Record<string, unknown>>,
+): OpenCodeToolBridgeResponse | undefined {
+  return run !== undefined && branchAskNamesUnsafeBranch(value)
+    ? { status: 409, body: JSON.stringify(invalidBranchNameToolResult()) }
+    : undefined;
+}
+
 async function handleV2PermissionRequest(
   value: Readonly<Record<string, unknown>>,
   signal: AbortSignal | undefined,
@@ -5204,6 +5226,8 @@ async function handleV2PermissionRequest(
 ): Promise<OpenCodeToolBridgeResponse> {
   const run = typeof value.runId === "string" ? runs.get(value.runId) : undefined;
   if (signal?.aborted === true) return refusedApproval("cancelled");
+  const unsafeBranch = unsafeBranchRefusal(run, value);
+  if (unsafeBranch !== undefined) return unsafeBranch;
   if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
     return refusedApproval("unavailable");
   const decision = await approvals.request({

@@ -12555,6 +12555,46 @@ describe("the plain approval of a managed Jira write", () => {
   });
 });
 
+// U-27: a task branch Keiko would refuse at execution is answered as that refusal on the ask lane,
+// so the model reads why and no person is asked about a name that can never be created.
+describe("a governed task-branch ask naming an unsafe branch", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const askFor = (branchName: string): string =>
+    JSON.stringify({
+      action: "permission-request",
+      runId: FIXTURE_RUN_ID,
+      actionId: "ses_tool:call_branch",
+      properties: { metadata: { actionKind: "git-branch", branchName } },
+    });
+
+  it.each(["a\u202eb", "a\u200bb", "a b"])(
+    "answers %j with the blocked invalid-name result, not a bare denial",
+    async (name) => {
+      const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] })) },
+        undefined,
+        { mode: "supervised-coding", runtimeEvents },
+      );
+      try {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: askFor(name),
+        });
+        expect(response.status).toBe(409);
+        expect(JSON.parse(response.body)).toMatchObject({
+          git: { kind: "branch", status: "blocked", reason: "invalid-name" },
+          guidance: expect.stringContaining("not a branch name Keiko will create"),
+        });
+        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+});
+
 // #4359: whether a Code Mode program asks is decided by the pin of the version the run was verified
 // against, through the real composition (the policy and the generator are pinned in
 // opencodeCodeModeProgram.test.ts).
