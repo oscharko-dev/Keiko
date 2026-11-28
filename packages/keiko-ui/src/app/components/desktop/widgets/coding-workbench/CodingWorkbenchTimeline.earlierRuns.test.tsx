@@ -292,6 +292,28 @@ describe("the transcript beside a continuation's timeline", () => {
     expect(transcriptShows(shownRun, answer)).toBe(true);
   });
 
+  it("leaves two identical stored messages readable when the capped feed kept only one", () => {
+    const repeated = historyMessage("h-7", "run-1", "user", "Fix the bug");
+    const { shownRun } = shownWith([FIRST], SECOND, [request, repeated, answer]);
+    expect(transcriptShows(shownRun, request)).toBe(true);
+    expect(transcriptShows(shownRun, repeated)).toBe(true);
+  });
+
+  it("still leaves out every stored occurrence the feed carries as often", () => {
+    const repeated = historyMessage("h-7", "run-1", "user", "Fix the bug");
+    const twice = feed(
+      "run-1",
+      [
+        message("m-1", "user", "2026-07-19T12:00:00.000Z", "Fix the bug"),
+        message("m-3", "user", "2026-07-19T12:00:01.000Z", "Fix the bug"),
+      ],
+      [],
+    );
+    const { shownRun } = shownWith([twice], SECOND, [request, repeated, answer]);
+    expect(transcriptShows(shownRun, request)).toBe(false);
+    expect(transcriptShows(shownRun, repeated)).toBe(false);
+  });
+
   it("keeps a message of the same text from another run", () => {
     const { shownRun } = shownWith([FIRST]);
     expect(transcriptShows(shownRun, { ...request, id: "h-9", runId: "run-0" })).toBe(true);

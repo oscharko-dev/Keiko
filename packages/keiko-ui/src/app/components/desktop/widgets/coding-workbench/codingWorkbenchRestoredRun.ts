@@ -475,18 +475,37 @@ function shownRunOf(
     : undefined;
 }
 
-// The messages the timeline shows from the feeds of earlier runs, by run, role and text.
+function countKey(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+// The messages the timeline shows from the feeds of earlier runs, by run, role and text. A key is
+// carried only when the feed holds at least as many occurrences as Coding History does: with fewer,
+// which stored occurrence the feed kept is unknowable, so every one of them stays readable in the
+// transcript (a repeat is acceptable, a message shown nowhere is not).
 function carriedEarlierMessageKeys(
   feeds: UseCodingWorkbenchSafeActivityResult["earlierFeeds"],
+  history: readonly ChatMessage[],
 ): ReadonlySet<string> {
-  const keys = new Set<string>();
+  const carried = new Map<string, number>();
   for (const feed of feeds ?? []) {
     for (const turn of feed.turns) {
       for (const message of turn.messages) {
         const text = message.segments.map((segment) => segment.text).join("");
-        if (text.trim().length > 0) keys.add(earlierMessageKey(feed.runId, message.role, text));
+        if (text.trim().length > 0)
+          countKey(carried, earlierMessageKey(feed.runId, message.role, text));
       }
     }
+  }
+  const stored = new Map<string, number>();
+  for (const message of history) {
+    if (message.runId !== undefined) {
+      countKey(stored, earlierMessageKey(message.runId, message.role, message.content));
+    }
+  }
+  const keys = new Set<string>();
+  for (const [key, count] of carried) {
+    if (count >= (stored.get(key) ?? 0)) keys.add(key);
   }
   return keys;
 }
@@ -548,8 +567,8 @@ export function useRestoredRunTimeline(
   useReportedRestoration(restoration);
   const runId = snapshot?.runId;
   const earlierMessageKeys = useMemo(
-    () => carriedEarlierMessageKeys(activity.earlierFeeds),
-    [activity.earlierFeeds],
+    () => carriedEarlierMessageKeys(activity.earlierFeeds, detail?.messages ?? []),
+    [activity.earlierFeeds, detail?.messages],
   );
   const shownRun = useMemo(
     () => shownRunOf(restoration, activity.feed, runId, earlierMessageKeys),
