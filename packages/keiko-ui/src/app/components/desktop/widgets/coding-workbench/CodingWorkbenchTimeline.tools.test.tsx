@@ -128,20 +128,45 @@ describe("a failed command's row", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it("names Keiko as the origin of a refusal and says who declined it", () => {
+  it("names the person's decision, not Keiko's policy, on a step the person declined (U-36)", () => {
     const container = renderTools([
       shell("call-push", "denied", {
         failureOrigin: "keiko-refused",
         refusalCause: "approval-declined",
         command: { text: "git push origin HEAD", truncated: false },
       }),
+      shell("call-late", "denied", {
+        failureOrigin: "keiko-refused",
+        refusalCause: "approval-expired",
+        command: { text: "git push origin HEAD", truncated: false },
+      }),
+    ]);
+    const declined = row(container, 0);
+    expect(declined.dataset.failureOrigin).toBe("keiko-refused");
+    expect(declined).toHaveTextContent("Declined by you");
+    expect(declined).toHaveTextContent("Keiko did not run this step. You declined it.");
+    // Never the contradiction of blaming Keiko's policy for the person's own decision.
+    expect(declined).not.toHaveTextContent("Blocked by Keiko");
+    expect(declined).not.toHaveTextContent("Keiko did not allow this step");
+    const expired = row(container, 1);
+    expect(expired).toHaveTextContent("Not decided in time");
+    expect(expired).toHaveTextContent("Keiko did not run this step. Nobody decided in time.");
+    // A refusal is not something the agent retries around.
+    expect(declined).not.toHaveTextContent("can continue from it");
+    expect(expired).not.toHaveTextContent("can continue from it");
+  });
+
+  it("keeps naming Keiko when its policy refused a step without asking anyone", () => {
+    const container = renderTools([
+      shell("call-push", "denied", {
+        failureOrigin: "keiko-refused",
+        command: { text: "git push --force", truncated: false },
+      }),
     ]);
     const refused = row(container, 0);
-    expect(refused.dataset.failureOrigin).toBe("keiko-refused");
     expect(refused).toHaveTextContent("Blocked by Keiko");
-    expect(refused).toHaveTextContent("Keiko did not allow this step. You declined it.");
-    // A refusal is not something the agent retries around.
-    expect(refused).not.toHaveTextContent("can continue from it");
+    expect(refused).toHaveTextContent("Keiko did not allow this step.");
+    expect(refused).not.toHaveTextContent("Declined by you");
   });
 
   it("shows the message a tool handed the agent and a timeout as its own origin", () => {

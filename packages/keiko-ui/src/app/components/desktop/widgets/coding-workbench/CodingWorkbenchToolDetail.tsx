@@ -7,6 +7,7 @@ import type {
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
   CodingSafeActivityToolOutput,
+  CodingSafeActivityToolRefusalCause,
   CodingSafeActivityToolText,
 } from "@oscharko-dev/keiko-contracts";
 import { codingSafeActivityStateFailureOrigin } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -85,10 +86,20 @@ export function ToolFailureLabel({
       ) : null}
       <span className={styles.cmpToolFailureOrigin} data-origin={origin}>
         <span className={styles.cmpToolFailureIcon} aria-hidden="true" />
-        {t(`codingWorkbench.activity.failureOrigin.${origin}`)}
+        {t(`codingWorkbench.activity.failureOrigin.${failureOriginLabel(tool, origin)}`)}
       </span>
     </span>
   );
+}
+
+// A step the person declined, or nobody decided in time, was stopped by the person's decision, not by
+// Keiko's policy, so the row names that decision instead of "Blocked by Keiko" (U-36, #4491).
+function failureOriginLabel(
+  tool: CodingSafeActivityTool,
+  origin: CodingSafeActivityToolFailureOrigin,
+): CodingSafeActivityToolFailureOrigin | CodingSafeActivityToolRefusalCause {
+  const cause = tool.presentation?.refusalCause;
+  return origin === "keiko-refused" && cause !== undefined ? cause : origin;
 }
 
 /** How long a settled call ran, muted, from one second on. */
@@ -179,6 +190,9 @@ function failureLead(
 ): string {
   if (tool.presentation?.refusalReason === "FILE_NOT_UTF8") {
     return t("codingWorkbench.activity.editRefusalNotUtf8");
+  }
+  if (origin === "keiko-refused" && tool.presentation?.refusalCause !== undefined) {
+    return t("codingWorkbench.activity.failure.not-run");
   }
   const exitCode = tool.presentation?.exitCode;
   return origin === "command-failed" && exitCode !== undefined
