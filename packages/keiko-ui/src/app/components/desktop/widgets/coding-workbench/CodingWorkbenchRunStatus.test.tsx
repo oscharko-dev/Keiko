@@ -558,3 +558,69 @@ describe("CodingWorkbenchRunStatus answered without tools", () => {
     expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
   });
 });
+
+// U-31: a run Keiko's shutdown cancelled says why it stopped; the person's own Stop says nothing more.
+describe("CodingWorkbenchRunStatus stop cause", () => {
+  const WAITING_EN =
+    "Keiko was closed while this run was waiting for your approval. Nothing was changed after that point. Start the task again to continue.";
+  const WORKING_EN =
+    "Keiko was closed while this run was working. Changes it had already started may be incomplete. Start the task again to continue.";
+  const WAITING_DE =
+    "Keiko wurde geschlossen, während dieser Lauf auf deine Freigabe wartete. Danach wurde nichts mehr verändert. Starte die Aufgabe erneut, um fortzufahren.";
+  const events = [status(0, "starting", STARTED)];
+
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it("says Keiko was closed while the run waited, and claims nothing was changed", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("cancelled", { stopCause: "server-shutdown-waiting" }), events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-stop-cause")).toHaveTextContent(WAITING_EN);
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("does not claim nothing was changed when the run was working", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("cancelled", { stopCause: "server-shutdown-working" }), events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    const note = screen.getByTestId("coding-runtime-stop-cause");
+    expect(note).toHaveTextContent(WORKING_EN);
+    expect(note).not.toHaveTextContent("Nothing was changed");
+  });
+
+  it("shows no note for the person's own Stop", () => {
+    render(
+      <CodingWorkbenchRunStatus
+        state={runState(snapshot("cancelled"), events)}
+        researchGrant={null}
+        phase={null}
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-stop-cause")).not.toBeInTheDocument();
+  });
+
+  it("says it in German when the interface is German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <CodingWorkbenchRunStatus
+          state={runState(snapshot("cancelled", { stopCause: "server-shutdown-waiting" }), events)}
+          researchGrant={null}
+          phase={null}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId("coding-runtime-stop-cause")).toHaveTextContent(WAITING_DE);
+  });
+});

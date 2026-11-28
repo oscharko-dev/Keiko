@@ -487,11 +487,10 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
 
 // F9 (#3873): a run that settles `cancelled` was stopped, which is not a failure, so its terminal
 // entry says so instead of leaving a bare "Stopped" a reader could take for one. It never says WHO
-// stopped it: the operator's Stop and `CodingRuntimeOrchestrator.shutdown()` (an update, a restart
-// or a machine shutdown) take the same stop path, and the settled snapshot and its terminal status
-// event are identical for both — only `coding-runtime.run.shutdown` in the server's Activity Log
-// names a shutdown. An attribution here would blame the operator for a stop they never asked for
-// (#3873 review).
+// stopped it: the terminal status event is identical for the operator's Stop and for
+// `CodingRuntimeOrchestrator.shutdown()` (an update, a restart or a machine shutdown), and an
+// attribution here would blame the operator for a stop they never asked for (#3873 review). The
+// settled snapshot does tell them apart (`stopCause`, U-31), and the run status line says so there.
 function eventStoppedDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,

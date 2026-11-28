@@ -1306,6 +1306,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.agent.plan": "Plan agent",
   "codingWorkbench.runStatus.answeredWithoutTools":
     "The model answered without using any tools. No files were changed and no commands were run.",
+  "codingWorkbench.runStatus.stopCause.server-shutdown-waiting":
+    "Keiko was closed while this run was waiting for your approval. Nothing was changed after that point. Start the task again to continue.",
+  "codingWorkbench.runStatus.stopCause.server-shutdown-working":
+    "Keiko was closed while this run was working. Changes it had already started may be incomplete. Start the task again to continue.",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Checking the run status.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",

@@ -181,6 +181,25 @@ function ReadinessDetails({
   );
 }
 
+// U-31: a run Keiko's own shutdown cancelled says why it stopped and what to do, so a restart is
+// never mistaken for the person's own Stop. It claims "nothing was changed" only for a run that was
+// waiting for the person, the one case where the server knows no action was in flight.
+function StopCauseNote({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const cause = state.run.value?.stopCause;
+  if (cause === undefined) return null;
+  return (
+    <p className={styles.cmpRunStatusNote} data-testid="coding-runtime-stop-cause">
+      {t(`codingWorkbench.runStatus.stopCause.${cause}`)}
+    </p>
+  );
+}
+
 export interface CodingWorkbenchRunStatusProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly researchGrant: CodingWorkbenchRuntimeResearchGrant | null;
@@ -240,6 +259,7 @@ export function CodingWorkbenchRunStatus({
           {t("codingWorkbench.runStatus.answeredWithoutTools")}
         </p>
       ) : null}
+      <StopCauseNote state={state} t={t} />
       <ReadinessDetails state={state} t={t} />
     </div>
   );
