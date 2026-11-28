@@ -41,6 +41,15 @@ const PREVIOUS_SCHEMA_VERSION = 1;
 const MAX_FILE_BYTES = 262_144;
 const MAX_ENTRIES = 512;
 
+/** A withheld sync replays only a model that was already wanted; an allowed one replays all. */
+function stillWanted(
+  additions: "allowed" | "withheld",
+  before: ReadonlySet<string>,
+  key: string,
+): boolean {
+  return additions === "allowed" || before.has(key);
+}
+
 export const ACTIVATION_DISCARD_REASONS = [
   "first-start",
   "unreadable",
@@ -453,7 +462,8 @@ class FileModelActivationMemory implements ModelActivationMemory {
       const key = modelDigest(this.options.installationId, model.provider.modelId);
       if (next.size >= MAX_ENTRIES) {
         overflow += 1;
-        kept.push(model);
+        // Past the capacity too, a withheld sync keeps only what was already wanted.
+        if (stillWanted(additions, before, key)) kept.push(model);
         continue;
       }
       const planned = this.planModel(key, model, additions);
@@ -461,8 +471,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
       if (planned.binding !== undefined) bindings.set(key, planned.binding);
       if (planned.saved) saved += 1;
       // A withheld sync drops an addition it never saw before, but keeps what was already wanted.
-      if (additions === "allowed" || planned.entry !== undefined || before.has(key))
-        kept.push(model);
+      if (planned.entry !== undefined || stillWanted(additions, before, key)) kept.push(model);
     }
     return { next, saved, overflow, bindings, kept };
   }

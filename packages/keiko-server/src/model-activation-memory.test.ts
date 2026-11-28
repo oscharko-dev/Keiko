@@ -404,6 +404,32 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(restored).not.toContain("chat-0");
     });
 
+    it("never stores an addition that a failed change carried past the capacity", () => {
+      const stored = Array.from({ length: 512 }, (_, index) =>
+        provider({ modelId: `chat-${String(index)}` }),
+      );
+      const unseen = provider({ modelId: "chat-unseen" });
+      const running = memory();
+      activate(running, ...stored);
+      const withheld = (models: readonly ModelProviderConfig[], correlationId: string): void => {
+        running.sync(
+          models.map((entry) => ({ provider: entry, activatedAt: ACTIVATED_AT })),
+          "invalidated",
+          correlationId,
+          undefined,
+          "withheld",
+        );
+      };
+      // A failed change carries an unseen model past the capacity, a second one frees a slot.
+      withheld([...stored, unseen], "corr-failed-add");
+      withheld([...stored.slice(1), unseen], "corr-failed-remove");
+      expect(running.settle("invalidated", "corr-settle")).toBe(true);
+      const restored = restoredIds(memory(), ...stored, unseen);
+      expect(restored).not.toContain("chat-unseen");
+      expect(restored).not.toContain("chat-0");
+      expect(restored).toHaveLength(511);
+    });
+
     it("keeps the bindings of restored models when the startup rewrite had to withdraw", () => {
       const keyed = (modelId: string): ModelProviderConfig =>
         provider({ modelId, apiKey: `sk-test-bound-${modelId}` });
