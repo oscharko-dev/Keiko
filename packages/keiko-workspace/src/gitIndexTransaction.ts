@@ -94,10 +94,14 @@ export async function withGitIndexTransaction<T>(
     }
     return result;
   } finally {
-    for (const quarantine of quarantines)
-      rmSync(quarantine.directory, { recursive: true, force: true });
+    removeQuarantines(quarantines);
     cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
   }
+}
+// Every quarantine goes on every outcome; what was published already lives in the store.
+function removeQuarantines(quarantines: readonly GitObjectQuarantine[]): void {
+  for (const quarantine of quarantines)
+    rmSync(quarantine.directory, { recursive: true, force: true });
 }
 const LOOSE_FAN_OUT = /^[0-9a-f]{2}$/u;
 // The live object directory a gitdir writes to: a linked worktree shares its main repository's.
@@ -199,8 +203,16 @@ function publishQuarantine(directory: string, liveDirectory: string, hashLength:
     moveIfAbsent(file);
   }
 }
+// An existing target counts only as the object a concurrent writer already published: a regular
+// file. A link, a directory or anything else where the object belongs is refused.
+function publishedAlready(target: string): boolean {
+  const stat = lstatSync(target, { throwIfNoEntry: false });
+  if (stat === undefined) return false;
+  if (!stat.isFile()) throw new Error("git-object-quarantine-invalid");
+  return true;
+}
 function moveIfAbsent(file: QuarantinedFile): void {
-  if (lstatSync(file.target, { throwIfNoEntry: false }) !== undefined) return;
+  if (publishedAlready(file.target)) return;
   try {
     renameSync(file.source, file.target);
   } catch (error) {
@@ -208,7 +220,7 @@ function moveIfAbsent(file: QuarantinedFile): void {
     // for a rename onto an existing file. Only that case is success; every other error is rethrown.
     const code = (error as NodeJS.ErrnoException).code;
     const raced = code === "EEXIST" || code === "EPERM" || code === "EACCES";
-    if (!raced || lstatSync(file.target, { throwIfNoEntry: false }) === undefined) throw error;
+    if (!raced || !publishedAlready(file.target)) throw error;
   }
 }
 // The private copy replaces the live index. An index that was absent under Git's own lock is still

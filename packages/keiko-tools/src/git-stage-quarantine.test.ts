@@ -74,7 +74,7 @@ describe("a large file staged through the real mutation adapter", () => {
       processEnv: { PATH: process.env.PATH, HOME: root },
       spawn: (command, args, options) => {
         if (args.includes("hash-object") && args.includes("-w")) {
-          seen.push(String(options.env?.GIT_OBJECT_DIRECTORY));
+          seen.push(String(options.env.GIT_OBJECT_DIRECTORY));
           if (!changed) {
             changed = true;
             appendFileSync(join(root, "large.json"), "changed during the read\n");

@@ -403,7 +403,10 @@ describe("a large file stages", () => {
     const approved = git(repo, ["hash-object", "--no-filters", "--", "large.json"]).trim();
     const indexBefore = git(repo, ["ls-files", "-s"]);
     let checks = 0;
-    const failingLast = { ...context(repo), check: () => Promise.resolve(++checks < 2) };
+    const failingLast = {
+      ...context(repo),
+      check: (): Promise<boolean> => Promise.resolve(++checks < 2),
+    };
     await expect(
       stageExactFiles(failingLast, request(repo, ["large.json"]), "exact"),
     ).resolves.toBe(false);

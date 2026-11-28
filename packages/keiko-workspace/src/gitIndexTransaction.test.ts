@@ -381,6 +381,24 @@ describe("the object quarantine of an index transaction", () => {
     );
   });
 
+  it("refuses a link standing where a quarantined object would be published", async () => {
+    await expect(
+      withGitIndexTransaction(
+        root,
+        (transaction) => {
+          const quarantine = transaction.openObjectQuarantine(40);
+          const id = quarantined("linked\n", quarantine.directory);
+          const fanOut = join(root, ".git", "objects", id.slice(0, 2));
+          mkdirSync(fanOut, { recursive: true });
+          symlinkSync(join(root, "elsewhere"), join(fanOut, id.slice(2)));
+          quarantine.publish();
+          return Promise.resolve(true);
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("git-object-quarantine-invalid");
+  });
+
   it("publishes a pack with its index last and refuses a pack without an index", async () => {
     const make = (quarantine: string): void => {
       writeFileSync(join(root, "big.bin"), "x".repeat(4096));
