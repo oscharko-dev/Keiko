@@ -1,3 +1,4 @@
+import { scryptSync } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -33,7 +34,9 @@ import { savePrivateJson } from "./private-json.js";
  */
 
 export const MODEL_ACTIVATION_FILE = "model-activations.json";
-const SCHEMA_VERSION = 1;
+// Version 2: the credential hash is a memory-hard scrypt derivation, not a plain SHA-256. A
+// version 1 record is discarded whole and never migrated.
+const SCHEMA_VERSION = 2;
 const MAX_FILE_BYTES = 262_144;
 const MAX_ENTRIES = 512;
 
@@ -160,14 +163,26 @@ function configurationDigest(provider: ModelProviderConfig): string {
   return sha256Hex(canonicalise(stated));
 }
 
+const CREDENTIAL_KDF = { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
+const CREDENTIAL_MEMO_LIMIT = 256;
+// Per process only, never persisted or logged. Keyed by a hash of the KDF input tuple so the
+// credential itself is not a map key.
+const credentialMemo = new Map<string, string>();
+
+/**
+ * The value stored for a credential. The credential may be low-entropy (a gateway's "sk-1234") and
+ * the value lands on disk, so it is derived with a memory-hard KDF salted per installation: a plain
+ * hash could be brute-forced from the file.
+ */
 function credentialDigest(installationId: string, provider: ModelProviderConfig): string {
-  return sha256Hex(
-    canonicalise({
-      purpose: "model-activation-credential",
-      installationId,
-      apiKey: provider.apiKey,
-    }),
-  );
+  const salt = canonicalise({ purpose: "model-activation-credential", installationId });
+  const memoKey = sha256Hex(canonicalise({ salt, apiKey: provider.apiKey }));
+  const known = credentialMemo.get(memoKey);
+  if (known !== undefined) return known;
+  const derived = scryptSync(provider.apiKey, salt, 32, CREDENTIAL_KDF).toString("hex");
+  if (credentialMemo.size >= CREDENTIAL_MEMO_LIMIT) credentialMemo.clear();
+  credentialMemo.set(memoKey, derived);
+  return derived;
 }
 
 function modelDigest(installationId: string, modelId: string): string {

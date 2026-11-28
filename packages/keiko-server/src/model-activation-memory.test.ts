@@ -148,6 +148,36 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     );
   });
 
+  it("discards a record of the previous format whose credential was a plain hash", () => {
+    activate(memory(), provider());
+    const file = join(dir, MODEL_ACTIVATION_FILE);
+    const stored = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...stored, schemaVersion: 1 }), { mode: 0o600 });
+    expect(restoredIds(memory(), provider())).toEqual([]);
+    expect(changeLines().map((line) => line.reason)).toContain("unreadable");
+  });
+
+  it("derives a stable credential value that differs per installation and per key", () => {
+    const valueOf = (installationId: string, apiKey: string): string => {
+      const file = join(dir, `${installationId}-${apiKey}.json`);
+      createModelActivationMemory({
+        path: file,
+        installationId,
+        productVersion: "1.5.10",
+        log: { write: (): void => undefined },
+      }).sync([{ provider: provider({ apiKey }), activatedAt: ACTIVATED_AT }], "invalidated", "c");
+      const stored = JSON.parse(readFileSync(file, "utf8")) as {
+        entries: { credentialDigest: string }[];
+      };
+      return stored.entries[0]?.credentialDigest ?? "";
+    };
+    const base = valueOf("installation-1", "sk-1234");
+    expect(base).toMatch(/^[a-f0-9]{64}$/u);
+    expect(valueOf("installation-1", "sk-1234")).toBe(base);
+    expect(valueOf("installation-2", "sk-1234")).not.toBe(base);
+    expect(valueOf("installation-1", "sk-12345")).not.toBe(base);
+  });
+
   it("discards the record when the credential digest changed", () => {
     activate(memory(), provider());
     expect(restoredIds(memory(), provider({ apiKey: "sk-test-other-credential" }))).toEqual([]);
